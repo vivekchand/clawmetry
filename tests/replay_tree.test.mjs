@@ -241,6 +241,78 @@ api.renderTree(off, offMount);
 check('offloaded run says the node runs are not stored',
       offMount.innerHTML.includes('not stored in the database'));
 
+// In-flight counts on a turn's opening llm.call become header badges, and a
+// fork spawn tags its delegation (clawmetry-pro#123, #4815).
+const inFlightTree = {
+  session_id: 's5', runtime: 'claude_code', row_count: 9, mode: null, workflows: [],
+  turns: [{
+    turn_id: 'u1',
+    events: [
+      {span_id: 'u1', kind: 'llm.call', runtime: 'claude_code',
+       payload: {in_flight_at_start: {background_agents: 3, workflows: 1}}},
+      {span_id: 'forkspawn', kind: 'agent.spawn', runtime: 'claude_code',
+       payload: {context_inheritance: 'fork'}},
+      {span_id: 'freshspawn', kind: 'agent.spawn', runtime: 'claude_code',
+       payload: {context_inheritance: 'fresh'}},
+    ],
+    delegations: [
+      {span_id: 'forkspawn', label: 'fork', approvals: [], delegations: [],
+       events: [{span_id: 'fc1', kind: 'llm.call', runtime: 'claude_code'}]},
+      {span_id: 'freshspawn', label: 'Explore', approvals: [],
+       events: [{span_id: 'nestedfork', kind: 'agent.spawn', runtime: 'claude_code',
+                 payload: {context_inheritance: 'fork'}}],
+       delegations: [{span_id: 'nestedfork', label: '', approvals: [], events: [],
+                      delegations: []}]},
+    ],
+    approvals: [],
+  }, {
+    turn_id: 'u2',
+    events: [
+      {span_id: 'u2', kind: 'llm.call', runtime: 'claude_code',
+       payload: {in_flight_at_start: {background_agents: 0, workflows: '<b>2</b>'}}},
+      {span_id: 'u2b', kind: 'llm.call', runtime: 'claude_code',
+       payload: {in_flight_at_start: {background_agents: 7}}},
+    ],
+    delegations: [], approvals: [],
+  }, {
+    turn_id: 'u3',
+    events: [{span_id: 'u3', kind: 'llm.call', runtime: 'claude_code', payload: {}}],
+    delegations: [], approvals: [],
+  }],
+};
+const inFlightMount = new _StubEl('div');
+api.renderTree(inFlightTree, inFlightMount);
+const turnHtml = (id) => {
+  const h = inFlightMount.innerHTML;
+  const from = h.indexOf('data-turn-id="' + id + '"');
+  const to = h.indexOf('</section>', from);
+  return h.slice(from, to);
+};
+const count = (h, needle) => h.split(needle).length - 1;
+check('in-flight agent count on the turn header',
+      turnHtml('u1').includes('replay-tree-badge in-flight') &&
+      turnHtml('u1').includes('Background agents running: 3'));
+check('in-flight workflow count on the turn header',
+      turnHtml('u1').includes('Workflows running: 1'));
+check('in-flight badges sit in the header',
+      turnHtml('u1').indexOf('Workflows running: 1') < turnHtml('u1').indexOf('</header>'));
+check('zero and non-numeric counts draw no badge',
+      !turnHtml('u2').includes('replay-tree-badge in-flight'));
+check('only the opening llm.call is read', !turnHtml('u2').includes('running: 7'));
+check('turn without counts has no in-flight badge',
+      !turnHtml('u3').includes('replay-tree-badge in-flight'));
+check('fork delegations are tagged, top level and nested',
+      count(turnHtml('u1'), 'replay-tree-badge fork') === 2);
+const freshAt = turnHtml('u1').indexOf('delegated span freshspawn');
+const freshSummary = turnHtml('u1').slice(freshAt, turnHtml('u1').indexOf('</summary>', freshAt));
+check('fresh delegation is not tagged', !freshSummary.includes('replay-tree-badge fork'));
+check('fork tag is on the fork delegation',
+      turnHtml('u1').slice(turnHtml('u1').indexOf('delegated span forkspawn'), freshAt)
+        .includes('Inherited context'));
+check('delegation without a spawn payload is not tagged',
+      !nestedHtml.includes('replay-tree-badge fork') &&
+      !delegMount.innerHTML.includes('replay-tree-badge fork'));
+
 if (fail > 0) {
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(1);
