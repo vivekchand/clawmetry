@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: one event with unencodable text stopped every later event from being stored
+
+- **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
+- **What:** when a flush fails because of a value in a row, the store rewrites the text of the queued events once and writes them again. A lone surrogate becomes U+FFFD, and a surrogate pair that arrived split becomes its character. The store logs a warning with the number of events it changed. A flush that fails for any other reason keeps the events queued unchanged, as before.
+- **Verified:** 6 new tests cover a lone surrogate in the session id, the model, a text payload and the event id, each queued between two valid events, a store I/O failure that must not rewrite anything, and the text helper. Without the fix 5 of them fail.
+- **Limits:** only the event queue is covered. The check that keeps an OTLP event out of a session the daemon already owns still fails for a session id with a lone surrogate, and logs a warning. A span with unencodable text is still refused, as before.
+
 ### Fixed: a span the store refused still showed in the live tiles
 
 - **Why:** the OTLP trace receiver added a span's cost, tokens and run count to the live tiles before it wrote the span to the store. A span the store refused, for example one with a token count beyond the column range, was answered as rejected and is in no table. Its cost and tokens still showed in the tiles and counted toward the spending-limit check. Left open by #5963, part of #5949.
