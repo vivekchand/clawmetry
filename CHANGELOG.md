@@ -6,6 +6,13 @@
 - **What:** a turn whose opening model call carries `in_flight_at_start` shows a badge with the number of background agents and a badge with the number of workflows that were running when the turn started. A delegation whose `agent.spawn` event has `context_inheritance: fork` shows an "Inherited context" tag, at every nesting depth. Part of #4815 and clawmetry-pro#123.
 - **Verified:** 10 new renderer checks cover both counts, a zero count, a count that is not a number, a turn without counts, a fork at the top level and nested, a fresh sub-agent and a delegation without a spawn payload. The output for a sample turn was rendered to an image and inspected in the light theme.
 - **Limits:** the badges appear only for a runtime whose replay mapper sends these fields. The Claude Code mapper that does so ships in the Pro adapter package. A sub-agent that starts with a fresh context has no tag. The badges were not opened in a running dashboard and the dark theme was not inspected.
+
+### Fixed: a failing pre-tool hook went unreported when the tool replies arrived as user messages
+
+- **Why:** the check that reports an agent blocked by an erroring pre-tool hook counts hook errors in tool replies and starts again at each user turn. It read events on its own and classed a `user` message holding `tool_result` blocks as a user turn. A session stored in that form, for example a Claude CLI run started by OpenClaw, therefore never raised `blocked_on_user` for a failing hook, including ClawMetry's own gate.
+- **What:** the hook check reads each `tool_result` block of such a message as a tool reply. A hook error counts, any other reply means the agent recovered, and a user message with text clears the count as before.
+- **Verified:** 4 new tests cover two errors from ClawMetry's own gate, one error from another hook after an idle period, a successful reply after the errors, and a typed user message after the errors. 2 of them fail without the change.
+- **Limits:** the question and permission-request path of the same check is unchanged. Not run against a live session with a failing hook.
 ### Fixed: one event with unencodable text stopped every later event from being stored
 
 - **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
