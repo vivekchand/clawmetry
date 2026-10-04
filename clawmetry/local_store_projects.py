@@ -393,8 +393,13 @@ class ProjectsMixin:
 
     def query_project_assignments(self) -> list[dict]:
         rows = _pa.annotate_superseded(self._project_assignment_rows())
+        catalog = self._project_catalog() if rows else {}
         for r in rows:
             r["project_id"] = _pa.assigned_project_id(r.get("project_name"))
+            # The name of the repository or directory an assignment targets,
+            # so a reader does not have to resolve a project id by hand.
+            r["match_label"] = ((catalog.get(r.get("match_value")) or {}).get("label")
+                                if r.get("match_type") == "project" else None)
         rows.sort(key=lambda r: (-(r.get("created_at") or 0), r.get("assignment_id") or ""))
         return rows
 
