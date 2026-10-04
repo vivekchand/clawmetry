@@ -677,7 +677,8 @@ def test_without_a_local_store_routes_answer_an_honest_empty_state(monkeypatch):
 
 _PANEL_FNS = ("costCardText", "projectSourceText", "renderProjectUsage",
               "projectBudgetPeriodText", "renderProjectBudgets", "projectBudgetTimezone",
-              "renderProjectBudgetForm", "loadUsageByProject")
+              "renderProjectBudgetForm", "projectAssignTargets", "renderProjectAssignments",
+              "loadUsageByProject")
 _REPO_ID = "prj_" + "a" * 16
 _NAMED_ID = "prjn_" + "b" * 16
 
@@ -781,6 +782,96 @@ def test_no_budget_yet_is_said_in_words_and_the_form_offers_real_projects_only()
     assert "unassigned" not in options and "<img" not in options
     assert 'id="project-budget-amount"' in got["form"] and "saveProjectBudget()" in got["form"]
     assert got["empty"] == ""
+
+
+def _panel_assignments():
+    base = {"effective_from": None, "effective_to": None, "created_at": 1}
+    return {"available": True, "assignments": [
+        dict(base, assignment_id="pa_new", match_type="project", match_value=_REPO_ID,
+             match_label="api <b>", project_name="Client <A>", reason="contract 12",
+             actor="127.0.0.1", superseded_by=None),
+        dict(base, assignment_id="pa_old", match_type="project", match_value=_REPO_ID,
+             match_label="api <b>", project_name="Old name", reason="first try",
+             actor="127.0.0.1", superseded_by="pa_new"),
+        dict(base, assignment_id="pa_s1", match_type="session", match_value="s1",
+             match_label=None, project_name="Client <A>", reason="env",
+             actor="daemon:env", superseded_by=None)]}
+
+
+def test_the_assignment_list_shows_current_assignments_and_offers_derived_projects_only():
+    other = "prj_" + "c" * 16
+    projects = _panel_usage()["projects"] + [
+        {"project_id": other, "label": "web", "source": "directory"}]
+    got = _panel("console.log(JSON.stringify({"
+                 " html: renderProjectAssignments(%s, %s),"
+                 " none: renderProjectAssignments({available: true, assignments: []}, %s),"
+                 " bare: renderProjectAssignments({available: true, assignments: []},"
+                 "   [{project_id: 'unassigned'}, {project_id: %s}])}));"
+                 % (json.dumps(_panel_assignments()), json.dumps(projects),
+                    json.dumps(projects), json.dumps(_NAMED_ID)))
+    html = got["html"]
+    assert "api &lt;b&gt;" in html and "Client &lt;A&gt;" in html and "<b>" not in html
+    assert "contract 12" in html and "127.0.0.1" in html
+    assert "Old name" not in html and "first try" not in html, "a superseded row is history"
+    assert "Sessions assigned to a project on their own: 1" in html
+    options = html.split('id="project-assign-target"')[1].split("</select>")[0]
+    # The assigned repository stays a target, so its assignment can be corrected.
+    assert options.count("<option") == 2
+    assert 'value="%s"' % _REPO_ID in options and 'value="%s"' % other in options
+    assert _NAMED_ID not in options and "unassigned" not in options
+    assert 'id="project-assign-name"' in html and 'id="project-assign-reason"' in html
+    assert "saveProjectAssignment()" in html
+    assert "No repository or directory is assigned" in got["none"]
+    assert 'id="project-assign-target"' in got["none"]
+    # Nothing to assign: only the unassigned row and a named project.
+    assert "project-assign-target" not in got["bare"]
+
+
+def test_saving_an_assignment_needs_a_name_and_a_reason_and_posts_the_derived_project():
+    from tests.test_cost_basis_remaining_surfaces import _run
+    fns = ("projectAssignStatus", "saveProjectAssignment")
+    prog = ("var calls = []; var _f = fetch;"
+            " fetch = function (u, o) { calls.push({url: u, opts: o || null}); return _f(u, o); };"
+            " function loadUsageByProject() { calls.push({url: 'reload'}); }"
+            " saveProjectAssignment().then(function () { console.log(JSON.stringify("
+            "{calls: calls, status: els['project-assign-status'].textContent || ''})); });")
+
+    def run(name, reason, answer):
+        els = {"project-assign-target": {"value": _REPO_ID},
+               "project-assign-name": {"value": name},
+               "project-assign-reason": {"value": reason},
+               "project-assign-status": {}}
+        return _run(prog, fns=fns, els=els, fetch_json=answer)
+
+    got = run("  ", "why", {"ok": True})
+    assert got["calls"] == [] and got["status"] == "Enter a project name."
+    got = run("Client A", " ", {"ok": True})
+    assert got["calls"] == [] and "Enter a reason" in got["status"]
+    got = run(" Client A ", " contract 12 ", {"ok": True})
+    assert [c["url"] for c in got["calls"]] == ["/api/projects/assignments", "reload"]
+    assert got["calls"][0]["opts"]["method"] == "POST"
+    assert json.loads(got["calls"][0]["opts"]["body"]) == {
+        "match_type": "project", "match_value": _REPO_ID,
+        "project_name": "Client A", "reason": "contract 12"}
+    got = run("Client A", "why", {"ok": False, "error": "unknown project"})
+    assert [c["url"] for c in got["calls"]] == ["/api/projects/assignments"]
+    assert got["status"] == "unknown project"
+
+
+def test_an_assignment_row_names_the_repository_it_targets(store, client):
+    _session(store, "claude_code:a", "/work/api")
+    _spend(store, "claude_code:a", "2026-09-01T10:00:00Z", 2.0, tokens=1000)
+    pid = next(p["project_id"] for p in client.get("/api/projects?days=366").get_json()["projects"]
+               if p["source"] != "none")
+    label = store._project_catalog()[pid]["label"]
+    r = client.post("/api/projects/assignments", json={
+        "match_type": "project", "match_value": pid, "project_name": "Client A",
+        "reason": "contract 12"})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    rows = client.get("/api/projects/assignments").get_json()["assignments"]
+    assert rows[0]["match_label"] == label and rows[0]["project_name"] == "Client A"
+    names = {p["label"]: p["source"] for p in client.get("/api/projects").get_json()["projects"]}
+    assert names.get("Client A") == "assigned" and label not in names
 
 
 def test_the_project_card_stays_hidden_until_a_session_has_a_project():

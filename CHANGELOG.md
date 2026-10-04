@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Added: assign a repository or directory to a project from the Usage tab
+
+- **Why:** listing a repository under a client or project name took a hand-written request to `/api/projects/assignments`. The Cost by Project card could show an assignment and could not make one (#5941).
+- **What:** the Cost by Project card has a **Project assignments** part. It lists each current assignment as repository or directory, project name, reason and who made it, and it counts the sessions that are assigned on their own. A form takes a repository or directory, a project name and a reason and records the assignment. A repository that is already assigned stays in the list, so its assignment can be corrected. Each row of `GET /api/projects/assignments` has a new `match_label` field with the name of the repository or directory it targets.
+- **Verified:** 3 new tests: the shipped renderer and save function run in node (escaped names, an earlier assignment left out, the target list, the two required fields, the request body, a refused request), and the route returns `match_label` and the spend moves under the project name. The card was inspected as a rendered image in the light theme.
+- **Limits:** the card was not opened in a running dashboard. An assignment covers all of a repository's spend, past and future. A start or end date, a single session and removing an assignment are still API only. An earlier assignment is kept in the API and not shown in the card.
+
+
 ### Fixed: one event with unencodable text stopped every later event from being stored
 
 - **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.

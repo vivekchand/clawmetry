@@ -20039,6 +20039,100 @@ async function removeProjectBudget(budgetId) {
     projectBudgetStatus(t('usage.project_budget_remove_failed', null, 'The budget was not removed.'));
   }
 }
+// Assigning a repository or directory to a project (issue #5941). An
+// assignment is appended, never edited: a later one for the same target takes
+// over and the earlier one stays as history, so the list shows current ones.
+// Only a derived project (prj_) can be a target; a named project (prjn_) is
+// what an assignment produces.
+function projectAssignTargets(projects, assignments) {
+  var seen = {};
+  var out = [];
+  (assignments || []).forEach(function(a) {
+    if (a.match_type !== 'project' || a.superseded_by || seen[a.match_value]) return;
+    seen[a.match_value] = true;
+    out.push({id: a.match_value, label: (a.match_label || a.match_value) + ' → ' + (a.project_name || '')});
+  });
+  (projects || []).forEach(function(p) {
+    var id = String(p.project_id || '');
+    if (!/^prj_/.test(id) || seen[id]) return;
+    seen[id] = true;
+    out.push({id: id, label: p.label || id});
+  });
+  return out;
+}
+function renderProjectAssignments(a, projects) {
+  var rows = (a && a.assignments) || [];
+  var current = rows.filter(function(r) { return r.match_type === 'project' && !r.superseded_by; });
+  var sessions = rows.filter(function(r) { return r.match_type === 'session' && !r.superseded_by; }).length;
+  var html = '<div style="margin-top:14px;font-weight:600;font-size:12px;">' + costCardText(t('usage.project_assign_title', null, 'Project assignments')) + '</div>';
+  if (!current.length) {
+    html += '<div style="margin-top:4px;font-size:12px;color:var(--text-muted);">' + costCardText(t('usage.project_assign_none', null, 'No repository or directory is assigned to a project by hand.')) + '</div>';
+  }
+  current.forEach(function(r) {
+    var detail = [r.reason, r.actor].filter(function(v) { return v; }).join(' \xb7 ');
+    html += '<div style="margin-top:6px;font-size:12px;">'
+      + '<span style="font-weight:500;">' + costCardText(r.match_label || r.match_value || '—') + '</span>'
+      + ' → <span style="font-weight:500;">' + costCardText(r.project_name || '—') + '</span>'
+      + (detail ? ' <span style="color:var(--text-muted);">' + costCardText(detail) + '</span>' : '')
+      + '</div>';
+  });
+  if (sessions > 0) {
+    html += '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">'
+      + costCardText(t('usage.project_assign_sessions', {sessions: sessions}, 'Sessions assigned to a project on their own: ' + sessions)) + '</div>';
+  }
+  var targets = projectAssignTargets(projects, rows);
+  if (!targets.length) return html;
+  var field = 'font-size:12px;padding:3px 6px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:4px;';
+  var options = targets.map(function(o) {
+    return '<option value="' + costCardText(o.id) + '">' + costCardText(o.label) + '</option>';
+  }).join('');
+  var nameLabel = costCardText(t('usage.project_assign_name', null, 'Project name'));
+  var reasonLabel = costCardText(t('usage.project_assign_reason', null, 'Reason'));
+  html += '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;">'
+    + '<select id="project-assign-target" aria-label="' + costCardText(t('usage.project_assign_target', null, 'Repository or directory')) + '" style="' + field + '">' + options + '</select>'
+    + '<input id="project-assign-name" type="text" maxlength="120" placeholder="' + nameLabel + '" aria-label="' + nameLabel + '" style="width:150px;' + field + '">'
+    + '<input id="project-assign-reason" type="text" maxlength="500" placeholder="' + reasonLabel + '" aria-label="' + reasonLabel + '" style="width:200px;' + field + '">'
+    + '<button type="button" onclick="saveProjectAssignment()" style="' + field + 'cursor:pointer;">' + costCardText(t('usage.project_assign_button', null, 'Assign')) + '</button>'
+    + '<span id="project-assign-status" style="color:var(--text-muted);"></span>'
+    + '</div>'
+    + '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);line-height:1.5;">'
+    + costCardText(t('usage.project_assign_hint', null, 'An assignment lists all spend of that repository or directory, past and future, under the project name. An earlier assignment is kept as history.')) + '</div>';
+  return html;
+}
+function projectAssignStatus(text) {
+  var el = document.getElementById('project-assign-status');
+  if (el) el.textContent = text || '';
+}
+async function saveProjectAssignment() {
+  var target = document.getElementById('project-assign-target');
+  var name = document.getElementById('project-assign-name');
+  var reason = document.getElementById('project-assign-reason');
+  if (!target || !name || !reason) return;
+  var projectName = String(name.value || '').trim();
+  var why = String(reason.value || '').trim();
+  if (!projectName) {
+    projectAssignStatus(t('usage.project_assign_name_required', null, 'Enter a project name.'));
+    return;
+  }
+  if (!why) {
+    projectAssignStatus(t('usage.project_assign_reason_required', null, 'Enter a reason. It is kept with the assignment.'));
+    return;
+  }
+  try {
+    var res = await fetch('/api/projects/assignments', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({match_type: 'project', match_value: target.value,
+                            project_name: projectName, reason: why})
+    }).then(function(r) { return r.json(); });
+    if (!res || !res.ok) {
+      projectAssignStatus((res && res.error) || t('usage.project_assign_failed', null, 'The assignment was not saved.'));
+      return;
+    }
+    loadUsageByProject();
+  } catch (e) {
+    projectAssignStatus(t('usage.project_assign_failed', null, 'The assignment was not saved.'));
+  }
+}
 async function loadUsageByProject() {
   var title = document.getElementById('usage-by-project-title');
   var card = document.getElementById('usage-by-project-card');
@@ -20051,6 +20145,12 @@ async function loadUsageByProject() {
     var named = projects.filter(function(p) { return p.source && p.source !== 'none'; });
     if (!named.length) return;
     var html = renderProjectUsage(d);
+    var a = null;
+    try {
+      var ar = await fetch('/api/projects/assignments');
+      if (ar.ok) a = await ar.json();
+    } catch (e) { a = null; }
+    if (a && a.available !== false) html += renderProjectAssignments(a, projects);
     var b = null;
     try {
       // 402 = budgets are not in this plan: the spend table still renders.
