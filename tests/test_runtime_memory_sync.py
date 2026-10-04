@@ -240,6 +240,20 @@ def test_over_budget_files_are_listed_without_content_not_hidden(
     assert len(files) == 4, "every file stays listed"
     assert payload["_content_dropped"] > 0
     assert any(not c["content"] for c in payload["memory_content"])
+    omitted = [c for c in payload["memory_content"] if not c["content_available"]]
+    assert omitted
+    assert all(c["omitted_reason"] == "snapshot_budget" for c in omitted)
+    assert all(not c["content"] for c in omitted)
+
+
+def test_synced_memory_marks_partial_content(sync_env, monkeypatch):
+    s, _, config, _ = sync_env
+    _entitle(monkeypatch)
+    monkeypatch.setattr(s, "MEMORY_CONTENT_TRUNCATE", 5)
+    s.sync_runtime_memory_files(config, {}, {})
+    payload = s.decrypt_payload(s._build_memory_cache_pushes(config)[0]["blob"], config["encryption_key"])
+    assert all(c["truncated"] and c["content_available"] for c in payload["memory_content"])
+    assert all(len(c["content"]) == 5 for c in payload["memory_content"])
 
 
 def test_unchanged_snapshot_is_not_repushed_every_heartbeat(sync_env, monkeypatch):
@@ -249,6 +263,9 @@ def test_unchanged_snapshot_is_not_repushed_every_heartbeat(sync_env, monkeypatc
     _entitle(monkeypatch)
     s.sync_runtime_memory_files(config, {}, {})
     assert len(s._build_memory_cache_pushes(config)) == 1
+    # A built payload is still pending; only an accepted heartbeat arms the gate.
+    assert len(s._build_memory_cache_pushes(config)) == 1
+    s._commit_cache_push_gates()
     assert s._build_memory_cache_pushes(config) == []
 
 
@@ -258,6 +275,8 @@ def test_content_change_defeats_the_push_floor(sync_env, monkeypatch):
     _entitle(monkeypatch)
     s.sync_runtime_memory_files(config, {}, {})
     s._build_memory_cache_pushes(config)
+    s._commit_cache_push_gates()
+    s._memory_push_state['ts'] -= s.MEMORY_PUSH_CHANGED_MIN_INTERVAL_SEC + 1
     with open(os.path.join(roots["codex"], "AGENTS.md"), "w") as fh:
         fh.write("# codex AGENTS.md CHANGED\n")
     s.sync_runtime_memory_files(config, {}, {})
