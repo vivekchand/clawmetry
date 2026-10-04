@@ -297,7 +297,11 @@
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
           throw failure('The assistant sent an invalid live reply. Try again.');
         }
-        if (type === 'error') throw failure(payload.error || 'The answer could not be completed. Try again.');
+        if (type === 'error') {
+          var streamError = failure(payload.error || 'The answer could not be completed. Try again.');
+          streamError.data = payload;
+          throw streamError;
+        }
         if (type === 'done') {
           if (typeof payload.answer !== 'string' || !payload.conversation_id) {
             throw failure('The reply ended without a saved conversation. Try again.');
@@ -330,6 +334,9 @@
     }).finally(function () { request.cancelReader(); });
     request.promise = Promise.race([fetchPromise, timeoutPromise]).catch(function (error) {
       if (request.timedOut) error._assistantTimedOut = true;
+      // The cloud decrypting reader can fail after HTTP headers arrived.
+      // Preserve the same recovery contract as a non-2xx JSON response.
+      if (!error.data && error.reason) error.data = {reason: error.reason, error: error.message};
       throw error;
     }).finally(function () {
       clearTimeout(timer);
@@ -626,8 +633,9 @@
     clearRecovery();
     recovery.hidden = false;
     var identity = scopeIdentity();
+    var navigationToken = state.navigationToken;
     function retry() {
-      if (!isMounted() || identity !== scopeIdentity()) return;
+      if (!isMounted() || navigationToken !== state.navigationToken || identity !== scopeIdentity()) return;
       state.statusLoadedAt = state.historyLoadedAt = 0;
       loadStatus();
       loadHistory(true);
@@ -637,7 +645,7 @@
       var unlock = make('div');
       recovery.appendChild(unlock);
       window._cmRenderKeyPrompt(unlock, { title: 'Unlock Assistant', onUnlock: function () {
-        if (!state.mounted) return;
+        if (!state.mounted || navigationToken !== state.navigationToken) return;
         var current = scopeIdentity();
         if (current !== state.scopeIdentity) resetScope(current);
         else retry();
@@ -647,6 +655,40 @@
     button.type = 'button';
     button.addEventListener('click', retry);
     recovery.appendChild(button);
+  }
+
+  function renderChatRecovery(error, request) {
+    if (!requestIsCurrent(request)) return;
+    var data = error && error.data;
+    if (window.CLOUD_MODE && data && (data.reason === 'missing_key' || data.reason === 'decrypt_failed')) {
+      state.dataAvailable = false;
+      state.statusLoadedAt = 0;
+      setConversationReady(false);
+      setStatusPill('Unlock Assistant', 'warning');
+      renderRecovery(data);
+      return;
+    }
+    var recovery = el('cm-assistant-recovery');
+    if (!recovery) return;
+    clearRecovery();
+    recovery.hidden = false;
+    recovery.appendChild(make('p', '', 'An answer may already have been saved. Check history before sending the question again.'));
+    var refresh = make('button', 'cm-assistant-panel-button', 'Refresh conversation history');
+    refresh.type = 'button';
+    refresh.addEventListener('click', function () {
+      if (!requestIsCurrent(request) || state.chatRequest) return;
+      loadHistory(true);
+    });
+    recovery.appendChild(refresh);
+    if (request.conversationId) {
+      var reopen = make('button', 'cm-assistant-panel-button', 'Open saved conversation');
+      reopen.type = 'button';
+      reopen.addEventListener('click', function () {
+        if (!requestIsCurrent(request) || state.chatRequest) return;
+        loadConversation(request.conversationId);
+      });
+      recovery.appendChild(reopen);
+    }
   }
 
   function relativeDate(value) {
@@ -1180,6 +1222,7 @@
     var hadWaiting = hadChat || hadConversation;
     state.navigationToken += 1;
     var navigationToken = state.navigationToken;
+    clearRecovery();
     state.conversationId = id;
     setConversationReady(false);
     renderHistory();
@@ -1217,6 +1260,7 @@
     var hadConversation = cancelConversationRequest('new-chat');
     var hadWaiting = hadChat || hadConversation;
     state.navigationToken += 1;
+    clearRecovery();
     state.conversationId = null;
     setConversationReady(true);
     renderHistory();
@@ -1251,8 +1295,10 @@
   function sendMessage() {
     if (!isMounted()) return;
     if (state.chatRequest) {
+      var stoppedRequest = state.chatRequest;
       cancelChat('user');
       setStatusMessage('Stop requested. Any answer already saved remains in your history.', 'success');
+      renderChatRecovery(null, stoppedRequest);
       return;
     }
     if (!state.conversationReady) {
@@ -1292,6 +1338,9 @@
       return;
     }
     var question = message;
+    // Invalidate detached recovery actions from an earlier attempt.
+    state.navigationToken += 1;
+    clearRecovery();
     addMessage('user', message);
     input.value = '';
     resizeInput();
@@ -1334,6 +1383,7 @@
     });
     request.scopeIdentity = scopeIdentity();
     request.navigationToken = state.navigationToken;
+    request.conversationId = state.conversationId;
     request.pendingNode = pending;
     state.chatRequest = request;
     if (pending.article.scrollIntoView) pending.article.scrollIntoView({ block: 'end' });
@@ -1365,6 +1415,7 @@
       setStatusMessage(messageText, 'error');
       pending.progress.textContent = answerText ? 'Incomplete answer. ' + messageText : messageText;
       pending.progress.classList.add('is-error');
+      renderChatRecovery(error, request);
     });
   }
 
@@ -1528,6 +1579,7 @@
   function assistantLeave() {
     state.mounted = false;
     state.navigationToken += 1;
+    clearRecovery();
     stopVoice();
     cancelChat('leave');
     cancelConversationRequest('leave');

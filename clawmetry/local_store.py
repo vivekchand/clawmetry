@@ -2555,6 +2555,31 @@ def _assistant_validate_sql_ast(
     if cte_names.intersection(_ASSISTANT_ALLOWED_TABLES):
         return None, "SQL rejected: analytics table names are reserved"
 
+    native_trim_locations: set[int] | None = None
+
+    def is_native_trim(value: dict[str, Any]) -> bool:
+        nonlocal native_trim_locations
+        if (value.get("schema") != "main" or value.get("catalog")
+                or value.get("function_name") not in {"trim", "ltrim", "rtrim"}):
+            return False
+        # DuckDB adds schema=main to native TRIM grammar, including its
+        # LEADING/TRAILING forms. Prove it was an unqualified TRIM keyword
+        # in the original SQL; explicit main.trim must still be rejected.
+        # Both parser locations and lexer offsets count UTF-8 bytes.
+        if native_trim_locations is None:
+            native_trim_locations = set()
+            try:
+                encoded = sql.encode("utf-8")
+                tokens = duckdb.tokenize(sql)
+                for (offset, kind), (following, _) in zip(tokens, tokens[1:]):
+                    if (kind == duckdb.token_type.keyword
+                            and encoded[offset:offset + 4].lower() == b"trim"
+                            and encoded[following:following + 1] == b"("):
+                        native_trim_locations.add(offset)
+            except Exception:
+                return False
+        return value.get("query_location") in native_trim_locations
+
     def walk(value: Any) -> str | None:
         if isinstance(value, dict):
             node_type = str(value.get("type") or "").upper()
@@ -2615,7 +2640,7 @@ def _assistant_validate_sql_ast(
                 name = str(value.get("function_name") or "").lower()
                 if name == "count_star":
                     name = "count"
-                if value.get("schema") or value.get("catalog"):
+                if (value.get("schema") or value.get("catalog")) and not is_native_trim(value):
                     return "SQL rejected: qualified functions are not allowed"
                 if (
                     name not in _ASSISTANT_ALLOWED_FUNCTIONS
@@ -10402,9 +10427,12 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
         connection, I/O) still raises.
 
         ``with_outcome=True`` (the OTLP receiver, which must tell its sender
-        what was refused) returns ``{"written": n, "rejected": n}`` and also
-        counts a span missing a required field as refused. Without it such a
-        span raises ValueError, as it always has."""
+        what was refused) returns ``{"written": n, "rejected": n,
+        "rejected_span_ids": [...]}`` and also counts a span missing a required
+        field as refused. ``rejected_span_ids`` names the refused spans that
+        carry an id, so the receiver can keep them out of the live tiles.
+        Without ``with_outcome`` such a span raises ValueError, as it always
+        has."""
         if self._read_only:
             raise RuntimeError(
                 "local_store: ingest_span() called on read-only store"
@@ -10422,6 +10450,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
         except Exception:
             redact = None  # partial install: never block ingest
         rejected = 0
+        rejected_ids: list[str] = []
         rows: dict[str, tuple[list[Any], dict[str, Any], str]] = {}
         for span in spans:
             try:
@@ -10430,6 +10459,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                 if not with_outcome:
                     raise
                 rejected += 1
+                if isinstance(span, dict) and span.get("span_id"):
+                    rejected_ids.append(str(span["span_id"]))
                 continue
             # Change detection hashes what was RECEIVED, before redaction:
             # an unchanged span re-sent every tick is skipped without paying
@@ -10439,7 +10470,12 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
             rows[str(params[0])] = (params, span, _content_hash(params[:-1]))
 
         def _out(n: int) -> Any:
-            return {"written": n, "rejected": rejected} if with_outcome else n
+            if not with_outcome:
+                return n
+            # An id repeated in the batch whose LAST occurrence is storable is
+            # not a refused span.
+            ids = [i for i in dict.fromkeys(rejected_ids) if i not in rows]
+            return {"written": n, "rejected": rejected, "rejected_span_ids": ids}
 
         if not rows:
             return _out(0)
@@ -10466,6 +10502,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                     if not with_outcome:
                         raise
                     rejected += 1
+                    rows.pop(str(params[0]), None)
+                    rejected_ids.append(str(params[0]))
                     continue
             to_write.append(params + [h])
         if not to_write:
@@ -10486,6 +10524,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                         if not _is_data_error(row_exc):
                             raise
                         rejected += 1
+                        rows.pop(str(params[0]), None)
+                        rejected_ids.append(str(params[0]))
                         log.warning(
                             "spans: span refused, the store cannot hold one "
                             "of its values: %s", row_exc,

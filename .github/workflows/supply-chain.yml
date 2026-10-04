@@ -507,9 +507,10 @@ jobs:
           path: audit/
           retention-days: 30
 
-      # The only red condition: the scanner did not run. A silent outage is
+      # Red condition 1 of 2: the scanner did not run. A silent outage is
       # the failure mode this whole job exists to avoid, because it looks
-      # exactly like a clean result.
+      # exactly like a clean result. (Condition 2 is the bandit ratchet
+      # below.)
       - name: Fail if a scanner did not run
         if: always()
         run: |
@@ -522,6 +523,86 @@ jobs:
           done
           if [ "$rc" -eq 0 ]; then echo "every scanner completed."; fi
           exit "$rc"
+
+      # Red condition 2 of 2: bandit's medium+ count grew, or a HIGH-severity
+      # finding appeared.
+      #
+      # Until now a completed bandit run could report any number of findings
+      # and this job still went green -- the count was printed into the step
+      # summary and nothing was held to it. That makes the 307 medium findings
+      # on this tree a number nobody can regress, and it means a NEW
+      # high-severity finding in product code lands on main silently, which is
+      # the one case the scan exists to catch.
+      #
+      # Same one-way-ratchet shape the repo already uses for AC coverage and
+      # the unpinned pip installs: the baseline may only go DOWN. Fixing
+      # findings is always green; adding them is red until the baseline is
+      # moved deliberately, in a diff a reviewer can see.
+      #
+      # BANDIT_MEDIUM_BASELINE is the measured medium+ total on this tree
+      # (bandit -ll, with the step's exclusions). Lower it when findings are
+      # fixed or declared. Raising it needs a reason in the PR body.
+      #
+      # HIGH severity is held at zero outright rather than ratcheted: there
+      # are none today, and a first one is a finding to fix, not a number to
+      # record.
+      #
+      # Skipped when the scan did not produce a usable report -- the step
+      # above already owns that case, and a missing report must not read here
+      # as "zero findings".
+      - name: Bandit findings ratchet (medium+ count, zero HIGH)
+        if: always()
+        env:
+          BANDIT_MEDIUM_BASELINE: "307"
+        run: |
+          if [ -f audit/bandit.failed ] || [ ! -f audit/bandit.json ]; then
+            echo "bandit produced no usable report; the outage gate above owns this. Skipping ratchet."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, os, sys, collections
+
+          results = json.load(open("audit/bandit.json"))["results"]
+          baseline = int(os.environ["BANDIT_MEDIUM_BASELINE"])
+
+          high = [r for r in results if r.get("issue_severity") == "HIGH"]
+          total = len(results)
+
+          print(f"bandit: {total} medium+ finding(s), baseline {baseline}, {len(high)} HIGH")
+          by = collections.Counter(
+              (r.get("issue_severity"), r.get("issue_confidence"), r.get("test_id"))
+              for r in results
+          )
+          for (sev, conf, test), n in sorted(by.items(), key=lambda kv: -kv[1]):
+              print(f"  {n:5d}  {sev}/{conf}  {test}")
+
+          rc = 0
+          if high:
+              rc = 1
+              print(
+                  "::error::bandit reported "
+                  f"{len(high)} HIGH-severity finding(s); this gate holds HIGH at zero"
+              )
+              for r in high:
+                  loc = f"{r.get('filename')}:{r.get('line_number')}"
+                  print(f"::error file={r.get('filename')},line={r.get('line_number')}::"
+                        f"{r.get('test_id')} {r.get('issue_text')} ({loc})")
+
+          if total > baseline:
+              rc = 1
+              print(
+                  f"::error::bandit medium+ findings rose from {baseline} to {total}. "
+                  "Fix the new finding(s), or raise BANDIT_MEDIUM_BASELINE in "
+                  ".github/workflows/supply-chain.yml with a reason in the PR body."
+              )
+          elif total < baseline:
+              print(
+                  f"::notice::bandit medium+ findings fell from {baseline} to {total}. "
+                  "Lower BANDIT_MEDIUM_BASELINE to lock the improvement in."
+              )
+
+          sys.exit(rc)
+          PY
 
   scorecard:
     name: OpenSSF Scorecard

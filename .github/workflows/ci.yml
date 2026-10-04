@@ -921,6 +921,17 @@ jobs:
         timeout-minutes: 3
         run: python3 -m pytest tests/test_assistant_stream.py -q --tb=short -k windows
 
+      - name: Assistant wake socket cancellation
+        timeout-minutes: 2
+        run: python3 -m pytest tests/test_assistant_delivery.py -q --tb=short -k delivery_transport
+
+      - name: Assistant daemon TLS bootstrap and cancellation
+        if: matrix.python-version == '3.11'
+        timeout-minutes: 3
+        run: |
+          pip install --require-hashes -r .github/requirements/ci-assistant-tls.txt
+          python3 -m pytest tests/test_assistant_stream.py tests/test_assistant_delivery.py -q --tb=short -k 'daemon_tls or https_transport'
+
       - name: Start server (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -988,6 +999,7 @@ jobs:
         run: >-
           pip install --require-hashes
           -r .github/requirements/ci-tests.txt
+          -r .github/requirements/ci-assistant-tls.txt
       - name: Verify assistant analytics and dashboard persistence
         run: >-
           python3 -m pytest -q --tb=short
@@ -995,6 +1007,7 @@ jobs:
           tests/test_assistant_stream.py
           tests/test_assistant_executor.py
           tests/test_assistant_relay.py
+          tests/test_assistant_delivery.py
           tests/test_harness_service_discovery.py
           tests/test_assistant_store.py
           tests/test_assistant_managed.py
