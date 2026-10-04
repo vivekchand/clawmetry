@@ -1045,6 +1045,9 @@ _DAEMON_METHODS = frozenset({
     "query_assistant_conversation",
     "save_assistant_conversation",
     "query_assistant_sql",
+    "start_assistant_job",
+    "read_assistant_job",
+    "cancel_assistant_job",
     # Issue #1615 — decision sampling workflow. Four review-queue methods
     # exposed through the daemon proxy so /api/review/* in the dashboard
     # process can hit the writer-locked DuckDB.

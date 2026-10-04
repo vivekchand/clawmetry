@@ -20303,6 +20303,19 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
 
     # ── User-authored dashboard panels ─────────────────────────────────
 
+    def start_assistant_job(self, *, request_id, operation, payload):
+        """Typed RPC into the already initialized daemon executor, never a fallback."""
+        from clawmetry.assistant_executor import current
+        return current(self).start(request_id=request_id, operation=operation, payload=payload)
+
+    def read_assistant_job(self, *, request_id, renew=False):
+        from clawmetry.assistant_executor import current
+        return current(self).read(request_id=request_id, renew=renew is True)
+
+    def cancel_assistant_job(self, *, request_id):
+        from clawmetry.assistant_executor import current
+        return current(self).cancel(request_id=request_id)
+
     def query_dashboard_panels(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """Return saved dashboard panel definitions, newest first."""
         rows = self._fetch(
