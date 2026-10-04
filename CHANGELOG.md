@@ -1,18 +1,18 @@
 ## Unreleased
 
-### Fixed: one event with unencodable text stopped every later event from being stored
-
-- **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
-- **What:** when a flush fails because of a value in a row, the store rewrites the text of the queued events once and writes them again. A lone surrogate becomes U+FFFD, and a surrogate pair that arrived split becomes its character. The store logs a warning with the number of events it changed. A flush that fails for any other reason keeps the events queued unchanged, as before.
-- **Verified:** 6 new tests cover a lone surrogate in the session id, the model, a text payload and the event id, each queued between two valid events, a store I/O failure that must not rewrite anything, and the text helper. Without the fix 5 of them fail.
-- **Limits:** only the event queue is covered. The check that keeps an OTLP event out of a session the daemon already owns still fails for a session id with a lone surrogate, and logs a warning. A span with unencodable text is still refused, as before.
-
 ### Added: the Usage tab shows cost by project and project budgets
 
 - **Why:** spend per project and a budget per project existed only as `/api/projects`, `/api/projects/budgets` and a CSV export. Nobody could see them in the dashboard, and setting a budget took a hand-written request (#5941).
 - **What:** the Usage tab has a **Cost by Project** card for the last 30 days. Each row is a project with what named it (repository, directory, assignment or no project), its cost, its share of the total, sessions and runtimes. A line under the table says what share of the spend belongs to a project and how many tokens have no price. Where budgets are in the plan, the card lists each budget with its amount, period and timezone, a bar of the spend in the current period (amber from 80%, red from 100%), and the server's notice that an alert does not stop a charge. A short form sets a budget for a project in the browser's timezone, and each budget has a Remove button. The card stays hidden until a session belongs to a project.
 - **Verified:** 6 new tests run the shipped renderers in node: escaped project names, the cost basis badge, shares, the two notes, a bar that stays full above 100%, a budget with an unknown timezone, the empty state, the form's project list and the hidden card. The card was inspected as a rendered image in the light theme.
 - **Limits:** no new route and no change to the API. The card was not opened in a running dashboard. It needs `/api/projects`, so it stays hidden on a hosted dashboard that does not serve that route. Without budgets in the plan the table shows and the budget part does not. Assigning a session or a repository to a project is still API only, and so is per-user attribution.
+
+### Fixed: one event with unencodable text stopped every later event from being stored
+
+- **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
+- **What:** when a flush fails because of a value in a row, the store rewrites the text of the queued events once and writes them again. A lone surrogate becomes U+FFFD, and a surrogate pair that arrived split becomes its character. The store logs a warning with the number of events it changed. A flush that fails for any other reason keeps the events queued unchanged, as before.
+- **Verified:** 6 new tests cover a lone surrogate in the session id, the model, a text payload and the event id, each queued between two valid events, a store I/O failure that must not rewrite anything, and the text helper. Without the fix 5 of them fail.
+- **Limits:** only the event queue is covered. The check that keeps an OTLP event out of a session the daemon already owns still fails for a session id with a lone surrogate, and logs a warning. A span with unencodable text is still refused, as before.
 
 ### Added: `CLAWMETRY_PROJECT` on the collector names the project of new sessions
 
