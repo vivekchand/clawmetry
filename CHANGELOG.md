@@ -7,6 +7,11 @@
 - **Verified:** 6 new tests cover a lone surrogate in the session id, the model, a text payload and the event id, each queued between two valid events, a store I/O failure that must not rewrite anything, and the text helper. Without the fix 5 of them fail.
 - **Limits:** only the event queue is covered. The check that keeps an OTLP event out of a session the daemon already owns still fails for a session id with a lone surrogate, and logs a warning. A span with unencodable text is still refused, as before.
 
+### Fixed
+
+- Keep the Assistant in the dashboard's native theme, with the question box as the main focus. Answers stream as they arrive, and Stop cancels the active response.
+- Make hosted Setup show synced rules, skills, commands, and agent files with runtime filters and file previews. Explain unavailable files and unlock states directly in the page.
+- Make hosted Improve use encrypted, runtime-scoped guidance snapshots from DuckDB. Show evidence coverage and freshness, and exclude delegated agent messages from human guidance candidates.
 
 ### Added: a workflow replay is drawn as a graph
 
@@ -21,6 +26,7 @@
 - The reader opens at the latest recorded message, shows the recorded model and token count, and restarts from the beginning when Play is pressed. Missing measurements are labelled as not recorded.
 - Switching sessions discards late transcript, history-page and side-panel responses. Narrow screens put session titles above the action buttons.
 - Verified with the reported Claude Code session, a fresh real Claude exchange, a long Codex conversation with older history, and regression tests that fail when the old renderer takeover or position reset is restored.
+
 
 ### Fixed: the runtime hook registry replaced hooks it did not own
 

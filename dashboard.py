@@ -3285,6 +3285,17 @@ def _send_webhook_alert(url, alert_data, payload_type="generic"):
         # the caller-supplied url (covers generic / slack / discord).
         if payload_type not in ("pagerduty", "opsgenie"):
             target_url = url
+        # urlopen also speaks file:// and ftp://, and serves a file:// URL
+        # even with a data= body, so the configured scheme is checked before
+        # the request is built. See clawmetry/url_guard.py.
+        from clawmetry import url_guard as _url_guard
+        if not _url_guard.is_http_url(target_url):
+            import logging as _lg
+            _lg.getLogger("clawmetry.dashboard.webhook").warning(
+                "_send_webhook_alert: %s URL rejected (scheme must be "
+                "http/https)", payload_type,
+            )
+            return
         data = json.dumps(body).encode()
         headers = {"Content-Type": "application/json"}
         headers.update(extra_headers)

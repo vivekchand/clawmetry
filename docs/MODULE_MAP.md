@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-318 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+319 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -331,6 +331,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/trial_enforcement.py` | medium | Trial-end hard-block layer. |
 | `clawmetry/update_guard.py` | small | Crash-loop rollback guard for daemon self-update (firmware-OTA style). |
 | `clawmetry/update_respawn.py` | medium | Windows out-of-process updater. |
+| `clawmetry/url_guard.py` | small | Scheme guard for outbound, user-configured URLs. |
 | `clawmetry/usage_snapshot.py` | small | Calendar-period usage for hosted runtime filters, from one rollup read. |
 | `clawmetry/waste_flags.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
 | `clawmetry/watchdog.py` | medium | macOS "app-vanished" watchdog. |
