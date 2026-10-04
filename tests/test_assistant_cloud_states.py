@@ -390,13 +390,13 @@ context.assistantLeave();
 def test_key_failure_after_stream_headers_retains_unlock_reason(transport):
     from tests.test_assistant_frontend import _run_node
 
-    _run_node(_cloud_page_script() + 'const transport = ' + repr(transport) + r'''
+    _run_node(_cloud_page_script() + 'const failureTransport = ' + repr(transport) + r'''
 let unlockCallback;
 context._cmRenderKeyPrompt = (host, options) => {
   host.textContent = 'Unlock your node'; unlockCallback = options.onUnlock;
 };
 const stream = await startChat('Keep the question visible after key failure');
-if (transport === 'reader') stream.fail(Object.assign(new Error('This key could not unlock Assistant.'), {
+if (failureTransport === 'reader') stream.fail(Object.assign(new Error('This key could not unlock Assistant.'), {
   reason:'decrypt_failed',status:422,
 }));
 else stream.push(frame('error', {reason:'decrypt_failed',error:'This key could not unlock Assistant.'}));
