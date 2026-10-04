@@ -32883,7 +32883,8 @@ var GUARD_COMPONENT_KIND_LABEL = {
   skill: 'Skill',
   plugin: 'Plugin',
   instructions: 'Instructions',
-  hooks: 'Hooks and settings'
+  hooks: 'Hooks and settings',
+  install_script_package: 'Package with an install script'
 };
 var GUARD_RUNTIME_LABEL = {
   claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
@@ -32958,8 +32959,10 @@ function loadGuardInventory() {
       el.innerHTML = '<div class="empty-state">Nothing inventoried yet. The ClawMetry daemon on the machine your agents run on records this within a few minutes of starting.</div>';
       return;
     }
+    // A 'lockfile' row only records that the lockfile was read before; the
+    // packages in it are the rows worth showing.
     var rows = (d.components || []).filter(function (c) {
-      return c.status !== 'removed' || c.recent;
+      return c.kind !== 'lockfile' && (c.status !== 'removed' || c.recent);
     });
     if (!rows.length) {
       el.innerHTML = '<div class="empty-state">No MCP servers, skills, plugins, instruction files or hook files were found for the runtimes ClawMetry reads.</div>';
@@ -32976,6 +32979,7 @@ function loadGuardInventory() {
       '</tr></thead><tbody>';
     rows.forEach(function (c) {
       var readers = (c.readers || []).map(function (r) { return GUARD_RUNTIME_LABEL[r] || r; }).join(', ');
+      if (!readers && c.kind === 'install_script_package') readers = 'The package manager, on install';
       var where = c.scope === 'global'
         ? 'This machine'
         : String(c.workspace || '').split(/[\\/]/).filter(Boolean).pop() || 'Project';

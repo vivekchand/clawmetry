@@ -545,3 +545,202 @@ def test_inventory_finding_does_not_overwrite_the_workspace_hook_finding(
     assert tamper == ["daemon_detect_agent_config_tamper",
                       "daemon_detect_agent_config_tamper_inventory"]
     assert policy_kinds == [["agent_config_tamper", "agent_config_tamper"]]
+
+
+# ── lockfile: a dependency that is new and runs a script on install ────────
+def _lock(packages, version=3):
+    pk = {"": {"name": "app", "version": "1.0.0"}}
+    pk.update(packages)
+    return {"name": "app", "lockfileVersion": version, "packages": pk}
+
+
+_ESBUILD = {"version": "0.21.5", "hasInstallScript": True}
+_PLAIN = {"version": "4.17.21"}
+
+
+def _lock_rows(comps):
+    return {c["name"]: c for c in comps if c["kind"] in inv.LOCKFILE_KINDS}
+
+
+def test_lockfile_records_only_the_packages_npm_marks_as_running_a_script(home, workspace):
+    _write(os.path.join(workspace, "package-lock.json"), _lock({
+        "node_modules/esbuild": _ESBUILD,
+        "node_modules/lodash": _PLAIN,
+        "node_modules/@scope/native": {"version": "2.0.0", "hasInstallScript": True},
+        "node_modules/vite/node_modules/esbuild": {"version": "0.19.0",
+                                                   "hasInstallScript": True},
+        "node_modules/local": {"link": True, "hasInstallScript": True},
+        "packages/local": {"version": "0.0.1"},
+        "node_modules/odd": {"version": "1.0.0", "hasInstallScript": "yes"},
+    }))
+    rows = _lock_rows(inv.collect_workspace(workspace))
+    assert set(rows) == {"package-lock.json", "esbuild", "@scope/native"}
+    assert rows["package-lock.json"]["kind"] == "lockfile"
+    assert rows["package-lock.json"]["details"]["install_script_packages"] == 2
+    assert rows["esbuild"]["kind"] == "install_script_package"
+    assert rows["esbuild"]["version"] == "0.21.5, 0.19.0"
+    assert rows["esbuild"]["readers"] == [] and rows["esbuild"]["source"] == "package-lock.json"
+
+    # A v1 lockfile does not record the flag: the lockfile row, no packages.
+    _write(os.path.join(workspace, "package-lock.json"),
+           {"lockfileVersion": 1, "dependencies": {"esbuild": {"version": "0.21.5"}}})
+    rows = _lock_rows(inv.collect_workspace(workspace))
+    assert set(rows) == {"package-lock.json"}
+    assert rows["package-lock.json"]["details"]["records_install_scripts"] is False
+
+
+def test_a_new_install_script_package_raises_once_the_lockfile_was_seen(home, workspace, store):
+    """A scope inventoried before it had a lockfile must not report the
+    lockfile's first sight; the package added afterwards is the finding."""
+    _write(os.path.join(workspace, "CLAUDE.md"), "# notes\n")
+    assert _scan(store, workspace)["baseline"] is True
+
+    lock_path = os.path.join(workspace, "package-lock.json")
+    _write(lock_path, _lock({"node_modules/esbuild": _ESBUILD}))
+    first = _scan(store, workspace, now_ms=_NOW + 1000)
+    assert first["baseline"] is False and first["changes"] == []
+
+    # A version bump of a package already flagged, and a package without a script.
+    _write(lock_path, _lock({"node_modules/esbuild": dict(_ESBUILD, version="0.23.1"),
+                             "node_modules/lodash": _PLAIN}))
+    assert _scan(store, workspace, now_ms=_NOW + 2000)["changes"] == []
+
+    later = _NOW + 600_000
+    _write(lock_path, _lock({"node_modules/esbuild": dict(_ESBUILD, version="0.23.1"),
+                             "node_modules/lodash": _PLAIN,
+                             "node_modules/env-probe-lite": {"version": "0.3.1",
+                                                             "hasInstallScript": True}}))
+    res = _scan(store, workspace, now_ms=later)
+    assert [(c["kind"], c["name"], c["last_change"]) for c in res["changes"]] == [
+        ("install_script_package", "env-probe-lite", "new")]
+
+    recent = _recent(store, later)
+    for sid, runtime in (("claude_code:s1", "claude_code"), ("codex:s2", "codex")):
+        incs = inv.incidents_for_session(recent, sid, runtime, workspace, now_ms=later)
+        assert [i["kind"] for i in incs] == ["package_manifest_exec"]
+        inc = incs[0]
+        assert inc["severity"] == "warning" and inc["spend_basis"] == "unknown"
+        assert inc["signal_signature"] == inv.INSTALL_SCRIPT_SIGNATURE
+        assert inc["title"] == "New dependency with an install script: env-probe-lite"
+        assert inc["evidence"]["observed"] == "lockfile"
+        assert [(p["name"], p["version"]) for p in inc["evidence"]["packages"]] == [
+            ("env-probe-lite", "0.3.1")]
+    assert inv.incidents_for_session(recent, "claude_code:s3", "claude_code", "/tmp",
+                                     now_ms=later) == []
+    assert inv.incidents_for_session(recent, "claude_code:s1", "claude_code", workspace,
+                                     now_ms=later + 7200_000) == []
+
+
+def test_a_package_that_gains_an_install_script_is_new(home, workspace):
+    lock_path = os.path.join(workspace, "package-lock.json")
+    _write(lock_path, _lock({"node_modules/left-pad": {"version": "1.3.0"}}))
+    rows, changes = _two_passes(home, workspace, lambda: _write(lock_path, _lock(
+        {"node_modules/left-pad": {"version": "1.3.1", "hasInstallScript": True}})))
+    assert [(c["name"], c["last_change"]) for c in changes] == [("left-pad", "new")]
+
+
+def test_install_script_that_reads_a_credential_file_is_critical(home, workspace):
+    lock_path = os.path.join(workspace, "package-lock.json")
+    _write(lock_path, _lock({"node_modules/esbuild": _ESBUILD}))
+
+    def _install():
+        _write(lock_path, _lock({
+            "node_modules/esbuild": _ESBUILD,
+            "node_modules/env-probe-lite": {"version": "0.3.1", "hasInstallScript": True},
+            "node_modules/quiet": {"version": "1.0.0", "hasInstallScript": True}}))
+        _write(os.path.join(workspace, "node_modules", "env-probe-lite", "package.json"),
+               {"name": "env-probe-lite", "scripts": {
+                   "postinstall": "cat ~/.npmrc > /tmp/x", "test": "cat ~/.npmrc"}})
+        # core-js starts its script this way; in a package it is not an alarm.
+        _write(os.path.join(workspace, "node_modules", "quiet", "package.json"),
+               {"name": "quiet", "scripts": {
+                   "install": "node -e \"try{require('./postinstall')}catch(e){}\""}})
+
+    rows, changes = _two_passes(home, workspace, _install)
+    incs = inv.incidents_for_session(rows, "claude_code:s1", "claude_code", workspace,
+                                     now_ms=_NOW + 1000)
+    assert [i["kind"] for i in incs] == ["package_manifest_exec"]
+    inc = incs[0]
+    assert inc["severity"] == "critical"
+    assert inc["title"] == ("New dependency env-probe-lite has an install script that "
+                            "reads a credential file")
+    assert inc["evidence"]["count"] == 2
+    assert inc["evidence"]["hooks"] == ["install", "postinstall"]
+    by_name = {p["name"]: p for p in inc["evidence"]["packages"]}
+    assert [h["hook"] for h in by_name["env-probe-lite"]["hooks"]] == ["postinstall"]
+    assert by_name["quiet"]["hooks"][0]["alarm"] is None
+
+
+def test_a_lockfile_path_outside_node_modules_is_never_read(home, workspace, tmp_path):
+    outside = tmp_path / "outside"
+    _write(str(outside / "package.json"),
+           {"name": "x", "scripts": {"postinstall": "cat ~/.npmrc"}})
+    _write(os.path.join(workspace, "sub", "package.json"),
+           {"name": "y", "scripts": {"postinstall": "cat ~/.npmrc"}})
+    _write(os.path.join(workspace, "package-lock.json"), _lock({
+        "node_modules/../../outside": {"name": "x", "version": "1", "hasInstallScript": True},
+        str(outside): {"name": "abs", "version": "1", "hasInstallScript": True},
+        "sub": {"name": "y", "version": "1", "hasInstallScript": True}}))
+    rows = _lock_rows(inv.collect_workspace(workspace))
+    assert {n: r["details"]["hooks"] for n, r in rows.items()
+            if r["kind"] == "install_script_package"} == {"x": [], "abs": [], "y": []}
+
+
+def test_a_torn_lockfile_read_is_neither_a_removal_nor_a_new_package(home, workspace, store):
+    lock_path = os.path.join(workspace, "package-lock.json")
+    good = _lock({"node_modules/esbuild": _ESBUILD})
+    _write(lock_path, good)
+    assert _scan(store, workspace)["baseline"] is True
+    _write(lock_path, json.dumps(good)[:40])  # npm is half way through writing it
+    assert _scan(store, workspace, now_ms=_NOW + 1000)["changes"] == []
+    _write(lock_path, good)
+    assert _scan(store, workspace, now_ms=_NOW + 2000)["changes"] == []
+    stored = {r["name"]: r for r in store.query_agent_inventory()["components"]}
+    assert stored["esbuild"]["status"] == "present"
+    assert stored["esbuild"]["last_change"] == "baseline"
+
+
+def test_switching_the_install_script_check_off_silences_the_lockfile_finding(
+        workspace, monkeypatch):
+    from clawmetry import detectors as _det
+    from clawmetry import guard_checks as _checks
+    from clawmetry import sync as _sync
+
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+    written = []
+
+    class _Store:
+        def query_sessions_table(self, limit=300):
+            return [{"session_id": "claude_code:abc", "agent_type": "claude_code",
+                     "started_at": now_iso, "last_active_at": now_iso, "status": "active",
+                     "cost_usd": 1.0, "cwd": workspace, "metadata": {}}]
+
+        def query_events(self, **kw):
+            return [{"event_type": "tool_call", "ts": now_iso, "data": {"tool": "x"}}]
+
+        def query_approvals(self, **kw):
+            return []
+
+        def ingest_loop_signal(self, **kw):
+            written.append(kw["signature"])
+
+        def __getattr__(self, name):
+            return lambda *a, **k: None
+
+    change = {"kind": "install_script_package", "name": "env-probe-lite", "scope": "project",
+              "workspace": workspace, "source": "package-lock.json", "readers": [],
+              "version": "0.3.1", "last_change": "new",
+              "changed_at": int(time.time() * 1000), "details": {"hooks": []}}
+    monkeypatch.setattr(_det, "run_all", lambda *a, **k: [])
+    monkeypatch.setattr(_sync, "_detector_runtime", lambda sid, at: "claude_code")
+    monkeypatch.setattr(_sync, "_record_guard_observation", lambda *a, **k: None)
+    monkeypatch.setattr(_sync, "_agent_inventory_pass", lambda *a, **k: [change])
+    monkeypatch.setattr(_sync, "_apply_guard_policies", lambda *a, **k: None)
+
+    _sync._emit_detector_incidents(_Store(), {})
+    assert written == [inv.INSTALL_SCRIPT_SIGNATURE]
+
+    del written[:]
+    monkeypatch.setattr(_checks, "disabled_kinds", lambda settings: {"package_manifest_exec"})
+    _sync._emit_detector_incidents(_Store(), {})
+    assert written == []
