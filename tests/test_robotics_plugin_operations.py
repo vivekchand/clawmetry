@@ -2,7 +2,7 @@
 import pytest
 
 
-@pytest.mark.parametrize('operation', ['runs', 'events', 'snapshot', 'inventory', 'guard_ack', 'guard_incidents'])
+@pytest.mark.parametrize('operation', ['runs', 'events', 'snapshot', 'inventory', 'guard_ack', 'guard_incidents', 'set_observation_only'])
 def test_robotics_operation_dispatches_to_private_plugin(monkeypatch, operation):
     from clawmetry import extensions
     from clawmetry.local_store import LocalStore
@@ -26,6 +26,8 @@ def test_mutation_does_not_become_a_cloud_read_shape():
     from clawmetry.query_contract import QUERY_CONTRACT
     assert 'robotics_guard_ack' not in QUERY_CONTRACT
     assert 'robotics_control' not in QUERY_CONTRACT
+    assert 'robotics_query' not in QUERY_CONTRACT
+    assert 'set_observation_only' not in QUERY_CONTRACT
 
 
 def test_incident_read_shape_preserves_cursor_precision_and_clamps_page():

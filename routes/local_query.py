@@ -1350,10 +1350,25 @@ def http_local_method(method: str):
             "error": f"method not allowed: {method!r}",
             "allowed": sorted(_DAEMON_METHODS),
         }), 400
-    body = request.get_json(silent=True) or {}
-    kwargs = body.get("kwargs") or {}
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "body must be an object"}), 400
+    kwargs = body.get("kwargs", {})
     if not isinstance(kwargs, dict):
         return jsonify({"error": "kwargs must be an object"}), 400
+    operation = kwargs.get("operation")
+    if method == "robotics_query" and not isinstance(operation, str):
+        return jsonify({"error": "operation must be a string"}), 400
+    if method == "robotics_query" and operation in {"guard_ack", "set_observation_only"}:
+        # This Blueprint also exists on the dashboard. Its internal RPC route
+        # must not bypass the Pro route's local-origin and CSRF checks. Only
+        # the actual daemon owns this private token; the dashboard has none.
+        import hmac
+        from clawmetry.local_server import get_token
+        token = get_token()
+        provided = request.headers.get("Authorization", "")
+        if not token or not hmac.compare_digest(provided.encode("utf-8"), ("Bearer " + token).encode("utf-8")):
+            return jsonify({"error": "unauthorized"}), 401
     try:
         store = _store()
         fn = getattr(store, method)
