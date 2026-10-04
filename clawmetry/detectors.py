@@ -1186,18 +1186,25 @@ def blocked_on_user(events: Iterable[dict], session_id: str,
             data = _coerce_dict(ev.get("data"))
             role = _event_role(data)
             if et in _USER_TYPES or role == "user":
-                rejections, own_gate, hook_idx = 0, False, None  # a human is here
-                continue
-            if et != "tool_result" and role != "tool":
-                continue
-            text = _result_text(data)
-            if _is_hook_error(text):
-                rejections += 1
-                own_gate = own_gate or _OWN_GATE_MARKER in text
-                if hook_idx is None:
-                    hook_idx = i
+                # A user message that holds tool_result blocks is the tool
+                # reply (Anthropic message format), not a person.
+                results = _tool_result_blocks(data)
+                if not results:
+                    rejections, own_gate, hook_idx = 0, False, None  # a human is here
+                    continue
+            elif et == "tool_result" or role == "tool":
+                results = [data]
             else:
-                rejections, own_gate, hook_idx = 0, False, None  # it recovered
+                continue
+            for res in results:
+                text = _result_text(res)
+                if _is_hook_error(text):
+                    rejections += 1
+                    own_gate = own_gate or _OWN_GATE_MARKER in text
+                    if hook_idx is None:
+                        hook_idx = i
+                else:
+                    rejections, own_gate, hook_idx = 0, False, None  # it recovered
         if rejections and (rejections >= 2 or idle >= wait_need):
             evidence = {
                 "pending_approvals": 0, "idle_seconds": int(idle),

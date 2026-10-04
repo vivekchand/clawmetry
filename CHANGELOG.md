@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: a failing pre-tool hook went unreported when the tool replies arrived as user messages
+
+- **Why:** the check that reports an agent blocked by an erroring pre-tool hook counts hook errors in tool replies and starts again at each user turn. It read events on its own and classed a `user` message holding `tool_result` blocks as a user turn. A session stored in that form, for example a Claude CLI run started by OpenClaw, therefore never raised `blocked_on_user` for a failing hook, including ClawMetry's own gate.
+- **What:** the hook check reads each `tool_result` block of such a message as a tool reply. A hook error counts, any other reply means the agent recovered, and a user message with text clears the count as before.
+- **Verified:** 4 new tests cover two errors from ClawMetry's own gate, one error from another hook after an idle period, a successful reply after the errors, and a typed user message after the errors. 2 of them fail without the change.
+- **Limits:** the question and permission-request path of the same check is unchanged. Not run against a live session with a failing hook.
 ### Fixed: one event with unencodable text stopped every later event from being stored
 
 - **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
@@ -13,7 +19,6 @@
 - **What:** the collector reads each active project's `package-lock.json` and records the packages that npm marks `hasInstallScript`. The first read of a lockfile is a baseline. When a later read shows a package with that mark that the baseline did not have, each session in that directory gets an "Install scripts" finding that names the package and its version. The finding is a warning. It is critical when the package is installed and its install script pipes a download to a shell, decodes a blob, reads a credential file or reads a publishing token. A new version of a package that already had the mark is not reported. The Guard inventory card lists the recorded packages. Switching a Guard check off now also silences the findings that come from the inventory.
 - **Verified:** 7 new tests, and the red-team corpus has the attack as case `npm-postinstall-credential-harvest` with a control for a routine update. On one working machine, 844 project directories with a lockfile raise nothing at rest. In the git history of 31 lockfiles there, 4 of 28 lockfile commits add one newly marked package each (`@firebase/util` twice, `protobufjs`, `core-js`), so about one lockfile change in seven raises one warning. Of 20 installed packages with the mark, none grades critical.
 - **Limits:** npm lockfiles version 2 and 3 only. `yarn.lock`, `pnpm-lock.yaml` and version 1 lockfiles do not record the mark. A project whose first install is the poisoned one has no baseline and is not reported. Only the lockfile in the session's working directory is read. The finding appears on the collector's next inventory pass, up to 5 minutes after the install, which is after the script ran. ClawMetry reads the script's command line, not the file it runs.
-
 ### Added: `CLAWMETRY_PROJECT` on the collector names the project of new sessions
 
 - **Why:** a session's project came from its repository or working directory, or from an assignment made by hand through `/api/projects/assignments`. A machine that works for one client, a CI runner or a container had no way to say so once, in its configuration (#5941).
