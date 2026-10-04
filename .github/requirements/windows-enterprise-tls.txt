@@ -62,11 +62,64 @@
 #     msgpack<=1.1.2,>=1.0.0         -> 1.1.2    (exact ceiling)
 #     tornado<=6.5.5,>=6.5.0         -> 6.5.5    (exact ceiling)
 #
-# Each of those four is already the NEWEST release the cap admits, so there is
-# no security headroom being given up by holding them here -- they are at the
-# ceiling, not behind it. They move when mitmproxy's own cap moves, which means
-# the way to advance them is to bump mitmproxy and re-resolve, never to bump
-# them directly.
+# Each of those four is already the NEWEST release the cap admits, so no
+# bump is available from inside this file -- they are at the ceiling, not
+# behind it. They move when mitmproxy's own cap moves, which means the way to
+# advance them is to bump mitmproxy and re-resolve, never to bump them
+# directly. mitmproxy 12.2.3 is itself the newest release (checked
+# 2026-10-03), so there is no re-resolve waiting to be done either.
+#
+# WHAT STAYING AT THESE CAPS ACCEPTS. "At the ceiling" is not the same as
+# "nothing is accepted", and this block exists because the earlier wording
+# here said no security headroom was being given up, which reads as the
+# latter. All four caps now sit BELOW a published fix, so holding them
+# accepts 15 distinct advisories. Measured 2026-10-03 against OSV and PyPI:
+#
+#   cryptography==48.0.1  cap <=48.1. No release exists in (48.0.1, 48.1],
+#                         so this is the ceiling. 3 advisories, fixes above:
+#                         GHSA-jwv3-5hgf-82ww (HIGH, 49.0.0),
+#                         GHSA-m2h6-j472-rp4c (MODERATE, 49.0.0),
+#                         GHSA-g6cj-pr64-35w5 (HIGH, 50.0.0)
+#   h2==4.3.0             cap is exact. 1 advisory:
+#                         GHSA-6hr6-w5qg-qmwg (MODERATE, 4.4.1)
+#   msgpack==1.1.2        cap is exact. 1 advisory:
+#                         GHSA-6v7p-g79w-8964 (HIGH, 1.2.1)
+#   tornado==6.5.5        cap is exact, and this is the big one: 10
+#                         advisories, every fix in 6.5.6-6.5.9 (latest
+#                         6.5.10). HIGH: GHSA-3x9g-8vmp-wqvf (6.5.6),
+#                         GHSA-mgf9-4vpg-hj56 (6.5.6), GHSA-mpf4-983q-p7j4
+#                         (6.5.8), GHSA-c2m8-h5v5-343r (6.5.9),
+#                         GHSA-chx6-46f5-w4vp (6.5.9). MODERATE:
+#                         GHSA-pw6j-qg29-8w7f (6.5.7), GHSA-8423-8fgw-73vq
+#                         (6.5.8), GHSA-3hv7-mjh2-fv65 (6.5.9). LOW:
+#                         GHSA-cx3h-4qpv-8hc9 (6.5.6), GHSA-wwv5-g3v4-889x
+#                         (6.5.8)
+#
+# Eight of the 15 are HIGH, so this is a real acceptance rather than a
+# formality. What makes it tolerable is the boundary, not the severities:
+# this file is installed by exactly one job (windows-enterprise-tls.yml) on
+# one ephemeral Windows runner, and mitmproxy is the TEST HARNESS there -- it
+# plays the corporate interception proxy in front of `clawmetry doctor`. It
+# runs as `mitmdump --listen-port 8080` bound to loopback, and its only
+# client is that same job's `clawmetry doctor` (HTTPS_PROXY=
+# http://127.0.0.1:8080). Nothing here ships in a released wheel or reaches a
+# user machine, the listener is not reachable off the runner, and the job
+# takes `contents: read` with `persist-credentials: false`.
+#
+# The tornado ten are the clearest case: tornado is mitmproxy's dependency
+# for mitmweb, its web UI, and this job starts mitmdump -- the headless tool
+# -- so no tornado server is ever listening. The rest describe a server
+# handling untrusted clients or a verifier fed untrusted chains, neither of
+# which is this job's shape. Treat the list as accepted-and-unreachable
+# HERE, not as generally harmless: any new call site for this file has to
+# re-argue the boundary, because the pins cannot move while the cap holds.
+#
+# This acceptance ends when mitmproxy raises a cap. Re-run
+# `python3 scripts/resolve_windows_pins.py --write` after any mitmproxy
+# bump; that is the one action that clears any of these 15, and the only
+# correct one. Do NOT hand-edit a version above its cap to clear an audit
+# finding: `pip --require-hashes` fails the whole step, which is how the
+# 2026-09-26 group bump broke this job for six days.
 #   * cryptography's cap is also why the job tolerates a downgrade mid-install:
 #     the job installs clawmetry first, which floors cryptography higher, so
 #     pip steps it back down during this install. That is pre-existing
