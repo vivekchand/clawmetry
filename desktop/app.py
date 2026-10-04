@@ -1261,7 +1261,15 @@ class RuntimeSupervisor:
         """Map pip's error text to something the splash can show that a
         user can act on. 'PyPI install failed. See bootstrap.log.' told
         the affected machines nothing (and not where the log was)."""
-        return _PIP_FAILURE_HINTS[RuntimeSupervisor._classify_pip_failure(output)]
+        cls = RuntimeSupervisor._classify_pip_failure(output)
+        hint = _PIP_FAILURE_HINTS[cls]
+        # Dual-stack Windows machines with broken IPv6 hit this path most
+        # often — pip tries IPv6 first and times out per AAAA address.
+        if cls == "network" and platform.system() == "Windows":
+            hint += (" On Windows, broken IPv6 is the most common cause —"
+                     " try disabling IPv6 on the active network adapter"
+                     " and relaunching.")
+        return hint
 
     @staticmethod
     def _classify_pip_failure(output: str) -> str:
@@ -1273,7 +1281,10 @@ class RuntimeSupervisor:
         tls = "certificate" in low or "sslerror" in low or "ssl:" in low
         network = ("timed out" in low or "connection" in low
                    or "temporary failure" in low or "getaddrinfo" in low
-                   or "name or service not known" in low)
+                   or "name or service not known" in low
+                   or "no route to host" in low          # WinError 10065 / EHOSTUNREACH
+                   or "unreachable network" in low       # WinError 10051 (Windows)
+                   or "network is unreachable" in low)   # ENETUNREACH (Linux)
         if "no python at" in low or "did not find executable" in low:
             return "broken_runtime"
         if "microsoft visual c++" in low or "build wheel did not run successfully" in low:

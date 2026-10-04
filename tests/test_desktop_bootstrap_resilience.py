@@ -362,6 +362,10 @@ FAILURE_PAYLOAD_KEYS = {
         ("ERROR: No matching distribution found for clawmetry", "no_distribution"),
         ("SSLError(SSLCertVerificationError)", "tls_intercepted"),
         ("Connection to pypi.org timed out.", "network"),
+        # Windows-specific socket errors that surface without urllib3 wrapping
+        ("[WinError 10065] No route to host", "network"),
+        ("[WinError 10051] A socket operation was attempted to an "
+         "unreachable network", "network"),
         ("PermissionError: [WinError 5] Access is denied", "permissions"),
         ("something novel exploded", "pip_unknown"),
     ],
@@ -370,6 +374,17 @@ def test_pip_failures_classify_to_closed_codes(snippet, code):
     assert dapp.RuntimeSupervisor._classify_pip_failure(snippet) == code
     # every code renders a hint — the enum and the hint table move together
     assert dapp._PIP_FAILURE_HINTS[code]
+
+
+def test_network_hint_on_windows_mentions_ipv6(monkeypatch):
+    """Windows users benefit from knowing broken IPv6 is the common cause
+    on dual-stack machines (field failure #6308)."""
+    import platform as _plat
+    monkeypatch.setattr(_plat, "system", lambda: "Windows")
+    hint = dapp.RuntimeSupervisor._explain_pip_failure(
+        "Connection to pypi.org timed out."
+    ).lower()
+    assert "ipv6" in hint, "Windows network hint must mention IPv6 as a likely cause"
 
 
 def test_tls_intercepted_hint_is_actionable():

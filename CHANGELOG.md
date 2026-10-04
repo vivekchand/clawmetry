@@ -7,6 +7,11 @@
 - **Verified:** 5 new tests cover sessions before and after the collector start, a second tick that writes nothing, an assignment made by hand that is kept, a later correction that supersedes the collector's row, a changed value and a name that is too long.
 - **Limits:** the variable is read from the collector's environment. It is not read from the environment of each agent, so one collector gives one name. Sessions that started before the collector did keep their derived project. A session with no recorded start time is not assigned. Changing the value applies to sessions that start later.
 
+### Fixed
+
+- Keep the Assistant in the dashboard's native theme, with the question box as the main focus. Answers stream as they arrive, and Stop cancels the active response.
+- Make hosted Setup show synced rules, skills, commands, and agent files with runtime filters and file previews. Explain unavailable files and unlock states directly in the page.
+- Make hosted Improve use encrypted, runtime-scoped guidance snapshots from DuckDB. Show evidence coverage and freshness, and exclude delegated agent messages from human guidance candidates.
 
 ### Added: a workflow replay is drawn as a graph
 
@@ -21,6 +26,7 @@
 - The reader opens at the latest recorded message, shows the recorded model and token count, and restarts from the beginning when Play is pressed. Missing measurements are labelled as not recorded.
 - Switching sessions discards late transcript, history-page and side-panel responses. Narrow screens put session titles above the action buttons.
 - Verified with the reported Claude Code session, a fresh real Claude exchange, a long Codex conversation with older history, and regression tests that fail when the old renderer takeover or position reset is restored.
+
 
 ### Fixed: the runtime hook registry replaced hooks it did not own
 

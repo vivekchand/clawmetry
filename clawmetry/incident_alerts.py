@@ -42,6 +42,8 @@ import time
 import urllib.request
 from typing import Any, Optional
 
+from clawmetry import url_guard as _url_guard
+
 log = logging.getLogger("clawmetry.incident_alerts")
 
 #: The built-in monitor id these incidents fire under (routes/alerts.py
@@ -323,6 +325,12 @@ def resolve_delivery() -> dict:
 # ── Senders ─────────────────────────────────────────────────────────────────
 
 def _post_json(url: str, payload: dict) -> bool:
+    # urlopen also speaks file:// and ftp://, and serves a file:// URL even
+    # with a data= body, so the configured scheme is checked before the
+    # request is built. See clawmetry/url_guard.py.
+    if not _url_guard.is_http_url(url):
+        log.warning("incident alert POST rejected: scheme must be http/https")
+        return False
     try:
         req = urllib.request.Request(
             url, data=json.dumps(payload).encode("utf-8"),
