@@ -40,6 +40,8 @@ Acceptance criteria proven here (docs/acceptance_criteria.json):
   ``test_usage_buckets_are_reused_between_ticks``
 * AC-OBS-PRJ-001.9 -- daily burn next to the budget:
   ``test_status_reports_daily_burn``
+  The Usage tab draws the same payload:
+  ``test_a_budget_row_shows_spend_against_the_amount_and_never_overflows``
 * AC-OBS-PRJ-001.10 -- export carries assigned / unassigned / unpriced and
   completeness; tokens without a price are unpriced, not $0:
   ``test_csv_export_by_project_reports_completeness``
@@ -669,3 +671,148 @@ def test_without_a_local_store_routes_answer_an_honest_empty_state(monkeypatch):
         r = c.get(path)
         assert r.status_code == 200, path
         assert r.get_json()["available"] is False, path
+
+
+# ── The Usage tab panel (the shipped renderers, run in node) ────────────────
+
+_PANEL_FNS = ("costCardText", "projectSourceText", "renderProjectUsage",
+              "projectBudgetPeriodText", "renderProjectBudgets", "projectBudgetTimezone",
+              "renderProjectBudgetForm", "loadUsageByProject")
+_REPO_ID = "prj_" + "a" * 16
+_NAMED_ID = "prjn_" + "b" * 16
+
+
+def _panel_usage():
+    import routes.projects as rp
+    return rp._stamp_project_usage({
+        "available": True, "basis": "estimated_spend", "currency": "USD",
+        "window": {"days": 30, "since": "2026-09-04T00:00:00Z", "until": "2026-10-04T00:00:00Z"},
+        "projects": [
+            {"project_id": _REPO_ID, "label": "<img src=x onerror=alert(1)>",
+             "source": "repository", "confidence": "high", "cost_usd": 6.0,
+             "sessions": 3, "runtimes": ["claude_code", "codex"]},
+            {"project_id": _NAMED_ID, "label": "Billing", "source": "assigned",
+             "confidence": "high", "cost_usd": 3.0, "sessions": 1, "runtimes": ["codex"]},
+            {"project_id": "unassigned", "label": "Unassigned", "source": "none",
+             "confidence": "none", "cost_usd": 1.0, "sessions": 2, "runtimes": []}],
+        "totals": {"cost_usd": 10.0, "unassigned_cost_usd": 1.0, "unpriced_tokens": 1234,
+                   "completeness": {"attributed_cost_share": 0.9}}})
+
+
+def _panel_budgets():
+    import routes.projects as rp
+    base = {"currency": "USD", "period": "month", "timezone": "Europe/Berlin",
+            "available": True, "reported_under": []}
+    return rp._stamp_budget_payload({"available": True, "notice": "Alerts do not stop a charge.", "budgets": [
+        dict(base, budget_id="pb_" + "a" * 16, project_id=_REPO_ID, label="api <b>",
+             amount=10.0, spent_usd=12.5, pct_used=125.0, reported_under=["Billing"]),
+        dict(base, budget_id='pb_"x', project_id=_NAMED_ID, label="Billing",
+             amount=20.0, spent_usd=17.0, pct_used=85.0, period="week"),
+        dict(base, budget_id="pb_low", project_id=_NAMED_ID, label="Docs",
+             amount=20.0, spent_usd=2.0, pct_used=10.0, period="day"),
+        dict(base, budget_id="pb_tz", project_id=_NAMED_ID, label="Lost zone",
+             amount=5.0, available=False, reason="timezone_unresolvable")]}, "budgets")
+
+
+def _panel(body, **kw):
+    from tests.test_cost_basis_remaining_surfaces import _run
+    return _run(body, fns=_PANEL_FNS, **kw)
+
+
+def test_the_usage_tab_lists_spend_per_project_with_its_basis():
+    from tests.test_cost_basis_remaining_surfaces import _badges
+    html = _panel("console.log(JSON.stringify({html: renderProjectUsage(%s)}));"
+                  % json.dumps(_panel_usage()))["html"]
+    assert "<img" not in html and "&lt;img src=x onerror=alert(1)&gt;" in html
+    assert _badges(html.split("</thead>")[0]) == ["published rates"]
+    body = html.split("<tbody>")[1].split("</tbody>")[0]
+    rows = body.split("</tr>")[:-1]
+    assert len(rows) == 3
+    assert "$6.00" in rows[0] and ">60%<" in rows[0] and ">repository<" in rows[0]
+    assert "claude_code, codex" in rows[0]
+    assert "$3.00" in rows[1] and ">30%<" in rows[1] and ">assigned<" in rows[1]
+    assert "Unassigned" in rows[2] and ">10%<" in rows[2] and ">no project<" in rows[2]
+    assert "90% of this spend belongs to a project" in html
+    assert "1,234 tokens have no price" in html
+
+
+def test_the_project_table_says_nothing_extra_when_all_spend_is_attributed_and_priced():
+    data = _panel_usage()
+    data["totals"].update(unpriced_tokens=0, completeness={"attributed_cost_share": 1.0})
+    html = _panel("console.log(JSON.stringify({html: renderProjectUsage(%s)}));"
+                  % json.dumps(data))["html"]
+    assert "belongs to a project" not in html and "no price" not in html
+    assert html.rstrip().endswith("</table>")
+
+
+def test_a_budget_row_shows_spend_against_the_amount_and_never_overflows():
+    html = _panel("console.log(JSON.stringify({html: renderProjectBudgets(%s)}));"
+                  % json.dumps(_panel_budgets()))["html"]
+    from tests.test_cost_basis_remaining_surfaces import _badges
+    rows = html.split('<div style="margin-top:8px;font-size:12px;">')[1:]
+    assert len(rows) == 4
+    assert _badges(html) == ["published rates"], "one basis badge, on the heading"
+    over, near, low, lost = rows
+    assert "api &lt;b&gt;" in over and "<b>" not in over
+    assert "width:100%;background:#ef4444" in over, "125% must fill the bar, not overflow it"
+    assert "$12.50" in over and "of $10.00" in over and "125% used" in over
+    assert "per month" in over and "Europe/Berlin" in over
+    assert "This spend is listed above under: Billing" in over
+    assert "width:85%;background:#f59e0b" in near and "per week" in near
+    assert "width:10%;background:var(--accent" in low and "per day" in low
+    assert "listed above under" not in low
+    # A budget id is data: it sits in an attribute, escaped, never in the handler.
+    assert 'data-budget-id="pb_&quot;x"' in near
+    assert html.count("removeProjectBudget(this.getAttribute('data-budget-id'))") == 4
+    assert "timezone of this budget is not known" in lost and "width:" not in lost
+    assert "Alerts do not stop a charge." in html
+
+
+def test_no_budget_yet_is_said_in_words_and_the_form_offers_real_projects_only():
+    got = _panel("console.log(JSON.stringify({"
+                 " none: renderProjectBudgets({available: true, budgets: [], notice: 'N.'}),"
+                 " form: renderProjectBudgetForm(%s.projects),"
+                 " empty: renderProjectBudgetForm([{project_id: 'unassigned', label: 'Unassigned'}])}));"
+                 % json.dumps(_panel_usage()))
+    assert "No project has a budget yet." in got["none"] and "N." in got["none"]
+    options = got["form"].split('id="project-budget-project"')[1].split("</select>")[0]
+    assert options.count("<option") == 2
+    assert 'value="%s"' % _REPO_ID in options and 'value="%s"' % _NAMED_ID in options
+    assert "unassigned" not in options and "<img" not in options
+    assert 'id="project-budget-amount"' in got["form"] and "saveProjectBudget()" in got["form"]
+    assert got["empty"] == ""
+
+
+def test_the_project_card_stays_hidden_until_a_session_has_a_project():
+    from tests.test_cost_basis_remaining_surfaces import _run_async
+    els = {"usage-by-project-title": {}, "usage-by-project-card": {},
+           "usage-by-project-content": {"innerHTML": ""}}
+    only_unassigned = _panel_usage()
+    only_unassigned["projects"] = only_unassigned["projects"][2:]
+    got = _run_async("loadUsageByProject()", _PANEL_FNS, els, only_unassigned)
+    assert got["usage-by-project-content"] == ""
+    got = _run_async("loadUsageByProject()", _PANEL_FNS, els,
+                     {"available": False, "reason": "local_store_disabled", "projects": []})
+    assert got["usage-by-project-content"] == ""
+    # The harness answers every request with the same body, so the budget
+    # request sees a payload with no budgets: the table, then the empty state.
+    html = _run_async("loadUsageByProject()", _PANEL_FNS, els,
+                      _panel_usage())["usage-by-project-content"]
+    assert "Billing" in html and "No project has a budget yet." in html
+    assert 'id="project-budget-project"' in html
+
+
+def test_the_project_panel_is_wired_into_the_usage_tab_and_the_english_catalog():
+    import re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app = open(os.path.join(root, "clawmetry", "static", "js", "app.js"), encoding="utf-8").read()
+    page = open(os.path.join(root, "clawmetry", "templates", "tabs", "usage.html"),
+                encoding="utf-8").read()
+    catalog = json.load(open(os.path.join(root, "clawmetry", "static", "locales", "en.json"),
+                             encoding="utf-8"))
+    for el in ("usage-by-project-title", "usage-by-project-card", "usage-by-project-content"):
+        assert 'id="%s"' % el in page, el
+    assert re.search(r"loadUsageByTeam\(\);\s*(//[^\n]*\n\s*)?loadUsageByProject\(\);", app)
+    used = set(re.findall(r"usage\.project_[a-z_]+", app + page))
+    assert len(used) > 20
+    assert not sorted(k for k in used if k not in catalog)
