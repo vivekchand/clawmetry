@@ -250,6 +250,58 @@ def test_assistant_query_allows_grouped_cost_arithmetic_regression(fresh_store):
     assert isinstance(result["rows"], list)
 
 
+@pytest.mark.parametrize('expression, expected', [
+    ("trim('  model  ')", 'model'),
+    ("TrIm /* 🦞 /* nested */ comment */ ('  model  ')", 'model'),
+    ("trim -- comment\n ('  model  ')", 'model'),
+    ("trim(BOTH 'x' FROM 'xxmodelxx')", 'model'),
+    ("trim(LEADING 'x' FROM 'xxmodelxx')", 'modelxx'),
+    ("trim(TRAILING 'x' FROM 'xxmodelxx')", 'xxmodel'),
+    ("coalesce(nullif(trim('   '), ''), 'unknown model')", 'unknown model'),
+])
+def test_assistant_native_trim_handles_implicit_schema_and_utf8_offsets(fresh_store, expression, expected):
+    """Native TRIM grammar adds main in DuckDB's AST without user qualification."""
+    _local_store, store = fresh_store
+    assert store.query_assistant_sql(sql=f"SELECT '🦞' AS label, {expression} AS model") == {
+        'rows': [{'label': '🦞', 'model': expected}],
+    }
+
+
+@pytest.mark.parametrize('expression', [
+    "main.trim('x')", '"main"."trim"(\'x\')', "system.main.trim('x')",
+    "main /* trim('decoy') */ . trim('x')", "trim.trim('x')",
+    "main.lower('x')", "main.ltrim('x')", "main.rtrim('x')",
+    "read_text('/tmp/secret')",
+])
+def test_native_trim_exception_still_rejects_qualified_and_unsafe_functions(fresh_store, expression):
+    _local_store, store = fresh_store
+    result = store.query_assistant_sql(sql=f"SELECT trim('allowed'), '🦞', {expression}")
+    assert result['rows'] == []
+    assert result.get('error', '').startswith('SQL rejected:')
+
+
+def test_recorded_model_chart_accepts_nested_trim_aggregation(fresh_store):
+    _local_store, store = fresh_store
+    store._conn.executemany("""INSERT INTO events
+        (id, session_id, model, token_count, node_id, event_type, ts, created_at)
+        VALUES (?, ?, ?, ?, 'local', 'llm.response', '2026-10-04', 1)""", [
+        ('trim-1', 'claude_code:test', ' model-a ', 20),
+        ('trim-2', 'claude_code:test', 'model-a', 30),
+        ('trim-3', 'codex:test', '', 10),
+    ])
+    result = store.query_assistant_sql(sql="""
+        SELECT concat(runtime, ' / ', coalesce(nullif(trim(model), ''), 'unknown model'))
+            AS runtime_model, sum(token_count) AS recorded_tokens
+        FROM events WHERE runtime IN ('claude_code', 'codex') AND token_count IS NOT NULL
+        GROUP BY runtime, coalesce(nullif(trim(model), ''), 'unknown model')
+        ORDER BY recorded_tokens DESC LIMIT 100
+    """)
+    assert result == {'rows': [
+        {'runtime_model': 'claude_code / model-a', 'recorded_tokens': 50},
+        {'runtime_model': 'codex / unknown model', 'recorded_tokens': 10},
+    ]}
+
+
 def test_assistant_query_allows_memory_metadata_but_rejects_blob(fresh_store):
     _local_store, store = fresh_store
 

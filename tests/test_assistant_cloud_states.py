@@ -285,3 +285,127 @@ await flush();
 assert.ok(!elements.get('cm-assistant-history-list').textContent.includes('Secret old title'));
 context.assistantLeave();
 ''')
+
+
+@pytest.mark.parametrize('ending', ['timeout', 'eof', 'stop'])
+def test_uncertain_first_reply_can_refresh_saved_history_without_resending(ending):
+    """A committed answer survives loss of done, including Stop racing commit."""
+    from tests.test_assistant_frontend import _run_node
+
+    _run_node(_cloud_page_script() + 'const ending = ' + repr(ending) + r'''
+const stream = await startChat('Question committed before the connection broke');
+stream.push(frame('delta', {text:'Visible partial evidence'}));
+await flush();
+const originalFetch = context.fetch;
+context.fetch = async (url, options) => url.endsWith('/conversations')
+  ? jsonResponse({conversations:[{id:'recovered',title:'Answer saved before disconnect'}]})
+  : originalFetch(url, options);
+if (ending === 'timeout') [...timers.values()].find(timer => timer.ms === 180000).fn();
+else if (ending === 'eof') stream.end();
+else submit();
+await flush();
+assertIdle();
+const recovery = elements.get('cm-assistant-recovery');
+assert.equal(recovery.hidden, false);
+const refresh = byClass(recovery, 'cm-assistant-panel-button').find(n => n.textContent === 'Refresh conversation history');
+assert.ok(refresh, 'an explicit read-only history refresh is available');
+assert.equal(byClass(recovery, 'cm-assistant-panel-button').length, 1, 'no inferred conversation ID');
+refresh.dispatch('click'); await flush();
+assert.match(elements.get('cm-assistant-history-list').textContent, /Answer saved before disconnect/);
+assert.match(thread.textContent, /Visible partial evidence/);
+assert.equal(chatCalls.length, 1, 'recovery never resubmits the question');
+assert.equal(timers.size, 0, 'no recovery poller');
+context.assistantLeave();
+''')
+
+
+def test_uncertain_followup_reopens_only_the_known_saved_conversation():
+    from tests.test_assistant_frontend import _run_node
+
+    _run_node(_cloud_page_script() + r'''
+byClass(elements.get('cm-assistant-history-list'), 'cm-assistant-history-item')[0].dispatch('click');
+await flush();
+const stream = await startChat('Follow up on this conversation');
+stream.push(frame('delta', {text:'Incomplete followup'})); await flush(); stream.end(); await flush();
+const recovery = elements.get('cm-assistant-recovery');
+const reopen = byClass(recovery, 'cm-assistant-panel-button').find(n => n.textContent === 'Open saved conversation');
+assert.ok(reopen);
+reopen.dispatch('click'); await flush();
+assert.match(thread.textContent, /Saved conversation B/);
+assert.doesNotMatch(thread.textContent, /Incomplete followup/);
+assert.equal(recovery.hidden, true);
+assert.equal(chatCalls.length, 1);
+context.assistantLeave();
+''')
+
+
+@pytest.mark.parametrize('change', ['new-chat', 'new-request', 'scope', 'leave'])
+def test_detached_chat_recovery_cannot_read_after_navigation(change):
+    from tests.test_assistant_frontend import _run_node
+
+    _run_node(_cloud_page_script() + 'const change = ' + repr(change) + r'''
+const stream = await startChat(); stream.end(); await flush();
+const refresh = byClass(elements.get('cm-assistant-recovery'), 'cm-assistant-panel-button')[0];
+if (change === 'new-chat') elements.get('cm-assistant-new-chat').dispatch('click');
+else if (change === 'new-request') await startChat('A different question');
+else if (change === 'scope') { changeScope('account-node-key-B'); await flush(); }
+else context.assistantLeave();
+const before = historyLoads;
+refresh.dispatch('click'); await flush();
+assert.equal(historyLoads, before, 'detached action cannot cross navigation or key scope');
+context.assistantLeave();
+''')
+
+
+@pytest.mark.parametrize('reason', ['missing_key', 'decrypt_failed'])
+def test_key_failure_during_chat_offers_unlock_without_resending(reason):
+    from tests.test_assistant_frontend import _run_node
+
+    _run_node(_cloud_page_script() + 'const reason = ' + repr(reason) + r'''
+let unlockCallback, failedChatCalls = 0;
+const originalFetch = context.fetch;
+context._cmRenderKeyPrompt = (host, options) => {
+  host.textContent = 'Unlock your node'; unlockCallback = options.onUnlock;
+};
+context.fetch = async (url, options) => {
+  if (url.endsWith('/chat')) {
+    failedChatCalls++;
+    return {...jsonResponse({reason,error:'Unlock your node to use Assistant.'}),ok:false,status:422};
+  }
+  return originalFetch(url, options);
+};
+input.value = 'Keep this question visible'; submit(); await flush();
+assert.match(thread.textContent, /Keep this question visible/);
+assert.match(elements.get('cm-assistant-recovery').textContent, /Unlock your node/);
+assert.equal(send.disabled, true);
+unlockCallback(); await flush();
+assert.equal(send.disabled, false);
+assert.equal(failedChatCalls, 1, 'unlock refreshes readiness and history, never inference');
+assert.equal(elements.get('cm-assistant-recovery').hidden, true);
+context.assistantLeave();
+''')
+
+
+@pytest.mark.parametrize('transport', ['reader', 'sse-error'])
+def test_key_failure_after_stream_headers_retains_unlock_reason(transport):
+    from tests.test_assistant_frontend import _run_node
+
+    _run_node(_cloud_page_script() + 'const failureTransport = ' + repr(transport) + r'''
+let unlockCallback;
+context._cmRenderKeyPrompt = (host, options) => {
+  host.textContent = 'Unlock your node'; unlockCallback = options.onUnlock;
+};
+const stream = await startChat('Keep the question visible after key failure');
+if (failureTransport === 'reader') stream.fail(Object.assign(new Error('This key could not unlock Assistant.'), {
+  reason:'decrypt_failed',status:422,
+}));
+else stream.push(frame('error', {reason:'decrypt_failed',error:'This key could not unlock Assistant.'}));
+await flush();
+assert.match(thread.textContent, /Keep the question visible after key failure/);
+assert.match(elements.get('cm-assistant-recovery').textContent, /Unlock your node/);
+assert.equal(send.disabled, true);
+unlockCallback(); await flush();
+assert.equal(send.disabled, false);
+assert.equal(chatCalls.length, 1, 'unlock never resubmits');
+context.assistantLeave();
+''')

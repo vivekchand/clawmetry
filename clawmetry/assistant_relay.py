@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -24,6 +25,10 @@ _active = set()
 _slots = threading.BoundedSemaphore(8)
 _identity = None
 _config_reader = None
+_delivery_lock = threading.Lock()
+_delivery_worker = None
+_wake_hint = threading.Event()
+_WAKE_SECONDS = 25.0
 
 
 def _identity_of(config):
@@ -49,12 +54,148 @@ def capability(config):
         return {'v': 1, 'epoch': '', 'enabled': False, 'paused': False}
     identity = _identity_of(config)
     with _lock:
+        # A heartbeat may have captured configuration before a key/account
+        # change. It must not rotate the executor back to that old identity.
+        if _config_reader and identity != _identity_of(_config_reader()):
+            return {'v': 1, 'epoch': executor.epoch, 'enabled': False, 'paused': True}
         if _identity is not None and identity != _identity:
             executor.epoch = uuid.uuid4().hex
             executor.node_id = config.get('node_id') or 'local'
         _identity = identity
     enabled = bool(config.get('node_id') and config.get('api_key') and config.get('encryption_key'))
     return {'v': 1, 'epoch': executor.epoch, 'enabled': enabled, 'paused': not _allowed()}
+
+
+class _DeliveryWorker:
+    """One wake owner; collection and generic queries stay on the main loop."""
+
+    def __init__(self):
+        self.stop = threading.Event()
+        self.transport_lock = threading.Lock()
+        self.transport = None
+        self.thread = threading.Thread(target=self.run, name='assistant-delivery', daemon=True)
+
+    def close(self):
+        self.stop.set()
+        with self.transport_lock:
+            if self.transport:
+                self.transport.abort()
+
+    def poll(self, config, epoch):
+        from clawmetry.assistant_stream import StreamJob
+        from clawmetry.sync import _wake_wait
+        # Reuse the provider transport's retained-socket cancellation. A
+        # socket inactivity timeout alone cannot bound slow headers/body.
+        control = StreamJob(lambda: None)
+        control.deadline = time.monotonic() + _WAKE_SECONDS
+        timer = threading.Timer(_WAKE_SECONDS, lambda: control.abort(timeout=True))
+        timer.daemon = True
+        with self.transport_lock:
+            if self.stop.is_set():
+                return None
+            self.transport = control
+        try:
+            timer.start()
+            return _wake_wait(config, 20, assistant_epoch=epoch, control=control)
+        finally:
+            control.close()
+            timer.cancel()
+            if timer.ident is not None:
+                timer.join()
+            with self.transport_lock:
+                self.transport = None
+
+    def snapshot(self):
+        if self.stop.is_set() or not _config_reader or not _allowed():
+            return None
+        if os.environ.get('CLAWMETRY_WAKE_POLL', '1') == '0':
+            return None
+        config = dict(_config_reader())
+        if not config.get('node_id') or not config.get('api_key'):
+            return None
+        executor = execution.current()
+        cap = capability(config)
+        if cap['paused']:
+            return None
+        return config, executor, cap['epoch'], cap['enabled']
+
+    def unchanged(self, snapshot):
+        current = self.snapshot()
+        return bool(current and current[1:] == snapshot[1:] and
+                    _identity_of(current[0]) == _identity_of(snapshot[0]))
+
+    def run(self):
+        from clawmetry.sync import _wake_says_heartbeat
+        backoff = 1.0
+        while not self.stop.is_set():
+            started = time.monotonic()
+            delay = 5.0
+            try:
+                snapshot = self.snapshot()
+                if snapshot:
+                    config, executor, epoch, enabled = snapshot
+                    response = self.poll(config, epoch if enabled else None)
+                    if not self.unchanged(snapshot):
+                        _wake_hint.clear()
+                        delay = 1.0
+                    elif isinstance(response, dict):
+                        # Hints are coalesced, never executed on this thread.
+                        if _wake_says_heartbeat(response):
+                            _wake_hint.set()
+                        actions = response.get('assistant_actions')
+                        if enabled and isinstance(actions, list) and len(actions) <= 8:
+                            for action in actions:
+                                if not self.unchanged(snapshot):
+                                    break
+                                if isinstance(action, dict) and action.get('type') == 'assistant_request':
+                                    # Original action epochs belong to receipts,
+                                    # not to the currently advertised poller.
+                                    dispatch(config, action)
+                            # An immediate empty response must not spin even
+                            # on a viewed node or a misbehaving older server.
+                            delay = 1.0 if actions else min(15.0, backoff * 2)
+                            backoff = 1.0 if actions or time.monotonic()-started >= 1 else delay
+                        else:
+                            # Absent field means a legacy server. Its hints
+                            # still wake the main loop's normal heartbeat.
+                            delay = backoff = min(15.0, max(5.0, backoff * 2))
+                    else:
+                        delay = backoff = min(15.0, max(5.0, backoff * 2))
+            except Exception:
+                # No raw response/configuration in logs (including errors).
+                _log.debug('Assistant wake delivery unavailable; backing off')
+                delay = backoff = min(15.0, max(5.0, backoff * 2))
+            # All starts are >=1s apart; shutdown interrupts backoff promptly.
+            self.stop.wait(max(0.0, delay-(time.monotonic()-started)))
+
+
+def start_delivery():
+    """Start once after executor initialization; never overlap a stopping poll."""
+    global _delivery_worker
+    execution.current()
+    with _delivery_lock:
+        if _delivery_worker and _delivery_worker.thread.is_alive():
+            return not _delivery_worker.stop.is_set()
+        _wake_hint.clear()
+        _delivery_worker = _DeliveryWorker()
+        _delivery_worker.thread.start()
+        return True
+
+
+def stop_delivery():
+    """Revoke dispatch before store teardown; a held network call cannot restart."""
+    with _delivery_lock:
+        if _delivery_worker:
+            _delivery_worker.close()
+        _wake_hint.clear()
+
+
+def wait_for_wake(timeout):
+    """Consume a coalesced generic-work/viewer hint without another HTTP poll."""
+    if _wake_hint.wait(timeout):
+        _wake_hint.clear()
+        return True
+    return False
 
 
 def _open(sealed, key, limit):
@@ -92,13 +233,24 @@ def _validate_binding(body, node_id, epoch, request_id):
         raise ValueError('wrong request binding')
 
 
+def _headers(config):
+    headers = {'X-Api-Key': config['api_key']}
+    node_id = config.get('node_id', '')
+    # Exact node identity is in the URL/body, which supports Unicode. This
+    # redundant legacy header must not make urllib reject an otherwise valid
+    # node name (HTTP/1 headers cannot encode arbitrary Unicode/control chars).
+    if isinstance(node_id, str) and all(32 <= ord(c) <= 255 and ord(c) != 127 for c in node_id):
+        headers['X-Node-Id'] = node_id
+    return headers
+
+
 def _post(config, payload):
     # One bounded exchange, no generic ingest retry loop: the next active tick
     # retries identical ciphertext/acks. Provider watchdog runs independently.
     from clawmetry.sync import INGEST_URL
     req = urllib.request.Request(INGEST_URL.rstrip('/')+'/ingest/assistant/exchange',
         data=execution.encode(payload), method='POST', headers={
-            'Content-Type': 'application/json', 'X-Api-Key': config['api_key'], 'X-Node-Id': config['node_id']})
+            'Content-Type': 'application/json', **_headers(config)})
     with urllib.request.urlopen(req, timeout=3) as response:
         raw = response.read(256*1024+1)
     if len(raw) > 256*1024:

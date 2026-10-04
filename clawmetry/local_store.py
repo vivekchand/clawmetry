@@ -2555,6 +2555,31 @@ def _assistant_validate_sql_ast(
     if cte_names.intersection(_ASSISTANT_ALLOWED_TABLES):
         return None, "SQL rejected: analytics table names are reserved"
 
+    native_trim_locations: set[int] | None = None
+
+    def is_native_trim(value: dict[str, Any]) -> bool:
+        nonlocal native_trim_locations
+        if (value.get("schema") != "main" or value.get("catalog")
+                or value.get("function_name") not in {"trim", "ltrim", "rtrim"}):
+            return False
+        # DuckDB adds schema=main to native TRIM grammar, including its
+        # LEADING/TRAILING forms. Prove it was an unqualified TRIM keyword
+        # in the original SQL; explicit main.trim must still be rejected.
+        # Both parser locations and lexer offsets count UTF-8 bytes.
+        if native_trim_locations is None:
+            native_trim_locations = set()
+            try:
+                encoded = sql.encode("utf-8")
+                tokens = duckdb.tokenize(sql)
+                for (offset, kind), (following, _) in zip(tokens, tokens[1:]):
+                    if (kind == duckdb.token_type.keyword
+                            and encoded[offset:offset + 4].lower() == b"trim"
+                            and encoded[following:following + 1] == b"("):
+                        native_trim_locations.add(offset)
+            except Exception:
+                return False
+        return value.get("query_location") in native_trim_locations
+
     def walk(value: Any) -> str | None:
         if isinstance(value, dict):
             node_type = str(value.get("type") or "").upper()
@@ -2615,7 +2640,7 @@ def _assistant_validate_sql_ast(
                 name = str(value.get("function_name") or "").lower()
                 if name == "count_star":
                     name = "count"
-                if value.get("schema") or value.get("catalog"):
+                if (value.get("schema") or value.get("catalog")) and not is_native_trim(value):
                     return "SQL rejected: qualified functions are not allowed"
                 if (
                     name not in _ASSISTANT_ALLOWED_FUNCTIONS
