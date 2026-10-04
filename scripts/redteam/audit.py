@@ -67,6 +67,8 @@ ISSUE_REPO = os.environ.get("REDTEAM_ISSUE_REPO", "vivekchand/clawmetry-pro")
 _ISSUE_LABELS = ["security-gap", "automated", "detection"]
 _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 _MARKER_NAME = "redteam-payload-fired"
+# A fixed clock for the before/after inventory pass, so a case is reproducible.
+_INVENTORY_T0_MS = 1_790_000_000_000
 
 
 def _load_corpus(only: str | None = None) -> list:
@@ -116,8 +118,11 @@ def _apply_known_gap(case: dict, result: dict) -> dict:
     return result
 
 
-def _materialise(case: dict, root: str) -> str:
+def _materialise(case: dict, root: str, key: str = "files") -> str:
     """Write the case's workspace into ``root``. Returns the workspace path.
+
+    ``key`` picks which file set to write: ``files`` (the state the scanners
+    read) or ``before`` (the earlier state a change is measured against).
 
     The marker command writes into ``root`` and does nothing else — the corpus
     describes attacks, it does not carry working ones.
@@ -125,7 +130,7 @@ def _materialise(case: dict, root: str) -> str:
     ws = os.path.join(root, "workspace")
     marker = os.path.join(root, _MARKER_NAME)
     marker_cmd = f"/bin/sh -c 'echo fired > {marker}'"
-    files = ((case.get("workspace") or {}).get("files") or {})
+    files = ((case.get("workspace") or {}).get(key) or {})
     for rel, content in files.items():
         dest = os.path.join(ws, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -192,6 +197,59 @@ def _run_workspace(case: dict, ws: str) -> list:
         return []
 
 
+def _inventory_rows(root: str, ws: str, previous, now_ms: int):
+    """One inventory pass over the workspace, as the daemon runs it.
+
+    The home directory is an empty one under ``root``: the collector also reads
+    ``~/.claude.json`` for the project's MCP servers, and an audit must not
+    depend on the files of whoever runs it.
+    """
+    from clawmetry import agent_inventory
+    home = os.path.join(root, "home")
+    os.makedirs(home, exist_ok=True)
+    current = agent_inventory.collect_workspace(ws, home=home)
+    rows, _changes = agent_inventory.diff_inventory(
+        previous or [], current, baseline=previous is None, now_ms=now_ms)
+    return rows
+
+
+def _inventory_baseline(case: dict, root: str):
+    """Record the case's ``workspace.before`` state, or None when it has none.
+
+    Some attacks are a CHANGE to the workspace rather than a state of it: a
+    dependency with an install script that was not in the lockfile an hour
+    ago. Such a case lists the earlier files under ``before``; ``files`` is
+    then written over them and the inventory is diffed, which is the daemon's
+    own first-sight-then-change path (``clawmetry/agent_inventory.py``).
+    """
+    if "before" not in (case.get("workspace") or {}):
+        return None
+    try:
+        ws = _materialise(case, root, "before")
+        return _inventory_rows(root, ws, None, _INVENTORY_T0_MS)
+    except Exception as e:
+        print(f"  [error] inventory baseline raised: {e}")
+        return None
+
+
+def _run_inventory(case: dict, root: str, ws: str, baseline) -> list:
+    """Findings for what changed in the workspace since ``before``."""
+    if baseline is None:
+        return []
+    try:
+        from clawmetry import agent_inventory
+        later = _INVENTORY_T0_MS + 600_000
+        rows = _inventory_rows(root, ws, baseline, later)
+        runtimes = [r for r in (case.get("affects_runtimes") or []) if r != "*"]
+        runtime = runtimes[0] if runtimes else "claude_code"
+        return agent_inventory.incidents_for_session(
+            rows, f"{runtime}:redteam-{case.get('id', 'case')}", runtime, ws,
+            now_ms=later) or []
+    except Exception as e:
+        print(f"  [error] inventory diff raised: {e}")
+        return []
+
+
 def _evaluate(case: dict, incidents: list) -> dict:
     """Compare what fired against what the case says must fire."""
     expect = case.get("expect") or {}
@@ -238,8 +296,10 @@ def _evaluate(case: dict, incidents: list) -> dict:
 def run_case(case: dict) -> dict:
     root = tempfile.mkdtemp(prefix="rt-audit-")
     try:
+        baseline = _inventory_baseline(case, root)
         ws = _materialise(case, root)
-        incidents = _run_tool_stream(case) + _run_workspace(case, ws)
+        incidents = (_run_tool_stream(case) + _run_workspace(case, ws)
+                     + _run_inventory(case, root, ws, baseline))
         result = _evaluate(case, incidents)
         # A corpus payload must never actually execute during an audit.
         if os.path.exists(os.path.join(root, _MARKER_NAME)):

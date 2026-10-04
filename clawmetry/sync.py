@@ -22971,6 +22971,8 @@ def _emit_detector_incidents(store, state: dict) -> int:
         # same rule: a policy acts on it only when it names the kind.
         supply = _agent_inventory_incidents(
             inventory_recent, sid, runtime or "unknown", facts.get("cwd") or "", now)
+        if supply and disabled:
+            supply = [i for i in supply if i.get("kind") not in disabled]
         if supply:
             all_incidents.extend(supply)
         incidents = list(incidents) + workspace + supply

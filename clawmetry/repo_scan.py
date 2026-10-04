@@ -862,10 +862,11 @@ def scan_package_manifest(workspace: str, session_id: str = "",
     Scope, stated because the gap it does NOT close matters: this reads the
     manifest the checkout ships. It catches "the repo you just cloned runs its
     own code when you install its dependencies". It does NOT catch a poisoned
-    TRANSITIVE dependency, which is where CHAINDROP actually lived; that needs
-    the lockfile, and the measurement says a lockfile signal is not shippable
-    yet (73 lockfiles here carry 2-13 install-script packages each, dominated
-    by fsevents and esbuild, so an incident per lockfile would be noise).
+    TRANSITIVE dependency, which is where CHAINDROP actually lived. A lockfile
+    STATE is not a usable signal for that (73 lockfiles here carry 2-13
+    install-script packages each, dominated by fsevents and esbuild), so the
+    lockfile is read as a CHANGE instead: ``clawmetry/agent_inventory.py``
+    records the flagged packages and raises this same kind when one is new.
     """
     path = os.path.join(workspace, "package.json")
     if not os.path.isfile(path):

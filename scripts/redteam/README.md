@@ -49,14 +49,10 @@ the default `.git/hooks`. The current version reports **0 critical, 3 warning** 
 
 ## What is deliberately NOT here
 
-A case is a signature for something we catch. Three disclosed attacks were measured against the
+A case is a signature for something we catch. Two disclosed attacks were measured against the
 detectors and are recorded as `sec-gap` issues on the private tracker instead, with the audit's own
 verdict pasted in, because a corpus entry that always fails is a red build nobody can act on:
 
-- **npm postinstall credential harvesting.** Measured verdict: `MISS — nothing fired at all`. The
-  agent's tool stream for the attack is byte-identical to the tool stream for an ordinary
-  `npm install`, so no tool-stream detector can separate them, ever. The visible half (the agent
-  itself reading the token file) is covered by `npm-postinstall-visible-harvest`.
 - **Cross-session coordination** (the Hugging Face evaluation swarm using a shared package cache as
   a covert channel). Every detector we ship is per-session, and so is this runner: the case cannot
   even be *written* here, which is a finding about the corpus as much as about the detectors.
@@ -113,6 +109,26 @@ So a case may carry a tracking issue:
 
 Events are written **chronologically**; the runner reverses them, because the store hands detectors
 events newest-first and nobody writes an attack down backwards.
+
+### A case about a change: `workspace.before`
+
+Some attacks are a change to the workspace, not a state of it. npm postinstall credential harvesting
+is the example: the agent runs one ordinary `npm install <package>`, and the only trace is a package
+marked `hasInstallScript` in `package-lock.json` that was not marked an hour earlier. Such a case
+lists the earlier files under `workspace.before`:
+
+```jsonc
+"workspace": {
+  "before": {"package-lock.json": "..."},   // read first, recorded as the baseline
+  "files":  {"package-lock.json": "..."}    // written over it, then diffed
+}
+```
+
+The runner inventories `before` with `clawmetry.agent_inventory`, writes `files` over it, inventories
+again and raises what the daemon would raise for a session in that directory. A case without `before`
+never reaches the inventory. `npm-postinstall-credential-harvest` and its control
+`control-lockfile-routine-update` use it. What it cannot express: a project whose first install is
+the poisoned one, because there is no earlier lockfile to compare with.
 
 ### Payloads must be inert
 
