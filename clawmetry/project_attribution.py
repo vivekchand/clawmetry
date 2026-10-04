@@ -17,6 +17,10 @@ Resolution, most authoritative first:
                      A session-level assignment beats a project-level one; a
                      later assignment for the same target supersedes an
                      earlier one without erasing it.
+                     A collector started with ``CLAWMETRY_PROJECT`` set
+                     records a session-level assignment (actor
+                     ``daemon:env``) for each session that starts while it
+                     runs and has none yet.
 2. ``repository`` -- the longest known repository root (``git_repos``, which
                      the read-only git reader records) containing the
                      session's working directory.

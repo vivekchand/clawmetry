@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: `CLAWMETRY_PROJECT` on the collector names the project of new sessions
+
+- **Why:** a session's project came from its repository or working directory, or from an assignment made by hand through `/api/projects/assignments`. A machine that works for one client, a CI runner or a container had no way to say so once, in its configuration (#5941).
+- **What:** when the collector runs with `CLAWMETRY_PROJECT=<name>`, each session that starts while it runs is assigned to that project. The assignment is an ordinary session assignment with actor `daemon:env`, written on the alert tick (every 60 seconds), so it shows in the assignment history and in `/api/usage/export?by=project`, and a budget on that project counts the session.
+- **Verified:** 5 new tests cover sessions before and after the collector start, a second tick that writes nothing, an assignment made by hand that is kept, a later correction that supersedes the collector's row, a changed value and a name that is too long.
+- **Limits:** the variable is read from the collector's environment. It is not read from the environment of each agent, so one collector gives one name. Sessions that started before the collector did keep their derived project. A session with no recorded start time is not assigned. Changing the value applies to sessions that start later.
+
 ### Fixed
 
 - Keep the Assistant in the dashboard's native theme, with the question box as the main focus. Answers stream as they arrive, and Stop cancels the active response.
