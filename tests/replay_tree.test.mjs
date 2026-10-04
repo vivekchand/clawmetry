@@ -313,6 +313,39 @@ check('delegation without a spawn payload is not tagged',
       !nestedHtml.includes('replay-tree-badge fork') &&
       !delegMount.innerHTML.includes('replay-tree-badge fork'));
 
+// Notices above the turns (clawmetry-pro#135): a branched Pi conversation
+// says the replay follows one branch, and an Aider replay says what the
+// history file does not hold.
+const noteHtml = (tree) => {
+  const m = new _StubEl('div');
+  api.renderTree(Object.assign(
+    {session_id: 'n', row_count: 1, mode: null, workflows: [],
+     turns: [{turn_id: 'u1', events: [], delegations: [], approvals: []}]}, tree), m);
+  return m.innerHTML;
+};
+const piHtml = noteHtml({runtime: 'pi', branches: {branch_points: 2, entries_off_active_path: 7}});
+check('branched conversation shows the branch notice',
+      piHtml.includes('data-note="branches"') && piHtml.includes('Branch points in this conversation: 2.'));
+check('branch notice counts the entries it leaves out',
+      piHtml.includes('not shown: 7.'));
+check('branch notice sits above the turns',
+      piHtml.indexOf('data-note="branches"') < piHtml.indexOf('replay-tree-turn'));
+check('no hidden entries, no hidden-entries sentence',
+      !noteHtml({runtime: 'pi', branches: {branch_points: 1, entries_off_active_path: 0}})
+        .includes('not shown'));
+check('no branches field, no branch notice',
+      !noteHtml({runtime: 'pi'}).includes('replay-tree-note') &&
+      !noteHtml({runtime: 'pi', branches: null}).includes('replay-tree-note'));
+check('branch counts that are not numbers draw no notice',
+      !noteHtml({runtime: 'pi', branches: {branch_points: '<b>2</b>'}}).includes('replay-tree-note') &&
+      !noteHtml({runtime: 'pi', branches: {branch_points: 0}}).includes('replay-tree-note'));
+const aiderHtml = noteHtml({runtime: 'aider'});
+check('aider replay says what the history file does not hold',
+      aiderHtml.includes('data-note="aider"') && aiderHtml.includes('no tool calls'));
+check('other runtimes get no aider notice',
+      !noteHtml({runtime: 'claude_code'}).includes('replay-tree-note') &&
+      !populatedMount.innerHTML.includes('replay-tree-note'));
+
 if (fail > 0) {
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(1);

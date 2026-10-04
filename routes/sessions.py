@@ -3710,6 +3710,25 @@ _REPLAY_TREE_MAX_DEPTH = 32
 _REPLAY_TREE_MAX_EVENTS = 8000
 
 
+def _replay_branch_counts(payload) -> dict | None:
+    """Branch counts a mapper put on a ``mode.changed`` payload, or ``None``.
+
+    A runtime that stores a conversation as a tree (Pi) replays the active
+    branch only and says how much it left out: ``branch_points`` and
+    ``entries_off_active_path``. Counts that are not whole numbers, or no
+    branch point at all, yield ``None`` so the viewer shows no notice.
+    """
+    if not isinstance(payload, dict):
+        return None
+    points = payload.get("branch_points")
+    if isinstance(points, bool) or not isinstance(points, int) or points < 1:
+        return None
+    off = payload.get("entries_off_active_path")
+    if isinstance(off, bool) or not isinstance(off, int) or off < 0:
+        off = 0
+    return {"branch_points": points, "entries_off_active_path": off}
+
+
 def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
     """Group flat canonical replay-event rows into the tree the transcript
     viewer consumes. Pure function, easy to test.
@@ -3717,7 +3736,8 @@ def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
     Grouping rules (see clawmetry/replay_schema.py for kind semantics):
 
     - ``mode.changed`` events feed the top-level ``mode`` field (latest
-      value wins) — the mode chip in the UI header.
+      value wins) — the mode chip in the UI header. A mode event whose
+      payload counts conversation branches (Pi) also feeds ``branches``.
     - ``workflow.*`` events are collected into ``workflows`` at the top
       level; workflow.start creates the group, workflow.stage/end append.
     - ``agent.spawn`` / ``agent.return`` establish the delegation edges.
@@ -3735,6 +3755,7 @@ def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
     """
     latest_mode = None
     latest_runtime = None
+    branches = None
     workflows_by_span: dict[str, dict] = {}
     turns: list[dict] = []
     approvals_by_span: dict[str, list[dict]] = {}
@@ -3773,6 +3794,7 @@ def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
 
         if kind == "mode.changed":
             latest_mode = row.get("mode") or latest_mode
+            branches = _replay_branch_counts(row.get("payload")) or branches
             continue
         if kind.startswith("workflow."):
             root = row.get("parent_span_id") or row.get("span_id") or ""
@@ -3865,6 +3887,7 @@ def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
         "session_id": session_id,
         "runtime":    latest_runtime,
         "mode":       latest_mode,
+        "branches":   branches,
         "turns":      turns,
         "workflows":  list(workflows_by_span.values()),
         "row_count":  len(rows),
