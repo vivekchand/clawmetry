@@ -1992,7 +1992,7 @@ def _sync_auto_update_with_plan(
                 _cfg2 = load_config() or {}
                 _ak2 = _cfg2.get("api_key", "")
                 if _ak2:
-                    _ok2, _ = _app2(_ak2, _cfg2.get("node_id"))
+                    _ok2, _ = _app2(_ak2, _cfg2.get("node_id"), background=True)
                     if _ok2:
                         log.info("clawmetry-pro provisioned on upgrade to %s — paid "
                                  "runtimes will sync on the next cycle", tier)
@@ -25588,7 +25588,7 @@ def run_daemon() -> None:
         _ak = config.get("api_key", "")
         if _ak:
             from clawmetry.license import auto_provision_pro as _auto_pro
-            _pro_ok, _pro_msg = _auto_pro(_ak, config.get("node_id"))
+            _pro_ok, _pro_msg = _auto_pro(_ak, config.get("node_id"), background=True)
             if _pro_ok:
                 log.info("clawmetry-pro present (entitled account) — all runtimes enabled")
                 try:
@@ -26094,7 +26094,7 @@ def run_daemon() -> None:
                             from clawmetry.license import (
                                 refresh_pro_from_license as _rpl,
                             )
-                            _up, _rmsg = _rpl(config.get("node_id"))
+                            _up, _rmsg = _rpl(config.get("node_id"), background=True)
                             if _up:
                                 log.info("clawmetry-pro refreshed: %s", _rmsg)
                                 from clawmetry.extensions import (
@@ -26123,7 +26123,7 @@ def run_daemon() -> None:
                         )
                         if _sdp():
                             if _pv():
-                                _rm, _rmsg = _dpp("trial lapsed")
+                                _rm, _rmsg = _dpp("trial lapsed", background=True)
                                 log.info(
                                     "clawmetry-pro removal: %s", _rmsg
                                 ) if _rm else log.warning(
@@ -26132,7 +26132,7 @@ def run_daemon() -> None:
                             _pro_stop.wait(timeout=1800)
                             continue  # never re-provision on the same tick
                         _was = bool(_pv())
-                        _ok, _msg = _wp(_ak, config.get("node_id"))
+                        _ok, _msg = _wp(_ak, config.get("node_id"), background=True)
                         if _ok and not _was:
                             log.info("clawmetry-pro just installed (account became "
                                      "entitled) — paid runtimes now enabled")
