@@ -1355,6 +1355,15 @@ jobs:
           -r .github/requirements/ci-tests.txt
       - name: Run red-team corpus regression suite
         run: python3 -m pytest tests/test_redteam_corpus.py -v --tb=short
+      # The outbound-webhook scheme guard, and the SSRF predicate it reuses.
+      # test_ssrf_guard.py has existed since cloud #1574 but was listed in no
+      # workflow, so it ran in no job -- which is how the predicate it checks
+      # came to have no production caller at all. Both files are wired in here
+      # so that stays visible.
+      - name: Outbound webhook URL guard (scheme + SSRF predicate)
+        run: >-
+          python3 -m pytest tests/test_webhook_scheme_guard.py
+          tests/test_ssrf_guard.py -v --tb=short
       - name: Replay the corpus through the audit (exit-code contract)
         run: |
           set +e
