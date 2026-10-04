@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: the replay shows background work in flight and marks a forked sub-agent
+
+- **Why:** a Claude Code turn can start while background agents or workflows from earlier turns are still running, and a sub-agent can be a fork that starts with the whole context of its parent. The replay showed neither. A turn read as if nothing else was running, and a fork read like a sub-agent that was given a fresh brief.
+- **What:** a turn whose opening model call carries `in_flight_at_start` shows a badge with the number of background agents and a badge with the number of workflows that were running when the turn started. A delegation whose `agent.spawn` event has `context_inheritance: fork` shows an "Inherited context" tag, at every nesting depth. Part of #4815 and clawmetry-pro#123.
+- **Verified:** 10 new renderer checks cover both counts, a zero count, a count that is not a number, a turn without counts, a fork at the top level and nested, a fresh sub-agent and a delegation without a spawn payload. The output for a sample turn was rendered to an image and inspected in the light theme.
+- **Limits:** the badges appear only for a runtime whose replay mapper sends these fields. The Claude Code mapper that does so ships in the Pro adapter package. A sub-agent that starts with a fresh context has no tag. The badges were not opened in a running dashboard and the dark theme was not inspected.
+
 ### Fixed: a failing pre-tool hook went unreported when the tool replies arrived as user messages
 
 - **Why:** the check that reports an agent blocked by an erroring pre-tool hook counts hook errors in tool replies and starts again at each user turn. It read events on its own and classed a `user` message holding `tool_result` blocks as a user turn. A session stored in that form, for example a Claude CLI run started by OpenClaw, therefore never raised `blocked_on_user` for a failing hook, including ClawMetry's own gate.
