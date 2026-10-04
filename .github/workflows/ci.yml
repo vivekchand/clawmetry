@@ -437,6 +437,19 @@ jobs:
       - name: Action references stay pinned to a commit SHA
         run: python3 -m pytest tests/test_action_refs_pinned.py -q
 
+      # The same ratchet for `pip install`. Almost every install in this repo
+      # resolves from a hash-pinned set under .github/requirements/; twenty do
+      # not, and each of those is either this repo's own tree (nothing to pin)
+      # or an index resolve that is unpinned on purpose -- the release canary
+      # installing the version it just published, the SBOM step describing a
+      # real resolve rather than a frozen file. Every one of them already
+      # carried a comment saying so, but nothing checked the set, so a new
+      # unpinned install would have resolved from the network with no hash and
+      # passed every check here. Named explicitly because this job runs FILE
+      # LISTS.
+      - name: Unpinned pip installs stay declared
+        run: python3 -m pytest tests/test_unpinned_pip_installs_declared.py -q
+
       # Red-team corpus: every publicly disclosed agent attack we claim to
       # catch, we still catch. Named explicitly because this job runs FILE
       # LISTS -- a signature added without a line here is checked by nothing.
