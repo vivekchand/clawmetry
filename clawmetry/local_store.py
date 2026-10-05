@@ -2774,11 +2774,13 @@ def _assistant_read_cursor(store, seconds, cancel):
         check()
     finally:
         stopped.set()
-        if watcher is not None:
-            watcher.join()
-        if cursor is not None:
-            cursor.close()
-        store._write_lock.release()
+        try:
+            if watcher is not None:
+                watcher.join()
+            if cursor is not None:
+                cursor.close()
+        finally:
+            store._write_lock.release()
 
 
 def _assistant_safe_sql_error(exc: BaseException) -> str:
@@ -20619,6 +20621,21 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                 [conversation_id],
             ).fetchone()
         return _assistant_decode_conversation(row) if row else {}
+
+    def query_assistant_session_evidence(
+        self, *, session_id: str, runtime: str, node_id: str,
+        mode: str = "errors", since=None, until=None, event_id=None,
+        search=None, cursor=None, limit: int = 20, field=None, offset: int = 0,
+        timeout_secs: float = 5.0, cancel=None,
+    ) -> dict[str, Any]:
+        """Read bounded, redacted session detail on the daemon-owned connection."""
+        from clawmetry.assistant_evidence import read_evidence
+        return read_evidence(
+            self, session_id=session_id, runtime=runtime, node_id=node_id,
+            mode=mode, since=since, until=until, event_id=event_id, search=search,
+            cursor=cursor, limit=limit, field=field, offset=offset,
+            timeout_secs=timeout_secs, cancel=cancel,
+        )
 
     def query_assistant_sql(
         self,
