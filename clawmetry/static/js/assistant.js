@@ -1136,6 +1136,7 @@
     var read = evidenceObject(source.read);
     var items = Array.isArray(source.preview) ? source.preview : [];
     var shown = Math.min(items.length, 20);
+    var returned = evidenceCount(source.rows);
     var scanned = evidenceCount(coverage.scanned);
     evidenceNote(parent, 'Showing ' + formatCount(shown) + (shown === 1 ? ' recorded item' : ' recorded items')
       + (scanned !== null ? ' from ' + formatCount(scanned) + ' records checked' : '') + '.');
@@ -1143,7 +1144,12 @@
       evidenceNote(parent, 'This read reached a limit. Evidence outside the checked records may be missing from this answer.');
     }
     if (metadata.next_cursor) evidenceNote(parent, 'More records remain to be checked beyond this page.');
-    if (!shown) evidenceNote(parent, 'No readable items were returned for this read. This does not establish that nothing was recorded.');
+    if (returned !== null && returned > shown) {
+      evidenceNote(parent, 'Only ' + formatCount(shown) + ' of ' + formatCount(returned) + ' returned items are included in this answer.');
+    } else if (source.preview_truncated === true) {
+      evidenceNote(parent, 'Some returned evidence is not included in this answer.');
+    }
+    if (!shown) evidenceNote(parent, 'No readable excerpts are included here. This does not establish that nothing was recorded.');
 
     var sid = typeof read.session_id === 'string' ? read.session_id : scope.session_id;
     var validSession = typeof sid === 'string' && sid.length > 0 && sid.length <= 4096

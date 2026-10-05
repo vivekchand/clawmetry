@@ -172,3 +172,13 @@ def test_renderer_caps_records_and_discloses_the_limit():
 assert.equal(byClass(sources,'cm-assistant-evidence-item').length,20);
 assert.match(sources.textContent,/read reached a limit/);
 """)
+
+
+def test_persisted_preview_omission_is_not_reported_as_an_empty_read():
+    source = copy.deepcopy(SOURCE)
+    source.update(preview=[], preview_rows=0, rows=20, preview_truncated=True)
+    _render(source, r"""
+assert.match(sources.textContent,/Only 0 of 20 returned items are included/);
+assert.match(sources.textContent,/No readable excerpts are included here/);
+assert.ok(!sources.textContent.includes('No readable items were returned'));
+""")
