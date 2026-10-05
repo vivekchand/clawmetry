@@ -7,13 +7,6 @@
 - **Verified:** 1 new test: the store call and the route both refuse the request, no row is added and the spend stays under the earlier project name. It fails without the change.
 - **Limits:** an assignment of this kind that was stored earlier stays in the history and still has no effect. Renaming a project still means assigning its repository or directory again. The dashboard form already offered repositories and directories only.
 
-### Added: the replay shows when a Pi conversation has other branches, and says what Aider does not store
-
-- **Why:** a Pi conversation is a tree and its replay follows the active branch only. An Aider history file holds prompts and replies but no tool call and no reasoning. Both read as if they were complete.
-- **What:** `/api/replay-tree/<session_id>` returns a new `branches` field (`branch_points`, `entries_off_active_path`) from the session's `mode.changed` payload. `null` when there is no branch point or the counts are not whole numbers. The replay view shows a notice above the turns with the branch point count and the number of entries not shown. An Aider replay shows a notice that names what the history file does not hold. 3 locale keys (`trail.branch_note`, `trail.branch_note_hidden`, `trail.aider_note`), one CSS selector. Part of clawmetry-pro#135.
-- **Verified:** 3 new tests in `tests/test_replay_tree_endpoint.py`, 8 new checks in `tests/replay_tree.test.mjs` (55 pass). The real branching Pi capture yields `{'branch_points': 1, 'entries_off_active_path': 2}`. The 15 other Pi files yield `null`. Both notices were rendered to an image and inspected in the light theme.
-- **Limits:** a notice, not a branch selector. The Pi mapper does not store the entries of other branches, so they cannot be opened. Not opened in a running dashboard. Dark theme not inspected.
-
 ### Added: assign a repository or directory to a project from the Usage tab
 
 - **Why:** listing a repository under a client or project name took a hand-written request to `/api/projects/assignments`. The Cost by Project card could show an assignment and could not make one (#5941).
