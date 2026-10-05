@@ -6197,7 +6197,7 @@ function _qRenderRoughRuns(data) {
 // Human-readable runtime name. Falls back to the raw id so a runtime we
 // haven't named still reads as itself rather than as something else.
 var _Q_RUNTIME_NAMES = {
-  claude_code: 'Claude Code', openclaw: 'OpenClaw', codex: 'Codex',
+  claude_code: 'Claude Code', openclaw: 'OpenClaw', codex: 'Codex / ChatGPT Work',
   cursor: 'Cursor', aider: 'Aider', goose: 'Goose', opencode: 'opencode',
   qwen_code: 'Qwen Code', copilot: 'Copilot', antigravity: 'Antigravity',
   n8n: 'n8n', hermes: 'Hermes', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
@@ -12734,7 +12734,7 @@ function closeFileViewer() {
 var _CM_RT_LABEL = {
   openclaw: 'OpenClaw', nemoclaw: 'NemoClaw',
   picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
-  hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
+  hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex / ChatGPT Work', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
   pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
   copilot: 'GitHub Copilot', grok: 'Grok Build', grok_bot: 'Grok Bot', qm: 'QM',
@@ -13057,9 +13057,25 @@ function _cmApplyRuntimeTabVisibility() {
 // Called from switchTab. Only shows when a specific (non-'all') runtime is
 // selected AND the tab can't honour it — so the user is never left wondering
 // "is this for <runtime>?": the answer is stated inline. Idempotent.
+// Local Work shares native threads with Codex. Keep one runtime so the same
+// records are not counted twice; explain the boundary independently of scope.
+function _cmApplyDesktopCoverageNote(page) {
+  var note = page.querySelector('#cm-desktop-coverage-note');
+  if (_cmRuntimeFilter() !== 'codex') {
+    if (note) note.remove();
+    return;
+  }
+  if (note) return;
+  note = document.createElement('div');
+  note.id = 'cm-desktop-coverage-note';
+  note.className = 'cm-desktop-coverage-note';
+  note.textContent = 'This view includes local ChatGPT Work tasks and Codex sessions. Regular Chat and cloud Work conversations are not monitored.';
+  page.insertBefore(note, page.firstChild);
+}
 function _cmApplyRuntimeScopeNote(name) {
   var page = document.getElementById('page-' + name);
   if (!page) return;
+  _cmApplyDesktopCoverageNote(page);
   var noteId = 'cm-rt-scope-note';
   var existing = page.querySelector('#' + noteId);
   var rt = _cmRuntimeFilter();
@@ -25454,7 +25470,7 @@ function initFlow() {
 var _origFlowSvgInner = null;
 var _RT_FLOW = {
   claude_code: { label:'Claude Code', src:['⌨️','Terminal'], accent:'#d97706', stroke:'#b45309', tools:[['📝','Edit/Write'],['📖','Read'],['⚡','Bash'],['🔍','Grep/Glob'],['🐝','Subagents'],['🧩','MCP']] },
-  codex:       { label:'Codex',       src:['⌨️','Terminal'], accent:'#10a37f', stroke:'#0d8a6a', tools:[['📝','Apply patch'],['📖','Read'],['⚡','Shell'],['🔍','Search'],['🧩','MCP']] },
+  codex:       { label:'Codex / ChatGPT Work', src:['💻','Local'], accent:'#10a37f', stroke:'#0d8a6a', tools:[['📝','Apply patch'],['📖','Read'],['⚡','Shell'],['🔍','Search'],['🧩','MCP']] },
   cursor:      { label:'Cursor',      src:['🖥️','Editor'], accent:'#6366f1', stroke:'#4f46e5', tools:[['📝','Edit'],['📖','Read'],['⚡','Terminal'],['🔍','Codebase'],['🧩','MCP']] },
   aider:       { label:'Aider',       src:['⌨️','Terminal'], accent:'#22a559', stroke:'#1a8045', tools:[['📝','Edit'],['📖','Read'],['⚡','Shell'],['🔀','Git commit']] },
   goose:       { label:'Goose',       src:['⌨️','Terminal'], accent:'#0ea5e9', stroke:'#0284c7', tools:[['📝','Edit'],['⚡','Shell'],['🔍','Search'],['🧩','Extensions']] },
@@ -33347,7 +33363,7 @@ var GUARD_COMPONENT_KIND_LABEL = {
   install_script_package: 'Package with an install script'
 };
 var GUARD_RUNTIME_LABEL = {
-  claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
+  claude_code: 'Claude Code', codex: 'Codex / ChatGPT Work', cursor: 'Cursor',
   gemini_cli: 'Gemini CLI', opencode: 'opencode', openclaw: 'OpenClaw'
 };
 

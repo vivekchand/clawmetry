@@ -874,7 +874,7 @@ def shape_rates(turn_rows: list[dict], match_rows: list[dict], *,
 
 _RUNTIME_LABELS = {
     "claude_code": "Claude Code", "openclaw": "OpenClaw", "nemoclaw": "NemoClaw",
-    "codex": "Codex", "cursor": "Cursor", "copilot": "Copilot", "hermes": "Hermes",
+    "codex": "Codex / ChatGPT Work", "cursor": "Cursor", "copilot": "Copilot", "hermes": "Hermes",
     "gemini_cli": "Gemini CLI", "goose": "Goose", "aider": "Aider",
     "opencode": "OpenCode", "qwen_code": "Qwen Code", "cline": "Cline",
     "devin": "Devin", "grok_bot": "Grok Bot", "pi": "Pi", "exo": "Exo",

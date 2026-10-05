@@ -88,7 +88,7 @@ _MAX_NAME = 80
 _SKIP_DIRS = frozenset({".git", "__pycache__"})
 
 _RUNTIME_LABELS = {
-    "claude_code": "Claude Code", "codex": "Codex", "cursor": "Cursor",
+    "claude_code": "Claude Code", "codex": "Codex / ChatGPT Work", "cursor": "Cursor",
     "gemini_cli": "Gemini CLI", "opencode": "opencode", "openclaw": "OpenClaw",
 }
 _KIND_LABELS = {

@@ -26,7 +26,7 @@
 COUNT = 33
 FREE_COUNT = 4
 PAID_COUNT = 29
-BLURB = See your agent think. Zero-config observability & governance for 33 AI agent runtimes: Claude Code, OpenAI Codex, Hermes, OpenClaw & 29 more. Live token costs, sessions, tool calls, crons.
+BLURB = See your agent think. Zero-config observability & governance for 33 AI agent runtimes: Claude Code, Codex / ChatGPT Work, Hermes, OpenClaw & 29 more. Live token costs, sessions, tool calls, crons.
 
 goose	Goose	free	/runtimes/goose
 nemoclaw	NemoClaw	free	/nemoclaw
@@ -36,7 +36,7 @@ aider	Aider	paid	/runtimes/aider
 antigravity	Antigravity	paid	/runtimes/antigravity
 claude_code	Claude Code	paid	/runtimes/claude-code
 cline	Cline	paid	/runtimes/cline
-codex	Codex	paid	/runtimes/codex
+codex	Codex / ChatGPT Work	paid	/runtimes/codex
 copilot	GitHub Copilot	paid	/runtimes/copilot
 cursor	Cursor	paid	/runtimes/cursor
 deepagents	Deep Agents	paid	/runtimes/deep-agents

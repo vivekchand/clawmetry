@@ -629,6 +629,9 @@ jobs:
       - name: Sessions conversation and replay details
         run: python3 -m pytest tests/test_sessions_reader.py tests/test_transcript_layout_grid.py -q
 
+      - name: Local ChatGPT Work coverage
+        run: python3 -m pytest tests/test_chatgpt_desktop_coverage.py -q
+
       - name: First-install preparation UI
         run: python3 -m pytest tests/test_startup_readiness.py -q
 

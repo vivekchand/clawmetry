@@ -4135,3 +4135,15 @@ body.has-profile-menu #logout-btn { display: none !important; }
 body.cm-assistant-active #update-banner,
 body.cm-assistant-active #license-expired-banner[data-ending-trial="true"] { display: none !important; }
 .cm-dashboard-number { font-size: 42px; font-weight: 650; padding: 22px; }
+
+/* Shared local Work/Codex coverage; no additional data fetch or poller. */
+.cm-desktop-coverage-note {
+  margin: 0 0 14px;
+  padding: 9px 13px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.10);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}

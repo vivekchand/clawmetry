@@ -8209,7 +8209,7 @@ def _build_node_meta() -> dict:
 
 
 _LITE_RT_LABELS = {
-    "claude_code": "Claude Code", "codex": "Codex", "cursor": "Cursor",
+    "claude_code": "Claude Code", "codex": "Codex / ChatGPT Work", "cursor": "Cursor",
     "aider": "Aider", "goose": "Goose", "opencode": "opencode",
     "qwen_code": "Qwen Code", "hermes": "Hermes", "picoclaw": "PicoClaw",
     "nanoclaw": "NanoClaw", "pi": "Pi", "deepagents": "Deep Agents",
