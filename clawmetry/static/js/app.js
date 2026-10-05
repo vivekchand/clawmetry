@@ -20043,7 +20043,16 @@ async function removeProjectBudget(budgetId) {
 // assignment is appended, never edited: a later one for the same target takes
 // over and the earlier one stays as history, so the list shows current ones.
 // Only a derived project (prj_) can be a target; a named project (prjn_) is
-// what an assignment produces.
+// what an assignment produces. Both dates are optional: with them, only
+// sessions that started on or after the start and before the end are moved.
+function projectAssignPeriodText(r) {
+  var parts = [];
+  var from = String((r && r.effective_from) || '').slice(0, 10);
+  var to = String((r && r.effective_to) || '').slice(0, 10);
+  if (from) parts.push(t('usage.project_assign_from', {date: from}, 'from ' + from));
+  if (to) parts.push(t('usage.project_assign_before', {date: to}, 'before ' + to));
+  return parts.join(', ');
+}
 function projectAssignTargets(projects, assignments) {
   var seen = {};
   var out = [];
@@ -20069,7 +20078,7 @@ function renderProjectAssignments(a, projects) {
     html += '<div style="margin-top:4px;font-size:12px;color:var(--text-muted);">' + costCardText(t('usage.project_assign_none', null, 'No repository or directory is assigned to a project by hand.')) + '</div>';
   }
   current.forEach(function(r) {
-    var detail = [r.reason, r.actor].filter(function(v) { return v; }).join(' \xb7 ');
+    var detail = [projectAssignPeriodText(r), r.reason, r.actor].filter(function(v) { return v; }).join(' \xb7 ');
     html += '<div style="margin-top:6px;font-size:12px;">'
       + '<span style="font-weight:500;">' + costCardText(r.match_label || r.match_value || '—') + '</span>'
       + ' → <span style="font-weight:500;">' + costCardText(r.project_name || '—') + '</span>'
@@ -20088,15 +20097,19 @@ function renderProjectAssignments(a, projects) {
   }).join('');
   var nameLabel = costCardText(t('usage.project_assign_name', null, 'Project name'));
   var reasonLabel = costCardText(t('usage.project_assign_reason', null, 'Reason'));
+  var startLabel = costCardText(t('usage.project_assign_start', null, 'Start date (optional)'));
+  var endLabel = costCardText(t('usage.project_assign_end', null, 'End date (optional)'));
   html += '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;">'
     + '<select id="project-assign-target" aria-label="' + costCardText(t('usage.project_assign_target', null, 'Repository or directory')) + '" style="' + field + '">' + options + '</select>'
     + '<input id="project-assign-name" type="text" maxlength="120" placeholder="' + nameLabel + '" aria-label="' + nameLabel + '" style="width:150px;' + field + '">'
     + '<input id="project-assign-reason" type="text" maxlength="500" placeholder="' + reasonLabel + '" aria-label="' + reasonLabel + '" style="width:200px;' + field + '">'
+    + '<label style="color:var(--text-muted);">' + startLabel + ' <input id="project-assign-from" type="date" style="' + field + '"></label>'
+    + '<label style="color:var(--text-muted);">' + endLabel + ' <input id="project-assign-to" type="date" style="' + field + '"></label>'
     + '<button type="button" onclick="saveProjectAssignment()" style="' + field + 'cursor:pointer;">' + costCardText(t('usage.project_assign_button', null, 'Assign')) + '</button>'
     + '<span id="project-assign-status" style="color:var(--text-muted);"></span>'
     + '</div>'
     + '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);line-height:1.5;">'
-    + costCardText(t('usage.project_assign_hint', null, 'An assignment lists all spend of that repository or directory, past and future, under the project name. An earlier assignment is kept as history.')) + '</div>';
+    + costCardText(t('usage.project_assign_hint', null, 'An assignment lists all spend of that repository or directory, past and future, under the project name. With dates, only sessions that started on or after the start date and before the end date are listed there. An earlier assignment is kept as history.')) + '</div>';
   return html;
 }
 function projectAssignStatus(text) {
@@ -20118,11 +20131,29 @@ async function saveProjectAssignment() {
     projectAssignStatus(t('usage.project_assign_reason_required', null, 'Enter a reason. It is kept with the assignment.'));
     return;
   }
+  var body = {match_type: 'project', match_value: target.value,
+              project_name: projectName, reason: why};
+  var day = /^\d{4}-\d{2}-\d{2}$/;
+  var fromEl = document.getElementById('project-assign-from');
+  var toEl = document.getElementById('project-assign-to');
+  var from = String((fromEl && fromEl.value) || '').trim();
+  var to = String((toEl && toEl.value) || '').trim();
+  if ((from && !day.test(from)) || (to && !day.test(to))) {
+    projectAssignStatus(t('usage.project_assign_date_invalid', null, 'Enter each date as year, month and day.'));
+    return;
+  }
+  if (from && to && to <= from) {
+    projectAssignStatus(t('usage.project_assign_dates_order', null, 'The end date must be later than the start date.'));
+    return;
+  }
+  // A date with no zone is midnight on this machine's clock, the clock the
+  // store's days follow.
+  if (from) body.effective_from = from + 'T00:00:00';
+  if (to) body.effective_to = to + 'T00:00:00';
   try {
     var res = await fetch('/api/projects/assignments', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({match_type: 'project', match_value: target.value,
-                            project_name: projectName, reason: why})
+      body: JSON.stringify(body)
     }).then(function(r) { return r.json(); });
     if (!res || !res.ok) {
       projectAssignStatus((res && res.error) || t('usage.project_assign_failed', null, 'The assignment was not saved.'));
