@@ -37,7 +37,8 @@ const document = {
   body: new _StubEl('body'),
 };
 const window = {};
-const fetch = () => Promise.reject(new Error('fetch not exercised'));
+let fetchImpl = () => Promise.reject(new Error('fetch not exercised'));
+const fetch = (...args) => fetchImpl(...args);
 
 const fn = new Function(
   'window', 'document', 'fetch',
@@ -241,6 +242,68 @@ api.renderTree(off, offMount);
 check('offloaded run says the node runs are not stored',
       offMount.innerHTML.includes('not stored in the database'));
 
+// Model and tool calls of sub-nodes are listed on the node they served,
+// matched to the workflow by the stage they name (clawmetry-pro#132).
+const actTree = JSON.parse(JSON.stringify(wfTree));
+actTree.workflows[0].events[0].payload.nodes.push(
+  {name: 'Calc', type: 'toolCalculator', position: [300, 200]});
+actTree.workflows[0].events.push(
+  {span_id: 'st-calc', parent_span_id: 'wf1', kind: 'workflow.stage', runtime: 'n8n',
+   payload: {node: 'Calc', status: 'success', role: 'tool'}},
+  {span_id: 'st-model2', parent_span_id: 'wf1', kind: 'workflow.stage', runtime: 'n8n',
+   payload: {node: 'Model', status: 'success', role: 'model'}});
+actTree.turns = [{turn_id: 'c1', approvals: [], delegations: [{
+  span_id: 'sp1', label: 'workflow', approvals: [], delegations: [], events: [
+    {span_id: 'x-call', kind: 'tool.call', runtime: 'n8n',
+     payload: {tool: 'other', node: 'Agent', agent_node: 'Agent', stage_span_id: 'st-child'}}],
+}], events: [
+  {span_id: 'c1', kind: 'llm.call', runtime: 'n8n',
+   payload: {node: 'Model', agent_node: 'Agent', model: 'claude-<x>', stage_span_id: 'st-model2'}},
+  {span_id: 'r1', kind: 'llm.response', runtime: 'n8n',
+   payload: {node: 'Model', stage_span_id: 'st-model2',
+             usage: {input_tokens: 120, output_tokens: 30}}},
+  {span_id: 't1', kind: 'tool.call', runtime: 'n8n',
+   payload: {tool: 'toolCalculator', node: 'Calc', agent_node: 'Agent',
+             args: {expr: '<2+2>'}, call_id: 't1', stage_span_id: 'st-calc'}},
+  {span_id: 't1r', kind: 'tool.result', runtime: 'n8n',
+   payload: {tool: 'toolCalculator', call_id: 't1', node: 'Calc',
+             output: 'division by <zero>', is_error: true}},
+  {span_id: 'plain', kind: 'tool.call', runtime: 'n8n', payload: {tool: 'x', node: 'Agent'}},
+]}];
+const actMount = new _StubEl('div');
+api.renderTree(actTree, actMount);
+const actHtml = actMount.innerHTML;
+const agentDetail = actHtml.slice(
+  actHtml.indexOf('class="replay-wf-node-detail" data-node="Agent"'));
+check('agent node lists its calls',
+      (agentDetail.match(/class="replay-wf-call"/g) || []).length === 2);
+check('call counts in the node summary',
+      agentDetail.includes('Model calls: 1 · Tool calls: 1'));
+check('model call names the model and its tokens',
+      agentDetail.includes('claude-&lt;x&gt;') && agentDetail.includes('120 tokens in, 30 out'));
+check('tool call shows its arguments, escaped',
+      agentDetail.includes('{&quot;expr&quot;:&quot;&lt;2+2&gt;&quot;}'));
+check('failed tool call is marked with its output',
+      agentDetail.includes('data-kind="tool" data-error="1"') &&
+      agentDetail.includes('division by &lt;zero&gt;'));
+check('call of another workflow with the same node name is not listed',
+      !agentDetail.includes('>other<'));
+check('failed node detail is open and shows the error',
+      actHtml.includes('data-node="Agent" data-status="error" open') &&
+      agentDetail.includes('class="replay-wf-node-error">boom'));
+check('count marker on the agent node only',
+      (actHtml.match(/class="replay-wf-node-count"/g) || []).length === 1 &&
+      actHtml.includes('class="replay-wf-node-count-text"') );
+check('sub-node has no detail of its own',
+      !actHtml.includes('class="replay-wf-node-detail" data-node="Calc"'));
+check('no raw markup from call text', !actHtml.includes('<zero>') && !actHtml.includes('<2+2>'));
+// Without calls, only the failed node gets a detail entry.
+check('graph without calls lists the failed node only',
+      (wfHtml.match(/class="replay-wf-node-detail"/g) || []).length === 1 &&
+      !wfHtml.includes('replay-wf-node-count'));
+check('workflow with no failure and no call has no details block',
+      !offMount.innerHTML.includes('replay-wf-node-details'));
+
 // In-flight counts on a turn's opening llm.call become header badges, and a
 // fork spawn tags its delegation (clawmetry-pro#123, #4815).
 const inFlightTree = {
@@ -345,6 +408,88 @@ check('aider replay says what the history file does not hold',
 check('other runtimes get no aider notice',
       !noteHtml({runtime: 'claude_code'}).includes('replay-tree-note') &&
       !populatedMount.innerHTML.includes('replay-tree-note'));
+
+// Stored branches (clawmetry-pro#135): the notice lists the branches the
+// mapper stored, a click draws that branch in place of the session, and
+// the way back needs no second request.
+const branchTurn = (prompt) => ({turn_id: 'u1', delegations: [], approvals: [],
+  events: [{span_id: 'u1', kind: 'llm.call', payload: {prompt}, runtime: 'pi'}]});
+const homeTree = {
+  session_id: 'pi:s1', runtime: 'pi', row_count: 1, mode: null, workflows: [],
+  turns: [branchTurn('active prompt')],
+  branches: {branch_points: 1, entries_off_active_path: 3, stored: [
+    {session_id: 'pi:s1::branch-b7', label: 'try <b>sqlite</b>', entries: 3, shared_entries: 2},
+    {session_id: 'pi:s1::branch-c9'},
+    {session_id: ''}, null, {label: 'no id'},
+  ]},
+};
+const clickOn = (mount, attrs) => mount.onclick({target: {
+  getAttribute: (k) => (k in attrs ? attrs[k] : null), parentNode: mount}});
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const branchMount = new _StubEl('div');
+api.renderTree(homeTree, branchMount);
+const listHtml = branchMount.innerHTML;
+check('stored branches are listed as buttons',
+      (listHtml.match(/data-branch-index=/g) || []).length === 2 &&
+      listHtml.includes('Open another branch:'));
+check('branch label is escaped and carries its entry count',
+      listHtml.includes('try &lt;b&gt;sqlite&lt;/b&gt;') && !listHtml.includes('<b>sqlite') &&
+      listHtml.includes('own entries: 3'));
+check('branch without a label gets a numbered name', listHtml.includes('Branch 2'));
+check('with stored branches the notice counts nothing as left out',
+      listHtml.includes('Branch points in this conversation: 1.') && !listHtml.includes('not shown'));
+check('a long branch label is cut so its entry count stays visible',
+      noteHtml({runtime: 'pi', branches: {branch_points: 1, stored: [
+        {session_id: 'b', label: 'y'.repeat(300), entries: 1}]}})
+        .includes('>' + 'y'.repeat(59) + '\u2026 <span'));
+check('no stored branches, no list',
+      !piHtml.includes('replay-tree-branches') &&
+      !noteHtml({runtime: 'pi', branches: {branch_points: 1, stored: 'x'}}).includes('data-branch-index'));
+
+const asked = [];
+fetchImpl = (url) => {
+  asked.push(url);
+  return Promise.resolve({ok: true, json: () => Promise.resolve({
+    session_id: 'pi:s1::branch-b7', runtime: 'pi', row_count: 1, mode: null,
+    workflows: [], branches: null, turns: [branchTurn('abandoned prompt')]})});
+};
+clickOn(branchMount, {'data-branch-index': '0'});
+await settle();
+check('a branch click asks for that branch by its stored session id',
+      asked.length === 1 && asked[0] === '/api/replay-tree/' + encodeURIComponent('pi:s1::branch-b7'));
+check('the branch replaces the session replay',
+      branchMount.innerHTML.includes('abandoned prompt') && !branchMount.innerHTML.includes('active prompt'));
+check('the branch view names the branch, the shared entries and the way back',
+      branchMount.innerHTML.includes('data-note="branch-view"') &&
+      branchMount.innerHTML.includes('Showing another branch: try &lt;b&gt;sqlite&lt;/b&gt;.') &&
+      branchMount.innerHTML.includes('Entries it shares with the active branch: 2.') &&
+      branchMount.innerHTML.includes('data-branch-back'));
+check('the branch view does not list branches again', !branchMount.innerHTML.includes('data-branch-index'));
+clickOn(branchMount, {'data-branch-back': '1'});
+check('back restores the session replay without a request',
+      asked.length === 1 && branchMount.innerHTML.includes('active prompt') &&
+      branchMount.innerHTML.includes('data-branch-index="0"') &&
+      !branchMount.innerHTML.includes('data-note="branch-view"'));
+
+fetchImpl = () => Promise.resolve({ok: false, status: 500});
+clickOn(branchMount, {'data-branch-index': '1'});
+await settle();
+check('a branch that fails to load says so and keeps the session replay',
+      branchMount.innerHTML.includes('data-note="branch-error"') &&
+      branchMount.innerHTML.includes('The branch &quot;Branch 2&quot; could not be loaded.') &&
+      branchMount.innerHTML.includes('active prompt'));
+fetchImpl = () => Promise.resolve({ok: true, json: () => Promise.resolve({row_count: 0, turns: []})});
+clickOn(branchMount, {'data-branch-index': '0'});
+await settle();
+check('a branch with no stored events is reported, one notice at a time',
+      (branchMount.innerHTML.match(/data-note="branch-error"/g) || []).length === 1 &&
+      branchMount.innerHTML.includes('active prompt'));
+clickOn(branchMount, {'data-other': '1'});
+clickOn(branchMount, {'data-branch-index': '9'});
+await settle();
+check('a click elsewhere or on an unknown branch changes nothing',
+      branchMount.innerHTML.includes('active prompt') && !branchMount.innerHTML.includes('data-note="branch-view"'));
+fetchImpl = () => Promise.reject(new Error('fetch not exercised'));
 
 if (fail > 0) {
   console.log(`\n${pass} passed, ${fail} failed`);

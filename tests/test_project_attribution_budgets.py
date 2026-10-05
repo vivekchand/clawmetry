@@ -702,7 +702,8 @@ def test_without_a_local_store_routes_answer_an_honest_empty_state(monkeypatch):
 
 _PANEL_FNS = ("costCardText", "projectSourceText", "renderProjectUsage",
               "projectBudgetPeriodText", "renderProjectBudgets", "projectBudgetTimezone",
-              "renderProjectBudgetForm", "projectAssignTargets", "renderProjectAssignments",
+              "renderProjectBudgetForm", "projectAssignPeriodText", "projectAssignTargets",
+              "renderProjectAssignments",
               "loadUsageByProject")
 _REPO_ID = "prj_" + "a" * 16
 _NAMED_ID = "prjn_" + "b" * 16
@@ -881,6 +882,72 @@ def test_saving_an_assignment_needs_a_name_and_a_reason_and_posts_the_derived_pr
     got = run("Client A", "why", {"ok": False, "error": "unknown project"})
     assert [c["url"] for c in got["calls"]] == ["/api/projects/assignments"]
     assert got["status"] == "unknown project"
+
+
+def test_an_assignment_with_dates_shows_its_period_and_the_form_sends_local_midnight():
+    from tests.test_cost_basis_remaining_surfaces import _run
+    rows = _panel_assignments()
+    rows["assignments"][0].update(effective_from="2026-09-01T00:00:00",
+                                  effective_to="2026-10-01T00:00:00")
+    html = _panel("console.log(JSON.stringify({html: renderProjectAssignments(%s, %s)}));"
+                  % (json.dumps(rows), json.dumps(_panel_usage()["projects"])))["html"]
+    assert "from 2026-09-01, before 2026-10-01 \u00b7 contract 12" in html
+    assert 'id="project-assign-from" type="date"' in html
+    assert 'id="project-assign-to" type="date"' in html
+
+    fns = ("projectAssignStatus", "saveProjectAssignment")
+    prog = ("var calls = []; var _f = fetch;"
+            " fetch = function (u, o) { calls.push({url: u, opts: o || null}); return _f(u, o); };"
+            " function loadUsageByProject() { calls.push({url: 'reload'}); }"
+            " saveProjectAssignment().then(function () { console.log(JSON.stringify("
+            "{calls: calls, status: els['project-assign-status'].textContent || ''})); });")
+
+    def run(start, end):
+        els = {"project-assign-target": {"value": _REPO_ID},
+               "project-assign-name": {"value": "Client A"},
+               "project-assign-reason": {"value": "contract 12"},
+               "project-assign-from": {"value": start},
+               "project-assign-to": {"value": end},
+               "project-assign-status": {}}
+        return _run(prog, fns=fns, els=els, fetch_json={"ok": True})
+
+    def body(got):
+        return json.loads(got["calls"][0]["opts"]["body"])
+
+    sent = body(run("2026-09-01", "2026-10-01"))
+    assert sent["effective_from"] == "2026-09-01T00:00:00"
+    assert sent["effective_to"] == "2026-10-01T00:00:00"
+    sent = body(run("2026-09-01", ""))
+    assert sent["effective_from"] == "2026-09-01T00:00:00" and "effective_to" not in sent
+    sent = body(run("", "2026-10-01"))
+    assert sent["effective_to"] == "2026-10-01T00:00:00" and "effective_from" not in sent
+    assert "effective_from" not in body(run("", "")) and "effective_to" not in body(run("", ""))
+    for start, end in (("2026-10-01", "2026-10-01"), ("2026-10-02", "2026-10-01")):
+        got = run(start, end)
+        assert got["calls"] == [] and "later than the start date" in got["status"]
+    got = run("01/09/2026", "")
+    assert got["calls"] == [] and "year, month and day" in got["status"]
+
+
+def test_the_dates_the_form_sends_move_only_the_sessions_inside_the_period(store, client):
+    _session(store, "claude_code:before", "/work/api", started="2026-08-10T09:00:00")
+    _session(store, "claude_code:inside", "/work/api", started="2026-08-25T09:00:00")
+    _session(store, "claude_code:after", "/work/api", started="2026-09-01T00:00:00")
+    _spend(store, "claude_code:before", "2026-08-10T10:00:00", 1.0)
+    _spend(store, "claude_code:inside", "2026-08-25T10:00:00", 2.0)
+    _spend(store, "claude_code:after", "2026-09-01T00:30:00", 4.0)
+    pid = _pid(store, "api")
+    r = client.post("/api/projects/assignments", json={
+        "match_type": "project", "match_value": pid, "project_name": "Client A",
+        "reason": "contract 12", "effective_from": "2026-08-20T00:00:00",
+        "effective_to": "2026-09-01T00:00:00"})
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    row = client.get("/api/projects/assignments").get_json()["assignments"][0]
+    assert row["effective_from"] == "2026-08-20T00:00:00"
+    assert row["effective_to"] == "2026-09-01T00:00:00"
+    projects = _by_label(store.query_project_usage(days=366, now=NOW))
+    assert projects["Client A"]["cost_usd"] == pytest.approx(2.0)
+    assert projects["api"]["cost_usd"] == pytest.approx(5.0)
 
 
 def test_an_assignment_row_names_the_repository_it_targets(store, client):

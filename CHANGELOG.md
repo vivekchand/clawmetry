@@ -1,5 +1,26 @@
 ## Unreleased
 
+### Added: the replay of a Pi conversation opens its other branches
+
+- **Why:** a Pi conversation that was branched replayed its active branch only. The notice above the replay counted the entries it left out, and there was no way to read them (clawmetry-pro#135).
+- **What:** when the Pi mapper has stored the other branches, the notice lists them as buttons, each with the first prompt of the branch and the number of entries only that branch holds. A click replaces the replay with that branch and says how many entries it shares with the active branch. "Back to the active branch" restores the session without a second request. `/api/replay-tree` hands the list on as `branches.stored`.
+- **Verified:** 13 new checks in `tests/replay_tree.test.mjs` and 3 new tests in `tests/test_replay_tree_endpoint.py`. Run on the output of the Pi mapper from clawmetry-pro#321 for a conversation with two abandoned branches, and inspected as a rendered image in the light and the dark theme.
+- **Limits:** the list is empty until a clawmetry-pro release with the mapper from clawmetry-pro#321 is installed, and then the notice is the same as before. At most 32 branches are listed, and the mapper stores at most 8. A branch label is cut at 60 characters. Not checked in a running dashboard. The hosted dashboard does not show the advanced replay details, so this is local only.
+
+
+### Added: a workflow node lists its error and the model and tool calls made for it
+
+- **Why:** the workflow graph showed which node failed, and the reason was only in a hover tooltip, which a touch screen cannot open. The model and tool calls of an n8n Agent node were listed among the turns below the graph, with nothing that tied them to the node (clawmetry-pro#132).
+- **What:** under the graph, each failed node has an entry with its error message, open by default. A node that model or tool sub-nodes served has an entry with one line per call: the sub-node, the model and its token counts, or the tool with its arguments and output, and a mark on a failed call. The node's box in the graph carries the number of calls. A call is matched to the workflow by the stage it names, so a sub-workflow with a node of the same name does not add to the count.
+- **Verified:** 12 new checks in `tests/replay_tree.test.mjs`. Run on the n8n mapper's output for four executions (a successful Agent run with two model calls and one tool call, a failed model run, a failed code node, a parent with a sub-workflow) and inspected as a rendered image.
+- **Limits:** the reply text of a model call is not repeated in the entry, it stays in the turn below. Arguments and output are cut at 200 characters. Only a runtime whose mapper sets `stage_span_id` on its calls gets the list, today n8n. Not checked in a running dashboard, and in the light theme only.
+
+### Added: an assignment from the Usage tab can have a start date and an end date
+
+- **Why:** the assignment form in the Cost by Project card moved all spend of a repository or directory, past and future. A repository that joined a client project on a known day needed a hand-written request to `/api/projects/assignments` to keep its earlier spend where it was (#5941).
+- **What:** the form has two optional date fields. With a start date, only sessions that started on or after that day are listed under the project name. With an end date, only sessions that started before that day are. A date is midnight on the clock of the machine. The form refuses an end date that is not later than the start date. Each assignment in the card shows its period before the reason.
+- **Verified:** 2 new tests: the shipped renderer and save function run in node (the period in a row, the two fields, the request body for each combination of dates, two refused date pairs, a date in another format), and a request with the dates the form sends moves the spend of the session inside the period and leaves the sessions before and after it.
+- **Limits:** the card was not opened in a running dashboard. A single session and removing an assignment are still API only. The dates select sessions by their start, so a session that runs across the start date stays on the side where it began.
 ### Improved: Assistant investigates recorded commands and errors
 
 - **Why:** debugging answers could say that commands and error messages were unavailable even when the local store held them. Answers were limited to short query previews, and follow-ups lost their source references.
