@@ -7,6 +7,12 @@
 - **Verified:** 12 new checks in `tests/replay_tree.test.mjs`. Run on the n8n mapper's output for four executions (a successful Agent run with two model calls and one tool call, a failed model run, a failed code node, a parent with a sub-workflow) and inspected as a rendered image.
 - **Limits:** the reply text of a model call is not repeated in the entry, it stays in the turn below. Arguments and output are cut at 200 characters. Only a runtime whose mapper sets `stage_span_id` on its calls gets the list, today n8n. Not checked in a running dashboard, and in the light theme only.
 
+### Added: an assignment from the Usage tab can have a start date and an end date
+
+- **Why:** the assignment form in the Cost by Project card moved all spend of a repository or directory, past and future. A repository that joined a client project on a known day needed a hand-written request to `/api/projects/assignments` to keep its earlier spend where it was (#5941).
+- **What:** the form has two optional date fields. With a start date, only sessions that started on or after that day are listed under the project name. With an end date, only sessions that started before that day are. A date is midnight on the clock of the machine. The form refuses an end date that is not later than the start date. Each assignment in the card shows its period before the reason.
+- **Verified:** 2 new tests: the shipped renderer and save function run in node (the period in a row, the two fields, the request body for each combination of dates, two refused date pairs, a date in another format), and a request with the dates the form sends moves the spend of the session inside the period and leaves the sessions before and after it.
+- **Limits:** the card was not opened in a running dashboard. A single session and removing an assignment are still API only. The dates select sessions by their start, so a session that runs across the start date stays on the side where it began.
 ### Improved: Assistant investigates recorded commands and errors
 
 - **Why:** debugging answers could say that commands and error messages were unavailable even when the local store held them. Answers were limited to short query previews, and follow-ups lost their source references.
