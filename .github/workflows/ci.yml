@@ -1028,6 +1028,9 @@ jobs:
           tests/test_assistant_frontend.py
           tests/test_assistant_cloud_states.py
           tests/test_assistant_pipeline.py
+          tests/test_assistant_investigation.py
+          tests/test_assistant_evidence.py
+          tests/test_assistant_evidence_frontend.py
           tests/test_custom_dashboard_panels.py
           tests/test_context_economics_truthfulness.py
           tests/test_home_evidence_truthfulness.py
@@ -1789,6 +1792,7 @@ jobs:
           python3 -m pytest \
             tests/test_e2e.py::TestTabsLoad \
             tests/test_e2e_oss_all_tabs.py \
+            tests/test_assistant_evidence_browser.py \
             -v --tb=short -m 'not quarantine' \
             --junitxml=/tmp/junit-e2e-critical.xml
 

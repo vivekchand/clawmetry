@@ -2712,6 +2712,77 @@ def _assistant_runtime_ctes(cursor: Any, table_names: set[str]) -> str:
     return "WITH " + ", ".join(ctes) + " SELECT * FROM ("
 
 
+@contextmanager
+def _assistant_read_cursor(store, seconds, cancel):
+    """Include lock admission in the deadline; interrupt only this cursor."""
+    deadline = time.monotonic() + seconds
+    stopped = threading.Event()
+    failure = []
+    cursor = None
+    watcher = None
+
+    def check():
+        if failure:
+            raise failure[0]
+        if cancel is not None:
+            cancel()
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Evidence read timed out')
+
+    while True:
+        check()
+        if store._write_lock.acquire(timeout=min(.05, max(.001, deadline-time.monotonic()))):
+            break
+    try:
+        check()
+        cursor = store._conn.cursor()
+        if not callable(getattr(cursor, 'interrupt', None)):
+            raise ValueError('Evidence query timeout is unavailable')
+
+        def watch():
+            while not stopped.wait(.05):
+                try:
+                    check()
+                except Exception as exc:
+                    failure.append(exc)
+                    try:
+                        cursor.interrupt()
+                    except Exception:
+                        pass
+                    return
+
+        watcher = threading.Thread(target=watch, name='assistant-read-deadline', daemon=True)
+        watcher.start()
+
+        def fetch(sql, params=()):
+            check()
+            try:
+                rows = cursor.execute(sql, params).fetchall()
+            except Exception:
+                check()
+                raise
+            check()
+            return rows
+
+        try:
+            yield fetch, check, cursor
+        except Exception:
+            # A cancelled DuckDB query raises InterruptException. Preserve the
+            # deadline/cancellation cause, not the database's generic error.
+            check()
+            raise
+        check()
+    finally:
+        stopped.set()
+        try:
+            if watcher is not None:
+                watcher.join()
+            if cursor is not None:
+                cursor.close()
+        finally:
+            store._write_lock.release()
+
+
 def _assistant_safe_sql_error(exc: BaseException) -> str:
     """Map DuckDB errors to categories without echoing SQL or bind data."""
     kind = type(exc).__name__
@@ -20551,20 +20622,35 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
             ).fetchone()
         return _assistant_decode_conversation(row) if row else {}
 
+    def query_assistant_session_evidence(
+        self, *, session_id: str, runtime: str, node_id: str,
+        mode: str = "errors", since=None, until=None, event_id=None,
+        search=None, cursor=None, limit: int = 20, field=None, offset: int = 0,
+        timeout_secs: float = 5.0, cancel=None,
+    ) -> dict[str, Any]:
+        """Read bounded, redacted session detail on the daemon-owned connection."""
+        from clawmetry.assistant_evidence import read_evidence
+        return read_evidence(
+            self, session_id=session_id, runtime=runtime, node_id=node_id,
+            mode=mode, since=since, until=until, event_id=event_id, search=search,
+            cursor=cursor, limit=limit, field=field, offset=offset,
+            timeout_secs=timeout_secs, cancel=cancel,
+        )
+
     def query_assistant_sql(
         self,
         *,
         sql: str,
         max_rows: int = 100,
         timeout_secs: float = 5.0,
+        cancel=None,
     ) -> dict[str, Any]:
         """Run a bounded, read-only assistant query.
 
         Validation happens before DuckDB sees the SQL. Table discovery and
-        execution share a dedicated cursor under the writer lock. A timer
-        interrupts only that cursor, then is cancelled and joined before the
-        cursor is closed, so an assistant timeout does not interrupt another
-        store query.
+        execution share a dedicated cursor under the writer lock. The deadline
+        includes waiting for the writer lock. Cancellation interrupts only that
+        cursor and its watcher exits before the lock is released.
         """
         try:
             row_limit = max(1, min(_ASSISTANT_MAX_QUERY_ROWS, int(max_rows)))
@@ -20582,177 +20668,144 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
         if validation_error:
             return {"rows": [], "error": validation_error}
 
-        cursor = None
-        timer = None
-        timed_out = threading.Event()
-
-        def _interrupt_assistant_cursor() -> None:
-            timed_out.set()
-            try:
-                cursor.interrupt()  # type: ignore[union-attr]
-            except Exception:
-                log.debug("local store: assistant query cursor interrupt failed")
+        from clawmetry.assistant_stream import Cancelled
 
         try:
-            with self._write_lock:
-                cursor = self._conn.cursor()
-                try:
-                    interrupt = getattr(cursor, "interrupt", None)
-                    if not callable(interrupt):
-                        return {
-                            "rows": [],
-                            "error": "assistant query timeout is unavailable",
-                        }
-                    timer = threading.Timer(timeout, _interrupt_assistant_cursor)
-                    timer.daemon = True
-                    timer.start()
+            with _assistant_read_cursor(self, timeout, cancel) as (_fetch, check, cursor):
+                # json_serialize_sql receives the query as a value. It
+                # parses the text into DuckDB's AST and never executes it.
+                # This is deliberately before get_table_names(), whose
+                # binder must never see an external file source.
+                ast_info, ast_error = _assistant_validate_sql_ast(
+                    cursor, validated_sql
+                )
+                if ast_error:
+                    return {"rows": [], "error": ast_error}
 
-                    # json_serialize_sql receives the query as a value. It
-                    # parses the text into DuckDB's AST and never executes it.
-                    # This is deliberately before get_table_names(), whose
-                    # binder must never see an external file source.
-                    ast_info, ast_error = _assistant_validate_sql_ast(
-                        cursor, validated_sql
-                    )
-                    if ast_error:
-                        return {"rows": [], "error": ast_error}
-
-                    def _physical_main_tables(
-                        names: set[str],
-                    ) -> set[str]:
-                        if not names:
-                            return set()
-                        placeholders = ",".join("?" for _ in names)
-                        catalog_rows = cursor.execute(
-                            "SELECT table_name, table_type "
-                            "FROM information_schema.tables "
-                            "WHERE table_schema = 'main' "
-                            f"AND table_name IN ({placeholders})",
-                            sorted(names),
-                        ).fetchall()
-                        return {
-                            str(row[0]).lower()
-                            for row in catalog_rows
-                            if str(row[1]).upper() == "BASE TABLE"
-                        }
-
-                    ast_tables = set(ast_info["tables"])
-                    # Check AST-resolved names before get_table_names() can
-                    # bind the user SQL. This rejects views, temporary objects,
-                    # and file-like BASE_TABLE names before any external
-                    # source resolution occurs.
-                    if (
-                        ast_tables
-                        and _physical_main_tables(ast_tables) != ast_tables
-                    ):
-                        return {
-                            "rows": [],
-                            "error": (
-                                "SQL rejected: only known physical tables "
-                                "are allowed"
-                            ),
-                        }
-
-                    query_sql = str(validated_sql).strip().rstrip(";").strip()
-                    runtime_prefix = _assistant_runtime_ctes(cursor, ast_tables)
-                    execution_sql = (
-                        runtime_prefix + query_sql + ") AS _assistant_runtime_query"
-                        if runtime_prefix
-                        else query_sql
-                    )
-                    # Bind the generated projection, not the original query:
-                    # runtime is a trusted derived column and is absent from
-                    # the physical sessions/events schemas.
-                    table_names = {
-                        _assistant_normalize_table_name(name)
-                        for name in cursor.get_table_names(execution_sql)
-                    }
-                    if ast_info["has_source"] and not table_names:
-                        return {
-                            "rows": [],
-                            "error": "SQL rejected: no allowlisted table was resolved",
-                        }
-                    unknown_tables = table_names.difference(_ASSISTANT_ALLOWED_TABLES)
-                    if unknown_tables:
-                        return {
-                            "rows": [],
-                            "error": "SQL rejected: referenced table is not allowlisted",
-                        }
-
-                    # Verify that every resolved name is a physical main
-                    # table. This rejects views and temporary shadow tables.
-                    if (
-                        table_names
-                        and _physical_main_tables(table_names) != table_names
-                    ):
-                        return {
-                            "rows": [],
-                            "error": (
-                                "SQL rejected: only known physical tables "
-                                "are allowed"
-                            ),
-                        }
-
-                    # Wildcards over payload-bearing tables could select BLOB
-                    # or raw columns even when no column name is written.
-                    if (
-                        table_names.intersection(_ASSISTANT_SENSITIVE_TABLES)
-                        and ast_info["has_star"]
-                    ):
-                        return {
-                            "rows": [],
-                            "error": (
-                                "SQL rejected: wildcard projections over raw "
-                                "payload tables are not allowed"
-                            ),
-                        }
-
-                    bounded_sql = (
-                        "SELECT * FROM ("
-                        + execution_sql
-                        + f") AS _assistant_result LIMIT {row_limit + 1}"
-                    )
-                    # Describe first so TIMESTAMPTZ values can be cast to
-                    # VARCHAR inside DuckDB before fetchmany() asks its
-                    # Python adapter to import optional pytz support.
-                    schema = cursor.execute(
-                        "DESCRIBE " + bounded_sql
+                def _physical_main_tables(
+                    names: set[str],
+                ) -> set[str]:
+                    if not names:
+                        return set()
+                    placeholders = ",".join("?" for _ in names)
+                    catalog_rows = cursor.execute(
+                        "SELECT table_name, table_type "
+                        "FROM information_schema.tables "
+                        "WHERE table_schema = 'main' "
+                        f"AND table_name IN ({placeholders})",
+                        sorted(names),
                     ).fetchall()
-                    fetch_sql = _assistant_timestamptz_cast_query(
-                        bounded_sql, schema
-                    ) or bounded_sql
-                    cursor.execute(fetch_sql)
-                    columns = [d[0] for d in (cursor.description or [])]
-                    raw_rows = cursor.fetchmany(row_limit + 1)
-                    rows = [
-                        {
-                            column: _coerce_value(value)
-                            for column, value in zip(columns, row)
-                        }
-                        for row in raw_rows[:row_limit]
-                    ]
-                    result: dict[str, Any] = {"rows": rows}
-                    if len(raw_rows) > row_limit:
-                        result["truncated"] = True
-                        result["notice"] = f"Results truncated to {row_limit} rows."
-                    return result
-                finally:
-                    # Keep cleanup under the writer lock. Releasing it before
-                    # timer cancellation/cursor close permits a new query to
-                    # race with the interrupt callback.
-                    if timer is not None:
-                        timer.cancel()
-                        timer.join(timeout=0.2)
-                    try:
-                        cursor.close()
-                    except Exception:
-                        pass
-        except Exception as exc:
-            if timed_out.is_set():
-                return {
-                    "rows": [],
-                    "error": f"query timed out after {timeout:g} seconds",
+                    return {
+                        str(row[0]).lower()
+                        for row in catalog_rows
+                        if str(row[1]).upper() == "BASE TABLE"
+                    }
+
+                ast_tables = set(ast_info["tables"])
+                # Check AST-resolved names before get_table_names() can
+                # bind the user SQL. This rejects views, temporary objects,
+                # and file-like BASE_TABLE names before any external
+                # source resolution occurs.
+                if (
+                    ast_tables
+                    and _physical_main_tables(ast_tables) != ast_tables
+                ):
+                    return {
+                        "rows": [],
+                        "error": (
+                            "SQL rejected: only known physical tables "
+                            "are allowed"
+                        ),
+                    }
+
+                query_sql = str(validated_sql).strip().rstrip(";").strip()
+                runtime_prefix = _assistant_runtime_ctes(cursor, ast_tables)
+                execution_sql = (
+                    runtime_prefix + query_sql + ") AS _assistant_runtime_query"
+                    if runtime_prefix
+                    else query_sql
+                )
+                # Bind the generated projection, not the original query:
+                # runtime is a trusted derived column and is absent from
+                # the physical sessions/events schemas.
+                table_names = {
+                    _assistant_normalize_table_name(name)
+                    for name in cursor.get_table_names(execution_sql)
                 }
+                if ast_info["has_source"] and not table_names:
+                    return {
+                        "rows": [],
+                        "error": "SQL rejected: no allowlisted table was resolved",
+                    }
+                unknown_tables = table_names.difference(_ASSISTANT_ALLOWED_TABLES)
+                if unknown_tables:
+                    return {
+                        "rows": [],
+                        "error": "SQL rejected: referenced table is not allowlisted",
+                    }
+
+                # Verify that every resolved name is a physical main
+                # table. This rejects views and temporary shadow tables.
+                if (
+                    table_names
+                    and _physical_main_tables(table_names) != table_names
+                ):
+                    return {
+                        "rows": [],
+                        "error": (
+                            "SQL rejected: only known physical tables "
+                            "are allowed"
+                        ),
+                    }
+
+                # Wildcards over payload-bearing tables could select BLOB
+                # or raw columns even when no column name is written.
+                if (
+                    table_names.intersection(_ASSISTANT_SENSITIVE_TABLES)
+                    and ast_info["has_star"]
+                ):
+                    return {
+                        "rows": [],
+                        "error": (
+                            "SQL rejected: wildcard projections over raw "
+                            "payload tables are not allowed"
+                        ),
+                    }
+
+                bounded_sql = (
+                    "SELECT * FROM ("
+                    + execution_sql
+                    + f") AS _assistant_result LIMIT {row_limit + 1}"
+                )
+                # Describe first so TIMESTAMPTZ values can be cast to
+                # VARCHAR inside DuckDB before fetchmany() asks its
+                # Python adapter to import optional pytz support.
+                schema = cursor.execute(
+                    "DESCRIBE " + bounded_sql
+                ).fetchall()
+                fetch_sql = _assistant_timestamptz_cast_query(
+                    bounded_sql, schema
+                ) or bounded_sql
+                cursor.execute(fetch_sql)
+                columns = [d[0] for d in (cursor.description or [])]
+                raw_rows = cursor.fetchmany(row_limit + 1)
+                rows = [
+                    {
+                        column: _coerce_value(value)
+                        for column, value in zip(columns, row)
+                    }
+                    for row in raw_rows[:row_limit]
+                ]
+                result: dict[str, Any] = {"rows": rows}
+                if len(raw_rows) > row_limit:
+                    result["truncated"] = True
+                    result["notice"] = f"Results truncated to {row_limit} rows."
+                return result
+        except Cancelled:
+            raise
+        except TimeoutError:
+            return {"rows": [], "error": f"query timed out after {timeout:g} seconds"}
+        except Exception as exc:
             safe_error = _assistant_safe_sql_error(exc)
             log.warning("local store: assistant query failed: %s", safe_error)
             return {"rows": [], "error": safe_error}
