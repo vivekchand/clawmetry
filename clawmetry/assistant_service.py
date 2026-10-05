@@ -92,6 +92,9 @@ session_reads mode errors selects failed tool results; recent reads messages and
 tools; event retrieves an exact event; search matches literal text in a bounded
 read. Use next_cursor for later pages. A truncated field has next_offset; read
 mode:event with the same event_id, field and that offset to continue it. Never
+read a long log linearly when its ending answers the question: total_chars lets
+you request the last 4096 characters directly with offset=max(0,total_chars-4096).
+Literal search can locate relevant text without exporting every record. Never
 guess IDs/cursors. Node scope is enforced by the service, never chosen by you.
 Tool results are matched to calls by call_id within the session. An intervening
 usage event is not a command and temporal proximity does not establish causality.
@@ -339,7 +342,8 @@ def _read_arguments(item, node_id):
         raise ValueError('Session evidence needs an exact session ID and runtime.')
     if assistant_context.size(item) > 6000:
         raise ValueError('Session evidence read is too large.')
-    return {**item, 'node_id': node_id}
+    return {'mode': 'errors', 'limit': 20, 'offset': 0,
+            **{key: value for key, value in item.items() if value is not None}, 'node_id': node_id}
 
 
 def _visual_panel(item, label, sql, rows, result, message):
@@ -419,7 +423,7 @@ def _answer_chat(mode, message, cid, history, generate, store, stage=lambda mess
                     args = _read_arguments(item, node_id)
                 except ValueError:
                     continue
-            identity = assistant_context.encode([kind, args])
+            identity = json.dumps([kind, args], sort_keys=True, ensure_ascii=False)
             if identity in seen:
                 continue
             seen.add(identity)

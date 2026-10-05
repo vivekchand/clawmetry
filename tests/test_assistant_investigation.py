@@ -284,6 +284,46 @@ def test_phase_timer_reaps_real_harness_child_and_keeps_parent_usable(tmp_path, 
     parent.check()
 
 
+def test_redirect_recomputes_tcp_timeout_from_remaining_phase_budget(monkeypatch):
+    import socket
+    parent = StreamJob(lambda: None)
+    phase = PhaseControl(parent, time.monotonic() + 1)
+    captured = []
+    original = socket.create_connection
+    def connect(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+        captured.append((timeout, phase.deadline - time.monotonic()))
+        return original(address, timeout, source_address)
+    monkeypatch.setattr(socket, 'create_connection', connect)
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            time.sleep(.15)
+            self.send_response(302)
+            self.send_header('Location', '/answer')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            self.wfile.write(b'ok')
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=.02), daemon=True)
+    thread.start()
+    try:
+        with phase, http_response(f'http://127.0.0.1:{server.server_port}/', payload=b'',
+                                  headers={}, control=phase) as response:
+            assert response.read() == b'ok'
+        assert len(captured) == 2
+        assert captured[1][0] < captured[0][0] - .1
+        assert all(timeout <= remaining + .005 for timeout, remaining in captured)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(1)
+
+
 def test_reader_phase_expiry_synthesizes_existing_evidence(monkeypatch):
     monkeypatch.setattr(service, '_planner_system', lambda store: service._PLAN)
     calls = []
