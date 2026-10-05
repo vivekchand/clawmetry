@@ -761,6 +761,30 @@ def test_hint_matches_excludes_language_servers():
     assert pc._hint_matches(("dsh",), "dsh", "dsh --resume x") is True
 
 
+@pytest.mark.parametrize("use_psutil", [False, True])
+def test_codex_shared_desktop_server_cannot_be_signalled_by_session_cwd(monkeypatch, use_psutil):
+    """The shared app-server is not the process for an individual Work task."""
+    from types import SimpleNamespace
+
+    argv = ["/Applications/ChatGPT.app/Contents/Resources/codex", "app-server"]
+    process = SimpleNamespace(info={"pid": 12345, "name": "codex", "cmdline": argv},
+                              cwd=lambda: "/project")
+    if use_psutil:
+        monkeypatch.setattr(pc, "_psutil", SimpleNamespace(process_iter=lambda fields: [process]))
+    else:
+        monkeypatch.setattr(pc, "_psutil", None)
+        monkeypatch.setattr(pc, "_all_procs_ps", lambda: [(12345, 1, 12345)])
+        monkeypatch.setattr(pc, "_proc_cmdline", lambda pid: argv)
+        monkeypatch.setattr(pc, "_proc_cwd", lambda pid: "/project")
+    assert pc.resolve_by_cwd("codex", "/project")["reason"] == "no_matching_process"
+    calls = []
+    result = pc._guarded("stop", "codex", "desktop-thread", "/project",
+                         lambda pid: calls.append(pid))
+    assert result["ok"] is False
+    assert calls == []
+    assert pc._hint_matches(("codex",), "codex", "codex --resume native-thread") is True
+
+
 def test_new_runtimes_are_supported():
     for rt in ("copilot", "qwen_code", "pi", "grok", "deepseek_harness", "kimi"):
         assert rt in pc.SUPPORTED_RUNTIMES, rt

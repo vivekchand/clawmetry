@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-10-05",
+    "synced_at": "2026-10-06",
     "synced_by": "codex"
   },
   "_scope": [
@@ -34,7 +34,8 @@
     "AC-STE-002.",
     "AC-STE-003.",
     "AC-STE-005.",
-    "AC-ASSIST-"
+    "AC-ASSIST-",
+    "AC-CHATGPT-"
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -2550,6 +2551,24 @@
       "doc": "Conversational dashboards grounded in local agent evidence",
       "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
       "text": "The same investigation shall work locally and through the existing encrypted hosted Assistant relay. Reads shall remain bounded, cancellable, session/node/runtime scoped, and read-only. Credentials and internal reasoning shall not be exported; arbitrary SQL payload access, filesystem reads and command execution remain unavailable."
+    },
+    {
+      "id": "AC-CHATGPT-001.2",
+      "doc": "ChatGPT desktop activity with accurate product attribution",
+      "doc_id": "3a9a6ab2-212d-486a-bd49-32baf2367088",
+      "text": "When the same native session is readable by both Codex and ChatGPT integration paths, the system shall ingest it under one runtime and count each recorded usage amount once."
+    },
+    {
+      "id": "AC-CHATGPT-001.4",
+      "doc": "ChatGPT desktop activity with accurate product attribution",
+      "doc_id": "3a9a6ab2-212d-486a-bd49-32baf2367088",
+      "text": "When a desktop mode or hosted conversation has no validated accessible local transcript, the system shall explain that coverage limit without representing it as monitored or claiming inactivity."
+    },
+    {
+      "id": "AC-CHATGPT-001.7",
+      "doc": "ChatGPT desktop activity with accurate product attribution",
+      "doc_id": "3a9a6ab2-212d-486a-bd49-32baf2367088",
+      "text": "When the operator selects ChatGPT locally or in the hosted dashboard, its data shall be backed by the daemon-owned DuckDB and existing encrypted snapshot path, and shall obey the paid runtime entitlement."
     }
   ]
 }

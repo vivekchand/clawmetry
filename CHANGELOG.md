@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Candidate: local ChatGPT Work coverage through the shared Codex runtime
+
+- The runtime selector names local Work coverage as Codex / ChatGPT Work and states that regular Chat and cloud Work conversations are not monitored.
+- The paired Pro change discovers indexed native rollouts, retains desktop task titles and keeps existing session and usage identities.
+- A real desktop conversation was verified through isolated daemon ingestion, DuckDB and the served Sessions view. A fresh task explicitly started in local Work, platform verification and licensed hosted delivery remain release gates.
+
 ### Added: the replay of a Pi conversation opens its other branches
 
 - **Why:** a Pi conversation that was branched replayed its active branch only. The notice above the replay counted the entries it left out, and there was no way to read them (clawmetry-pro#135).

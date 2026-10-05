@@ -174,7 +174,7 @@ RUNTIME_LABELS = {
     "openclaw": "OpenClaw",
     "nemoclaw": "NemoClaw",
     "claude_code": "Claude Code",
-    "codex": "Codex",
+    "codex": "Codex / ChatGPT Work",
     "cursor": "Cursor",
     "aider": "Aider",
     "goose": "Goose",
