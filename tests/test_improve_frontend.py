@@ -263,3 +263,45 @@ window.CLOUD_TOKEN='other-account';encryptionKey='other-key';
 await unlock();
 assert.equal(calls.length,1);
 ''')
+
+
+def test_explain_hands_off_exact_reference_and_never_opens_setup():
+    run_node(r'''
+const reference={session_id:'codex:original',runtime:'codex',event_id:'events:message'};
+fetch=async()=>response({...payload(), signals:[{...payload().signals[0],investigation:reference}]});
+let handoffs=[];
+window.assistantExplainSignal=(ref,excerpt)=>{handoffs.push({ref,excerpt});return true;};
+window.switchTab=()=>{throw Error('Improve must use the Assistant handoff');};
+await loadImprove();
+assert.match(nodes['improve-list'].innerHTML,/Explain with Assistant/);
+improveExplain('codex');
+assert.deepEqual(handoffs,[{ref:reference,excerpt:'Always keep changes small.'}]);
+encryptionKey='new-key';
+improveExplain('codex');await loadImprove();
+assert.equal(handoffs.length,1,'stale evidence must not open on a new key');
+''')
+
+
+def test_old_snapshot_does_not_guess_a_session_from_its_excerpt():
+    run_node(r'''
+nodes['improve-review-status']=element();
+nodes['improve-review-explain']=element();
+window.assistantExplainSignal=()=>{throw Error('missing reference must not infer');};
+await loadImprove();improveExplain('codex');
+assert.match(nodes['improve-review-status'].textContent,/Update ClawMetry/);
+assert.equal(nodes['improve-review-explain'].disabled,true);
+''')
+
+
+def test_unsupported_runtime_explains_the_missing_attachment():
+    run_node(r'''
+nodes['improve-review-status']=element();
+nodes['improve-review-explain']=element();
+fetch=async()=>response({...payload(),signals:[{...payload().signals[0],investigation:null,
+ investigation_unavailable:'The recorded context for this runtime cannot yet be attached to Assistant.'}]});
+window.assistantExplainSignal=()=>{throw Error('unsupported reference must not infer');};
+await loadImprove();improveExplain('codex');
+assert.match(nodes['improve-review-status'].textContent,/cannot yet be attached/);
+assert.doesNotMatch(nodes['improve-review-status'].textContent,/Update ClawMetry/);
+assert.equal(nodes['improve-review-explain'].disabled,true);
+''')

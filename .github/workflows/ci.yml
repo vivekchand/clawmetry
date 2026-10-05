@@ -1015,6 +1015,8 @@ jobs:
           tests/test_assistant_cloud_states.py
           tests/test_assistant_pipeline.py
           tests/test_assistant_investigation.py
+          tests/test_assistant_improve.py
+          tests/test_improve_assistant_frontend.py
           tests/test_assistant_evidence.py
           tests/test_assistant_evidence_frontend.py
           tests/test_custom_dashboard_panels.py

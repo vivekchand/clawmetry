@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 from clawmetry.dives_prompt import build_schema_descriptor
 from clawmetry import assistant_managed as managed
-from clawmetry import assistant_providers, assistant_stream, assistant_context
+from clawmetry import assistant_providers, assistant_stream, assistant_context, assistant_improve
 from clawmetry.assistant_phase import PhaseControl, PhaseExpired
 from clawmetry.harness import find_claude_cli
 from routes.advisor import _load_anthropic_auth
@@ -311,7 +311,7 @@ def _stream_generate(job, mode, credential, system, prompt, stream_answer=True):
     executable = find_claude_cli() if mode == "claude_cli" else None
     if mode == "claude_cli" and not executable:
         raise ValueError("The Claude harness is unavailable.")
-    synthesis = stream_answer and system == _SYNTHESIS
+    synthesis = stream_answer and system.startswith(_SYNTHESIS)
     scrubber = assistant_stream.StreamScrubber(
         _scrub, secret=credential if mode == "anthropic" else None,
     )
@@ -364,7 +364,7 @@ def _visual_panel(item, label, sql, rows, result, message):
 
 
 def _answer_chat(mode, message, cid, history, generate, store, stage=lambda message: None,
-                 streaming_answer=False, *, node_id='local', control=None):
+                 streaming_answer=False, *, node_id='local', control=None, improve=None):
     from clawmetry.redaction import scrub_export_payload
 
     def export(value):
@@ -375,11 +375,35 @@ def _answer_chat(mode, message, cid, history, generate, store, stage=lambda mess
     context = {'today': observed_at[:10], 'observed_at': observed_at, 'scope': _SCOPE,
                'conversation': assistant_context.history_context(history, export),
                'question': export(message)}
+    prior_review = next((m.get('improve') for m in reversed(history)
+                         if m.get('role') == 'user' and m.get('improve')), None)
+    if improve is None and prior_review:
+        try:
+            prior_review = assistant_improve.validate_reference(prior_review)
+        except ValueError:
+            prior_review = None
+        if prior_review:
+            context['improve_review'] = {**prior_review, 'source': 'Earlier Improve request',
+                'coverage_note': 'Retrieve fresh evidence for follow-ups; earlier proposals are not applied or verified changes.'}
     evidence, panels, seen = [], [], set()
     plan, stop_reason = {}, 'ready'
     planner_system = _planner_system(store)
     read_deadline = control.deadline - 45 if control else float('inf')
     reads = 0
+    if improve is not None:
+        try:
+            review, initial = assistant_improve.seed_review(
+                store, improve, node_id, deadline=read_deadline, control=control, stage=stage)
+        except ValueError as exc:
+            raise _ChatFailure(str(exc), 409) from None
+        context['improve_review'] = review
+        context['scope'] = 'Selected ' + review['runtime'] + ' conversation on this node'
+        for args, result in initial:
+            evidence.append(_session_evidence_entry(args, result))
+            seen.add(json.dumps(['session_evidence', args], sort_keys=True, ensure_ascii=False))
+        reads = len(initial)
+    if 'improve_review' in context:
+        planner_system += assistant_improve.GUIDANCE
     for round_index in range(3):
         if control:
             control.check()
@@ -461,14 +485,7 @@ def _answer_chat(mode, message, cid, history, generate, store, stage=lambda mess
             else:
                 # Already strictly redacted before field offsets by the reader.
                 # A second string truncation here would make next_offset lie.
-                rows = result.get('items', [])
-                entry = {'kind': kind, 'label': 'Session details', 'read': args,
-                         'rows': rows if isinstance(rows, list) else [], 'visual': False,
-                         'coverage': {key: result.get(key) for key in
-                                      ('scope', 'coverage', 'next_cursor', 'bytes', 'schema_version')},
-                         'next_cursor': result.get('next_cursor'), 'error': result.get('error'),
-                         'truncated': bool(result.get('next_cursor') or
-                                           result.get('coverage', {}).get('scan_limited'))}
+                entry = _session_evidence_entry(args, result)
             evidence.append(entry)
         if not round_reads or plan.get('investigate') is not True or reads >= 8:
             break
@@ -482,18 +499,35 @@ def _answer_chat(mode, message, cid, history, generate, store, stage=lambda mess
             synthesis_context['no_evidence'] = (
                 'No evidence was retrieved. A greeting or general guidance is possible; '
                 'claims about observed sessions are not.')
-        answer = generate(_SYNTHESIS, assistant_context.prompt_context(
-            synthesis_context, evidence, _SYNTHESIS, mode))
+        synthesis_system = _SYNTHESIS + (assistant_improve.GUIDANCE if 'improve_review' in context else '')
+        answer = generate(synthesis_system, assistant_context.prompt_context(
+            synthesis_context, evidence, synthesis_system, mode))
     else:
         answer = plan.get('answer') or 'I could not retrieve evidence for that question. Try asking about a specific session.'
     answer = _scrub(str(answer))[:6000]
     sources = assistant_context.saved_sources(evidence)
     panels = assistant_context.bound_panels(panels)
     response = {'conversation_id': cid, 'answer': answer, 'panels': panels, 'sources': sources,
-                'provider': mode, 'scope': _SCOPE}
-    messages = history + [{'role': 'user', 'content': _scrub(message)},
+                'provider': mode, 'scope': context['scope']}
+    if improve is not None:
+        response['title'] = 'Explain: ' + _scrub(context['improve_review']['selected_message'])[:90]
+    user_message = {'role': 'user', 'content': _scrub(message)}
+    if improve is not None:
+        user_message['improve'] = assistant_improve.validate_reference(improve)
+    messages = history + [user_message,
                 {'role': 'assistant', 'content': answer, 'panels': panels, 'sources': sources}]
     return response, messages[-50:]
+
+
+def _session_evidence_entry(args, result):
+    rows = result.get('items', [])
+    return {'kind': 'session_evidence', 'label': 'Session details', 'read': args,
+            'rows': rows if isinstance(rows, list) else [], 'visual': False,
+            'coverage': {key: result.get(key) for key in
+                         ('scope', 'coverage', 'next_cursor', 'bytes', 'schema_version')},
+            'next_cursor': result.get('next_cursor'), 'error': result.get('error'),
+            'truncated': bool(result.get('next_cursor') or
+                              result.get('coverage', {}).get('scan_limited'))}
 
 
 class _SchemaStore:
@@ -541,6 +575,11 @@ def validate_chat(payload):
     cid = payload.get('conversation_id')
     if cid is not None and (not isinstance(cid, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}', cid)):
         raise _ChatFailure('Invalid conversation.', 400)
+    if 'improve' in payload:
+        try:
+            assistant_improve.validate_reference(payload['improve'])
+        except ValueError as exc:
+            raise _ChatFailure(str(exc), 400) from None
 
 
 class AssistantService:
@@ -588,10 +627,10 @@ class AssistantService:
             response, messages = _answer_chat(
                 mode, payload['message'].strip(), cid, history,
                 generate, self.call, control.status, streaming_answer=payload.get('stream') is True,
-                node_id=self.node_id, control=control,
+                node_id=self.node_id, control=control, improve=payload.get('improve'),
             )
             return Outcome(response, mutation={'kind': 'conversation', 'conversation_id': cid,
-                                                'title': title, 'messages': messages})
+                                                'title': response.get('title') or title, 'messages': messages})
         if operation == 'status':
             return Outcome(self.status(control))
         if operation == 'conversations_list':
@@ -712,6 +751,7 @@ class AssistantService:
                     {'id': 'managed', 'label': 'ClawMetry credits', 'available': bool(credit.get('available'))}],
                 'managed': credit, 'data_available': data_available, 'message': message,
                 'offline': offline, 'egress_suppressed': offline, 'scope': _SCOPE,
+                'capabilities': {'improve_investigation': True},
                 'data_notice': 'Relevant query results are sent to your selected AI provider. Conversations and saved panels stay on this machine.'}
 
 

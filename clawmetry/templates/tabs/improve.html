@@ -4,7 +4,7 @@
       <div class="cm-improve-hero-copy">
         <div class="cm-improve-kicker"><span class="cm-improve-flower" aria-hidden="true"></span>GUIDANCE LOOP</div>
         <h2>Turn repeated friction into better defaults</h2>
-        <p>ClawMetry watches for corrections, durable preferences, and repeated frustration across your agent conversations. Review the evidence before changing setup files.</p>
+        <p>Understand what happened in your agent conversations. Ask Assistant to explain the evidence and suggest a way to prevent a repeat. Then decide what to check next.</p>
       </div>
       <div class="cm-improve-hero-note"><strong>Read-only candidates</strong><span>No files change from this view.</span></div>
     </section>
@@ -66,15 +66,15 @@
       <div>
         <div class="cm-improve-review-label">Signal profile</div>
         <div id="improve-review-profile" class="cm-improve-review-profile"></div>
-        <div class="cm-improve-review-label">Likely destination</div>
+        <div class="cm-improve-review-label">From understanding to improvement</div>
         <div id="improve-review-destination" class="cm-improve-destination"></div>
         <div class="cm-improve-review-label cm-improve-review-label-next">Next step</div>
-        <p class="cm-improve-review-next">Inspect the relevant instruction, skill, command, agent, or hook in Setup before promoting a change.</p>
+        <p class="cm-improve-review-next">Start with an explanation of this conversation. Then review a prevention step and how to check whether it helps in a future run.</p>
       </div>
     </div>
     <div class="cm-improve-modal-actions">
       <button type="button" class="cm-improve-secondary-button" onclick="improveCloseReview()">Keep reviewing</button>
-      <button type="button" class="cm-improve-primary-button" onclick="improveOpenSetup()">Open Setup</button>
+      <button type="button" id="improve-review-explain" class="cm-improve-primary-button" onclick="improveExplain()">Explain with Assistant</button>
     </div>
   </section>
 </div>

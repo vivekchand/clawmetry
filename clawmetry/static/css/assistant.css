@@ -47,6 +47,7 @@ body.cm-assistant-active #cm-runtime-chip-menu { display: none !important; }
 .cm-assistant-composer { order: 1; position: relative; z-index: 4; margin: 0; padding: 18px; border: 1px solid var(--bg-accent); border-radius: 18px; background: var(--bg-secondary); box-shadow: 0 4px 24px color-mix(in srgb, var(--bg-accent) 7%, transparent); transition: box-shadow .15s ease; }
 .cm-assistant-composer:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--bg-accent) 16%, transparent); }
 .cm-assistant-input-row { display: grid; grid-template-columns: 1fr auto auto; align-items: end; gap: 10px; }
+.cm-assistant-improve-context { margin-bottom: 12px; color: var(--text-secondary); font-size: 12px; }
 .cm-assistant-input-row textarea { grid-column: 1 / -1; width: 100%; min-height: 80px; max-height: 180px; box-sizing: border-box; padding: 0; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 16px; line-height: 1.6; }
 .cm-assistant-input-row textarea::placeholder { color: var(--text-muted); }
 .cm-assistant-voice, .cm-assistant-send { display: inline-flex; align-items: center; justify-content: center; height: 40px; flex-shrink: 0; border-radius: 11px; cursor: pointer; font: inherit; font-size: 12px; font-weight: 650; }

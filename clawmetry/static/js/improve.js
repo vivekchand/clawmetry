@@ -5,6 +5,7 @@
 var _cmImproveState = window._cmImproveState || { kind: 'all', data: null, loaded: false };
 var _improveRequest = 0, _improvePending = null, _improveController = null;
 var _improveCacheScope = null;
+var _improveReviewId = null;
 window._cmImproveState = _cmImproveState;
 
 function currentScope() {
@@ -118,7 +119,7 @@ function sameScope(left, right) {
       + '<div class="cm-improve-card-heading"><strong>' + escapeHtml(kindLabel(signal.kind)) + '</strong><span>' + escapeHtml(formatWhen(signal.last_seen)) + '</span></div>'
       + '<span class="cm-improve-confidence">' + escapeHtml(signal.confidence || 'medium') + '</span></div>'
       + '<p class="cm-improve-excerpt">' + escapeHtml(signal.excerpt || '') + '</p>'
-      + '<div class="cm-improve-card-meta"><span>' + escapeHtml(details.join(' · ')) + '</span><span class="cm-improve-card-actions"><span class="cm-improve-card-profile">' + escapeHtml(scope) + (pain ? ' · pain ' + pain + '/5' : '') + '</span><button type="button" onclick="improveToggleEvidence(\'' + escapeHtml(signal.id) + '\')">View evidence</button><button type="button" onclick="improveOpenReview(\'' + escapeHtml(signal.id) + '\')">Review candidate</button></span></div>'
+      + '<div class="cm-improve-card-meta"><span>' + escapeHtml(details.join(' · ')) + '</span><span class="cm-improve-card-actions"><span class="cm-improve-card-profile">' + escapeHtml(scope) + (pain ? ' · pain ' + pain + '/5' : '') + '</span><button type="button" onclick="improveToggleEvidence(\'' + escapeHtml(signal.id) + '\')">View evidence</button><button type="button" onclick="improveExplain(\'' + escapeHtml(signal.id) + '\')">Explain with Assistant</button></span></div>'
       + '<div class="cm-improve-evidence-list" id="improve-evidence-' + escapeHtml(signal.id) + '" hidden>' + evidence
       + (projects ? '<small class="cm-improve-scope">Projects: ' + escapeHtml(projects) + '</small>' : '')
       + (runtimes ? '<small class="cm-improve-scope">Runtimes: ' + escapeHtml(runtimes) + '</small>' : '')
@@ -131,12 +132,8 @@ function sameScope(left, right) {
     return (data.signals || []).find(function(signal) { return signal.id === id; }) || null;
   }
 
-  function reviewDestination(kind) {
-    return ({
-      preference: 'Instruction or skill',
-      correction: 'Instruction, skill, or agent',
-      frustration: 'Evidence first, then the matching setup asset'
-    })[kind] || 'Setup asset';
+  function reviewDestination() {
+    return 'Understand what happened, then decide what would prevent a repeat.';
   }
 
   function reviewEvidenceHtml(signal) {
@@ -196,16 +193,20 @@ function sameScope(left, right) {
     var signal = findSignal(id);
     var modal = document.getElementById('improve-review-modal');
     if (!signal || !modal) return;
+    _improveReviewId = id;
     var title = document.getElementById('improve-review-title');
     var summary = document.getElementById('improve-review-summary');
     var evidence = document.getElementById('improve-review-evidence');
     var profile = document.getElementById('improve-review-profile');
     var destination = document.getElementById('improve-review-destination');
-    if (title) title.textContent = kindLabel(signal.kind) + ' worth reviewing';
+    if (title) title.textContent = 'Understand this moment';
     if (summary) summary.textContent = signal.excerpt || 'A repeated guidance signal was detected in local conversation history.';
     if (evidence) evidence.innerHTML = reviewEvidenceHtml(signal);
     if (profile) profile.innerHTML = reviewProfileHtml(signal);
     if (destination) destination.textContent = reviewDestination(signal.kind);
+    setText('improve-review-status', 'A signal to investigate, not a confirmed cause.');
+    var explain = document.getElementById('improve-review-explain');
+    if (explain) explain.disabled = !signal.investigation || typeof window.assistantExplainSignal !== 'function';
     modal.hidden = false;
     modal.setAttribute('aria-hidden', 'false');
   }
@@ -217,9 +218,19 @@ function sameScope(left, right) {
     modal.setAttribute('aria-hidden', 'true');
   }
 
-  function improveOpenSetup() {
+  function improveExplain(id) {
+    var signal = findSignal(id || _improveReviewId);
+    if (!signal) { loadImprove(true); return; }
+    if (!signal.investigation || typeof window.assistantExplainSignal !== 'function') {
+      improveOpenReview(signal.id);
+      setText('improve-review-status', signal.investigation_unavailable || 'Update ClawMetry on this computer and refresh Improve to attach this conversation.');
+      return;
+    }
     improveCloseReview();
-    if (typeof switchTab === 'function') switchTab('setup');
+    if (!window.assistantExplainSignal(signal.investigation, signal.excerpt)) {
+      improveOpenReview(signal.id);
+      setText('improve-review-status', 'Assistant could not open. Refresh this page and try again.');
+    }
   }
 
   function addRefresh(node) {
@@ -369,6 +380,6 @@ window.improveSetKind = improveSetKind;
 window.improveToggleEvidence = improveToggleEvidence;
 window.improveOpenReview = improveOpenReview;
 window.improveCloseReview = improveCloseReview;
-window.improveOpenSetup = improveOpenSetup;
+window.improveExplain = improveExplain;
 window.loadImprove = loadImprove;
 }());

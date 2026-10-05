@@ -64,6 +64,19 @@ def test_local_route_and_encrypted_slice_are_identical(store, monkeypatch):
     assert datetime.fromisoformat(local['generated_at']).tzinfo
     assert local['capabilities']['apply'] is False
     assert local['signals'][0]['evidence'][0]['runtime'] == 'codex'
+    assert local['signals'][0]['investigation'] == {
+        'session_id': 'codex:one', 'runtime': 'codex', 'event_id': 'events:one'}
+
+
+@pytest.mark.parametrize('runtime,session', [('nemoclaw', 'sandbox-session'), ('opendots', 'opendots:one')])
+def test_unreadable_runtime_reference_does_not_offer_an_ungrounded_diagnosis(store, runtime, session):
+    seed(store, 'one', runtime=runtime, session=session)
+    store._conn.execute('UPDATE events SET agent_type=? WHERE id=?', [runtime, 'one'])
+    body = store.query_improve_candidates(runtime=runtime)
+    signal = body['signals'][0]
+    assert signal['investigation'] is None
+    assert 'cannot yet be attached' in signal['investigation_unavailable']
+    assert signal['evidence'][0]['excerpt'] == 'Always keep answers concise.'
 
 
 def test_quiet_runtime_survives_busy_runtime_and_assistant_traffic(store):
@@ -365,6 +378,7 @@ def test_output_byte_budget_retains_fair_scoped_slices(store, monkeypatch):
         body = bundle['improveByRuntime'][rt]
         assert body['signals'] and body['coverage']['candidates_truncated']
         assert all(s['runtimes']==[rt] for s in body['signals'])
+        assert all(s['investigation']['runtime']==rt for s in body['signals'])
         assert body['candidate_count'] == len(body['signals'])
 
 
