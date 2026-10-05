@@ -233,7 +233,7 @@ def test_chat_normalizes_mixed_panel_shapes_without_executing_invalid_items(clie
                     "x": "missing",
                     "y": "also_missing",
                 },
-                {"title": "Evidence only", "sql": "SELECT value FROM metrics", "visual": False},
+                {"title": "Evidence only", "sql": "SELECT value FROM metrics LIMIT 1", "visual": False},
                 "malformed query item",
                 {"title": "Must be capped", "sql": "SELECT should_not_run", "visual": True},
             ],
@@ -244,6 +244,7 @@ def test_chat_normalizes_mixed_panel_shapes_without_executing_invalid_items(clie
         results={
             "SELECT day, tokens FROM usage": {"rows": [{"day": "today", "tokens": 7}]},
             "SELECT value FROM metrics": {"rows": [{"value": 2}]},
+            "SELECT value FROM metrics LIMIT 1": {"rows": [{"value": 2}]},
         },
     )
 
@@ -264,7 +265,7 @@ def test_chat_normalizes_mixed_panel_shapes_without_executing_invalid_items(clie
     assert body["panels"][1]["chart_spec"]["y"] is None
     executed_sql = [kwargs["sql"] for method, kwargs in calls if method == "query_assistant_sql"]
     assert "SELECT should_not_run" not in executed_sql
-    evidence = json.loads(generations[-1]["prompt"].split("\nEvidence:\n", 1)[1])
+    evidence = json.loads(generations[-1]["prompt"])["evidence"]
     assert [item["visual"] for item in evidence] == [True, True, False]
     assert "never call them a visual" in generations[-1]["system"]
 

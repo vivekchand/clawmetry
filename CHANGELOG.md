@@ -14,6 +14,13 @@
 - **Verified:** 12 new checks in `tests/replay_tree.test.mjs`. Run on the n8n mapper's output for four executions (a successful Agent run with two model calls and one tool call, a failed model run, a failed code node, a parent with a sub-workflow) and inspected as a rendered image.
 - **Limits:** the reply text of a model call is not repeated in the entry, it stays in the turn below. Arguments and output are cut at 200 characters. Only a runtime whose mapper sets `stage_span_id` on its calls gets the list, today n8n. Not checked in a running dashboard, and in the light theme only.
 
+### Fixed: an assignment that targets a project name is refused instead of stored without effect
+
+- **Why:** `POST /api/projects/assignments` accepted the id of a named project (`prjn_...`) as its target. Spend is moved by the repository or directory a session belongs to, so such an assignment was stored, answered `ok` and moved nothing (#5941).
+- **What:** the request is refused with status 400 and a message that says to use the id of the repository or directory instead. Nothing is stored.
+- **Verified:** 1 new test: the store call and the route both refuse the request, no row is added and the spend stays under the earlier project name. It fails without the change.
+- **Limits:** an assignment of this kind that was stored earlier stays in the history and still has no effect. Renaming a project still means assigning its repository or directory again. The dashboard form already offered repositories and directories only.
+
 ### Added: assign a repository or directory to a project from the Usage tab
 
 - **Why:** listing a repository under a client or project name took a hand-written request to `/api/projects/assignments`. The Cost by Project card could show an assignment and could not make one (#5941).

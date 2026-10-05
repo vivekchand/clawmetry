@@ -1117,6 +1117,114 @@
     return article;
   }
 
+  function evidenceObject(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  }
+
+  function evidenceCount(value) {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+
+  function evidenceNote(parent, text) {
+    parent.appendChild(make('div', 'cm-assistant-panel-description', text));
+  }
+
+  function appendSessionEvidence(parent, source) {
+    var metadata = evidenceObject(source.coverage);
+    var scope = evidenceObject(metadata.scope);
+    var coverage = evidenceObject(metadata.coverage);
+    var read = evidenceObject(source.read);
+    var items = Array.isArray(source.preview) ? source.preview : [];
+    var shown = Math.min(items.length, 20);
+    var returned = evidenceCount(source.rows);
+    var scanned = evidenceCount(coverage.scanned);
+    evidenceNote(parent, 'Showing ' + formatCount(shown) + (shown === 1 ? ' recorded item' : ' recorded items')
+      + (scanned !== null ? ' from ' + formatCount(scanned) + ' records checked' : '') + '.');
+    if (coverage.scan_limited === true || source.truncated === true || items.length > shown) {
+      evidenceNote(parent, 'This read reached a limit. Evidence outside the checked records may be missing from this answer.');
+    }
+    if (metadata.next_cursor) evidenceNote(parent, 'More records remain to be checked beyond this page.');
+    if (returned !== null && returned > shown) {
+      evidenceNote(parent, 'Only ' + formatCount(shown) + ' of ' + formatCount(returned) + ' returned items are included in this answer.');
+    } else if (source.preview_truncated === true) {
+      evidenceNote(parent, 'Some returned evidence is not included in this answer.');
+    }
+    if (!shown) evidenceNote(parent, 'No readable excerpts are included here. This does not establish that nothing was recorded.');
+
+    var sid = typeof read.session_id === 'string' ? read.session_id : scope.session_id;
+    var validSession = typeof sid === 'string' && sid.length > 0 && sid.length <= 4096
+      && !/[\x00-\x1f\x7f-\x9f]/.test(sid) && (!scope.session_id || scope.session_id === sid);
+    var nodeMatches = !window.CLOUD_MODE || !scope.node_id || scope.node_id === window.CLOUD_NODE_ID;
+    if (validSession && nodeMatches && typeof window.openTrail === 'function') {
+      var identity = scopeIdentity(), navigation = state.navigationToken;
+      var open = make('button', 'cm-assistant-panel-button cm-assistant-evidence-open', 'Open session');
+      open.type = 'button';
+      open.addEventListener('click', function () {
+        if (!isMounted() || identity !== scopeIdentity() || navigation !== state.navigationToken) return;
+        window.openTrail(sid);
+      });
+      parent.appendChild(open);
+    }
+
+    var provenance = make('details', 'cm-assistant-evidence-provenance');
+    provenance.appendChild(make('summary', '', 'Read scope'));
+    if (typeof sid === 'string') evidenceNote(provenance, 'Session: ' + sid);
+    if (scope.runtime || read.runtime) evidenceNote(provenance, 'Runtime: ' + displayCategory(scope.runtime || read.runtime));
+    if (scope.since || read.since) evidenceNote(provenance, 'From: ' + (scope.since || read.since));
+    if (scope.until || read.until) evidenceNote(provenance, 'Until: ' + (scope.until || read.until));
+    if (coverage.as_of != null) evidenceNote(provenance, 'Recorded through: ' + coverage.as_of);
+    var filters = {};
+    ['mode', 'event_id', 'search', 'field', 'offset', 'limit'].forEach(function (key) {
+      if (read[key] != null) filters[key] = read[key];
+    });
+    if (Object.keys(filters).length) provenance.appendChild(make('pre', 'cm-assistant-query', JSON.stringify(filters, null, 2)));
+    parent.appendChild(provenance);
+
+    items.slice(0, shown).forEach(function (raw) {
+      var item = evidenceObject(raw);
+      var record = make('details', 'cm-assistant-evidence-item');
+      var title = item.tool_name || (item.role === 'user' ? 'User message' : item.role === 'assistant' ? 'Assistant message' : 'Recorded event');
+      record.appendChild(make('summary', '', String(title) + (item.is_error === true ? ' · Recorded error' : '')
+        + (item.ts != null ? ' · ' + String(item.ts) : '')));
+      var fields = evidenceObject(item.fields), statuses = evidenceObject(item.field_status);
+      var labels = { command: 'Command', arguments: 'Arguments', output: 'Output', error: 'Error', exit_code: 'Exit code', text: 'Message' };
+      var hasFields = false;
+      Object.keys(labels).forEach(function (field) {
+        if (!Object.prototype.hasOwnProperty.call(fields, field) && !Object.prototype.hasOwnProperty.call(statuses, field)) return;
+        hasFields = true;
+        var status = evidenceObject(statuses[field]);
+        var value = fields[field];
+        record.appendChild(make('div', 'cm-assistant-evidence-field', labels[field]));
+        var readable = status.status === 'available' || status.status === 'truncated';
+        if (readable && value != null) {
+          record.appendChild(make('pre', 'cm-assistant-query', typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)));
+        }
+        var notes = { empty: 'Recorded as empty.', missing: 'Not present in this record.', withheld: 'Withheld from this evidence.',
+          unread: 'This field was not read.', unavailable: 'This field is unavailable.' };
+        if (Object.prototype.hasOwnProperty.call(notes, status.status)) evidenceNote(record, notes[status.status]);
+        else if (!readable || value == null) evidenceNote(record, 'Readable content was not supplied for this field.');
+        var offset = evidenceCount(status.offset), next = evidenceCount(status.next_offset), total = evidenceCount(status.total_chars);
+        if (status.status === 'truncated' || (offset !== null && offset > 0)) {
+          var range = offset !== null && next !== null && next > offset
+            ? ' Characters ' + formatCount(offset + 1) + ' to ' + formatCount(next) + (total !== null ? ' of ' + formatCount(total) : '') + '.' : '';
+          evidenceNote(record, 'Only an excerpt is shown.' + range);
+        }
+      });
+      if (!hasFields) evidenceNote(record, 'No readable fields were supplied for this item.');
+      var pairing = evidenceObject(item.pairing);
+      if (pairing.status === 'paired') evidenceNote(record, 'Command and result linked by their recorded call ID.');
+      else if (pairing.status === 'ambiguous') evidenceNote(record, 'More than one command matched the call ID. The command link is unresolved.');
+      else if (pairing.status === 'unresolved') evidenceNote(record, 'No unique command link was established within the checked records.');
+      var origin = make('details', 'cm-assistant-evidence-provenance');
+      origin.appendChild(make('summary', '', 'Record references'));
+      [['Event', item.event_id], ['Call', item.call_id], ['Command event', pairing.call_event_id], ['Result event', pairing.result_event_id]].forEach(function (entry) {
+        if (typeof entry[1] === 'string' && entry[1]) evidenceNote(origin, entry[0] + ': ' + entry[1]);
+      });
+      record.appendChild(origin);
+      parent.appendChild(record);
+    });
+  }
+
   function appendSources(parent, sources) {
     if (!Array.isArray(sources) || !sources.length) return;
     var wrap = make('div', 'cm-assistant-sources');
@@ -1129,30 +1237,34 @@
       summaryRow.appendChild(make('span', '', source.label || 'Local observability data'));
       var rows = source.rows;
       var rowCount = Array.isArray(rows) ? rows.length : (Number(rows) || 0);
-      var previewCount = Array.isArray(source.preview) ? source.preview.length : 0;
-      var analyzedCount = Number(source.preview_rows);
-      var countLabel = formatCount(rowCount) + ' rows';
-      if (previewCount && Number.isFinite(analyzedCount) && analyzedCount > previewCount) {
-        countLabel += ' · preview ' + formatCount(previewCount) + ' of ' + formatCount(analyzedCount);
+      var typed = source.kind === 'session_evidence';
+      var previewCount = Array.isArray(source.preview) ? Math.min(source.preview.length, 20) : 0;
+      var countLabel = formatCount(rowCount) + (typed ? (rowCount === 1 ? ' item' : ' items') : (rowCount === 1 ? ' row' : ' rows'));
+      if (previewCount && rowCount > previewCount) {
+        countLabel += ' · preview ' + formatCount(previewCount) + ' of ' + formatCount(rowCount);
       }
       summaryRow.appendChild(make('span', 'cm-assistant-source-count', countLabel));
       summary.appendChild(summaryRow);
       details.appendChild(summary);
       var sourceBody = make('div', 'cm-assistant-source-body');
       if (source.error) sourceBody.appendChild(make('div', 'cm-assistant-panel-error', 'This source could not be read: ' + String(source.error)));
-      if (Array.isArray(source.preview) && source.preview.length) {
+      if (typed) {
+        appendSessionEvidence(sourceBody, source);
+      } else if (Array.isArray(source.preview) && source.preview.length) {
         appendTable(sourceBody, source.preview, 20);
-        if (Number.isFinite(analyzedCount) && analyzedCount > source.preview.length) {
-          sourceBody.appendChild(make('div', 'cm-assistant-panel-description', 'Showing a redacted preview of ' + formatCount(analyzedCount) + ' rows. The full result count is ' + formatCount(rowCount) + '.'));
+        if (rowCount > previewCount) {
+          evidenceNote(sourceBody, 'Showing ' + formatCount(previewCount) + ' of ' + formatCount(rowCount) + ' returned rows.');
         }
       } else if (Array.isArray(rows) && rows.length) {
         appendTable(sourceBody, rows, 12);
+        if (rows.length > 12) evidenceNote(sourceBody, 'Showing 12 of ' + formatCount(rows.length) + ' returned rows.');
       } else if (typeof rows === 'number') {
-        sourceBody.appendChild(make('div', 'cm-assistant-panel-description', formatCount(rows) + ' rows were used by the assistant. No row-level preview was returned.'));
+        sourceBody.appendChild(make('div', 'cm-assistant-panel-description', formatCount(rows) + ' rows were returned. No row-level preview was returned.'));
       } else {
         sourceBody.appendChild(make('div', 'cm-assistant-panel-description', 'The assistant did not receive row-level source data for this source.'));
       }
-      if (source.sql) {
+      if (!typed && source.truncated === true) evidenceNote(sourceBody, 'The query reached its result limit; more rows may exist.');
+      if (source.sql && !typed) {
         var sqlDetails = make('details', 'cm-assistant-query-details');
         sqlDetails.appendChild(make('summary', '', 'Source query'));
         sqlDetails.appendChild(make('pre', 'cm-assistant-query', String(source.sql)));

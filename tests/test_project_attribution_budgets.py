@@ -221,6 +221,31 @@ def test_assignment_covers_history_and_respects_its_effective_period(store):
     assert usage["totals"]["assigned_cost_usd"] == pytest.approx(2.0)
 
 
+def test_a_named_project_cannot_be_the_target_of_an_assignment(store, client):
+    """A named (prjn_) project is in the catalog, but sessions resolve through
+    their derived project only: an assignment that targets it would be stored
+    and move no spend, so it is refused in words."""
+    from clawmetry import project_attribution as pa
+    _repo(store, "/work/api")
+    _session(store, "claude_code:a", "/work/api")
+    _spend(store, "claude_code:a", "2026-09-01T10:00:00Z", 2.0)
+    assert store.add_project_assignment(match_type="project", match_value=_pid(store, "api"),
+                                        project_name="Client Billing", reason="r")["ok"]
+    named = pa.assigned_project_id("Client Billing")
+    assert named in store._project_catalog()
+    before = len(store.query_project_assignments())
+    bad = store.add_project_assignment(match_type="project", match_value=named,
+                                       project_name="Client B", reason="rename")
+    assert not bad["ok"] and "repository or directory" in bad["error"]
+    r = client.post("/api/projects/assignments", json={
+        "match_type": "project", "match_value": named,
+        "project_name": "Client B", "reason": "rename"})
+    assert r.status_code == 400 and "repository or directory" in r.get_json()["error"]
+    assert len(store.query_project_assignments()) == before
+    usage = _by_label(store.query_project_usage(days=30, now=NOW))
+    assert usage["Client Billing"]["cost_usd"] == pytest.approx(2.0)
+
+
 def test_assignment_needs_an_observed_target_and_a_reason(store):
     _session(store, "claude_code:a", "/work/api")
     bad = store.add_project_assignment(match_type="project", match_value="prj_0000000000000000",
