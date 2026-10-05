@@ -313,6 +313,8 @@ def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
         opener = urllib.request.build_opener(
             HTTPHandler(), HTTPSHandler(context=build_ssl_context()))
         req = urllib.request.Request(url, data=payload, headers=headers, method=method)
-        with opener.open(req, timeout=10) as result:
+        control.check()
+        connect_timeout = min(10, max(0.001, control.deadline - time.monotonic()))
+        with opener.open(req, timeout=connect_timeout) as result:
             control.check()
             yield result

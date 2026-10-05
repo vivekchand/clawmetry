@@ -106,7 +106,7 @@ class Executor:
         self.node_id = node_id or 'local'
         self.epoch = epoch or uuid.uuid4().hex
         self.receipts = Receipts(store)
-        self.service = AssistantService(store)
+        self.service = AssistantService(store, self.node_id)
         self.lock = threading.RLock()
         self.slots = threading.BoundedSemaphore(2)
         self.light_slots = threading.BoundedSemaphore(4)
