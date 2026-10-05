@@ -241,6 +241,68 @@ api.renderTree(off, offMount);
 check('offloaded run says the node runs are not stored',
       offMount.innerHTML.includes('not stored in the database'));
 
+// Model and tool calls of sub-nodes are listed on the node they served,
+// matched to the workflow by the stage they name (clawmetry-pro#132).
+const actTree = JSON.parse(JSON.stringify(wfTree));
+actTree.workflows[0].events[0].payload.nodes.push(
+  {name: 'Calc', type: 'toolCalculator', position: [300, 200]});
+actTree.workflows[0].events.push(
+  {span_id: 'st-calc', parent_span_id: 'wf1', kind: 'workflow.stage', runtime: 'n8n',
+   payload: {node: 'Calc', status: 'success', role: 'tool'}},
+  {span_id: 'st-model2', parent_span_id: 'wf1', kind: 'workflow.stage', runtime: 'n8n',
+   payload: {node: 'Model', status: 'success', role: 'model'}});
+actTree.turns = [{turn_id: 'c1', approvals: [], delegations: [{
+  span_id: 'sp1', label: 'workflow', approvals: [], delegations: [], events: [
+    {span_id: 'x-call', kind: 'tool.call', runtime: 'n8n',
+     payload: {tool: 'other', node: 'Agent', agent_node: 'Agent', stage_span_id: 'st-child'}}],
+}], events: [
+  {span_id: 'c1', kind: 'llm.call', runtime: 'n8n',
+   payload: {node: 'Model', agent_node: 'Agent', model: 'claude-<x>', stage_span_id: 'st-model2'}},
+  {span_id: 'r1', kind: 'llm.response', runtime: 'n8n',
+   payload: {node: 'Model', stage_span_id: 'st-model2',
+             usage: {input_tokens: 120, output_tokens: 30}}},
+  {span_id: 't1', kind: 'tool.call', runtime: 'n8n',
+   payload: {tool: 'toolCalculator', node: 'Calc', agent_node: 'Agent',
+             args: {expr: '<2+2>'}, call_id: 't1', stage_span_id: 'st-calc'}},
+  {span_id: 't1r', kind: 'tool.result', runtime: 'n8n',
+   payload: {tool: 'toolCalculator', call_id: 't1', node: 'Calc',
+             output: 'division by <zero>', is_error: true}},
+  {span_id: 'plain', kind: 'tool.call', runtime: 'n8n', payload: {tool: 'x', node: 'Agent'}},
+]}];
+const actMount = new _StubEl('div');
+api.renderTree(actTree, actMount);
+const actHtml = actMount.innerHTML;
+const agentDetail = actHtml.slice(
+  actHtml.indexOf('class="replay-wf-node-detail" data-node="Agent"'));
+check('agent node lists its calls',
+      (agentDetail.match(/class="replay-wf-call"/g) || []).length === 2);
+check('call counts in the node summary',
+      agentDetail.includes('Model calls: 1 · Tool calls: 1'));
+check('model call names the model and its tokens',
+      agentDetail.includes('claude-&lt;x&gt;') && agentDetail.includes('120 tokens in, 30 out'));
+check('tool call shows its arguments, escaped',
+      agentDetail.includes('{&quot;expr&quot;:&quot;&lt;2+2&gt;&quot;}'));
+check('failed tool call is marked with its output',
+      agentDetail.includes('data-kind="tool" data-error="1"') &&
+      agentDetail.includes('division by &lt;zero&gt;'));
+check('call of another workflow with the same node name is not listed',
+      !agentDetail.includes('>other<'));
+check('failed node detail is open and shows the error',
+      actHtml.includes('data-node="Agent" data-status="error" open') &&
+      agentDetail.includes('class="replay-wf-node-error">boom'));
+check('count marker on the agent node only',
+      (actHtml.match(/class="replay-wf-node-count"/g) || []).length === 1 &&
+      actHtml.includes('class="replay-wf-node-count-text"') );
+check('sub-node has no detail of its own',
+      !actHtml.includes('class="replay-wf-node-detail" data-node="Calc"'));
+check('no raw markup from call text', !actHtml.includes('<zero>') && !actHtml.includes('<2+2>'));
+// Without calls, only the failed node gets a detail entry.
+check('graph without calls lists the failed node only',
+      (wfHtml.match(/class="replay-wf-node-detail"/g) || []).length === 1 &&
+      !wfHtml.includes('replay-wf-node-count'));
+check('workflow with no failure and no call has no details block',
+      !offMount.innerHTML.includes('replay-wf-node-details'));
+
 // In-flight counts on a turn's opening llm.call become header badges, and a
 // fork spawn tags its delegation (clawmetry-pro#123, #4815).
 const inFlightTree = {

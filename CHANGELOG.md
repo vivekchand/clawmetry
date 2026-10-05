@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: a workflow node lists its error and the model and tool calls made for it
+
+- **Why:** the workflow graph showed which node failed, and the reason was only in a hover tooltip, which a touch screen cannot open. The model and tool calls of an n8n Agent node were listed among the turns below the graph, with nothing that tied them to the node (clawmetry-pro#132).
+- **What:** under the graph, each failed node has an entry with its error message, open by default. A node that model or tool sub-nodes served has an entry with one line per call: the sub-node, the model and its token counts, or the tool with its arguments and output, and a mark on a failed call. The node's box in the graph carries the number of calls. A call is matched to the workflow by the stage it names, so a sub-workflow with a node of the same name does not add to the count.
+- **Verified:** 12 new checks in `tests/replay_tree.test.mjs`. Run on the n8n mapper's output for four executions (a successful Agent run with two model calls and one tool call, a failed model run, a failed code node, a parent with a sub-workflow) and inspected as a rendered image.
+- **Limits:** the reply text of a model call is not repeated in the entry, it stays in the turn below. Arguments and output are cut at 200 characters. Only a runtime whose mapper sets `stage_span_id` on its calls gets the list, today n8n. Not checked in a running dashboard, and in the light theme only.
+
 ### Added: an assignment from the Usage tab can have a start date and an end date
 
 - **Why:** the assignment form in the Cost by Project card moved all spend of a repository or directory, past and future. A repository that joined a client project on a known day needed a hand-written request to `/api/projects/assignments` to keep its earlier spend where it was (#5941).
