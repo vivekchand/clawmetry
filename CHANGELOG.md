@@ -22,6 +22,13 @@
 - **Limits:** the card was not opened in a running dashboard. An assignment covers all of a repository's spend, past and future. A start or end date, a single session and removing an assignment are still API only. An earlier assignment is kept in the API and not shown in the card.
 
 
+### Added: the replay says when a conversation has other branches and what Aider does not store
+
+- **Why:** a Pi conversation is a tree. A user can go back to an earlier message and continue from there, and the replay follows the active branch only. An Aider history file holds prompts, replies, confirmations and applied edits, and holds no tool call and no reasoning. The replay showed neither fact, so a branched Pi session and an Aider session both read as the complete record (clawmetry-pro#135).
+- **What:** `/api/replay-tree/<session_id>` has a new field `branches` with `branch_points` and `entries_off_active_path`, taken from the session's `mode.changed` event. It is `null` for a session with no branch point. The replay view shows a notice above the turns with the number of branch points and the number of entries on other branches that are not shown. An Aider replay shows a notice that names what the history file does not hold.
+- **Verified:** 3 new endpoint tests cover the counts, eight payloads without a valid branch point and a later mode event without counts. 8 new renderer checks cover both notices, a session with no hidden entries, counts that are not numbers and other runtimes.
+- **Limits:** this is a notice, not a branch selector. The entries on other branches are not stored in the replay and cannot be opened. The counts appear only for a runtime whose replay mapper sends them. The Pi mapper that does so ships in the Pro adapter package. The notices were not opened in a running dashboard.
+
 ### Fixed: one event with unencodable text stopped every later event from being stored
 
 - **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
