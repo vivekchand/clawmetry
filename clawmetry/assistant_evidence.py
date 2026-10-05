@@ -478,7 +478,8 @@ def _cursor_decode(token, scope, filters):
         for key in (obj['after'], state['upper']):
             if not isinstance(key, list) or len(key) != 2:
                 raise ValueError()
-            _date(key[0]); _string(key[1], 'cursor', 512)
+            _date(key[0])
+            _string(key[1], 'cursor', 512)
         return obj
     except (ValueError, TypeError, KeyError, UnicodeError, OverflowError):
         raise ValueError('Invalid or changed evidence cursor scope') from None
@@ -501,7 +502,8 @@ def read_evidence(store, *, session_id, runtime, node_id, mode='errors', since=N
                   field=None, offset=0, timeout_secs=5, cancel=None):
     """Read one evidence page. ``cancel`` is an internal callable, never wire data."""
     from clawmetry.local_store import _runtime_of_session_id, _NON_OPENCLAW_RUNTIME_PREFIXES, _assistant_read_cursor
-    _string(session_id, 'session', 256); _string(node_id, 'node', 256)
+    _string(session_id, 'session', 256)
+    _string(node_id, 'node', 256)
     _string(runtime, 'runtime', 64)
     if runtime not in {'openclaw', *_NON_OPENCLAW_RUNTIME_PREFIXES} or _runtime_of_session_id(session_id) != runtime:
         raise ValueError('Invalid evidence runtime scope')

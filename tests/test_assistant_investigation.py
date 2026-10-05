@@ -374,3 +374,36 @@ assert.match(sources.textContent, /Characters 501 to 525 of 900/);
 const button=byClass(sources,'cm-assistant-evidence-open')[0];
 button.dispatch('click');assert.deepEqual(opened,[source.read.session_id]);
 """, "const opened=[];context.openTrail=sid=>opened.push(sid);")
+
+
+def test_real_reader_output_is_used_by_service_and_survives_source_rendering(tmp_path, monkeypatch):
+    from tests.test_assistant_evidence import store as evidence_store, call, result, event, SID, NODE
+    fixture = evidence_store.__wrapped__(tmp_path)
+    db = next(fixture)
+    try:
+        call(db, command='python check.py')
+        event(db, 'usage', 'usage', {'extra': {'inputTokens': 42}})
+        result(db, output='Process exited with code 1\nAssertion failed: expected 2, got 3')
+        monkeypatch.setattr(service, '_planner_system', lambda store: service._PLAN)
+        def generate(system, prompt):
+            if system == service._SYNTHESIS:
+                packet = json.loads(prompt)
+                item = packet['evidence'][0]['rows'][0]
+                assert item['fields']['command'] == 'python check.py'
+                assert 'expected 2, got 3' in item['fields']['output']
+                assert item['pairing']['call_event_id'] == 'events:call'
+                return 'python check.py failed its assertion: expected 2, got 3 [1].'
+            return json.dumps({'session_reads': [{'session_id': SID, 'runtime': 'codex'}]})
+        response, messages = service._answer_chat('anthropic', 'Why did it fail?', 'c', [], generate,
+                                                  lambda method, **kw: getattr(db, method)(**kw), node_id=NODE)
+        source = response['sources'][0]
+        assert messages[-1]['sources'] == response['sources']
+        assert source['coverage']['coverage']['returned'] == 1
+        _render(source, r"""
+assert.match(sources.textContent,/python check.py/);
+assert.match(sources.textContent,/expected 2, got 3/);
+assert.match(sources.textContent,/linked by their recorded call ID/);
+assert.match(sources.textContent,/records checked/);
+""")
+    finally:
+        fixture.close()
