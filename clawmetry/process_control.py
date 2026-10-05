@@ -2099,6 +2099,10 @@ def _hint_matches(hints: Tuple[str, ...], name: str, blob: str) -> bool:
     (see ``_ARGV_EXCLUDE``) — they share the runtime's name, run in the
     workspace root, and are never the per-session agent."""
     blob_l = (blob or "").lower()
+    # The desktop app-server hosts many native threads. Its default transport
+    # need not include --stdio, so the generic side-process guard misses it.
+    if "codex" in hints and re.search(r"(?:^|\s)app-server(?:\s|$)", blob_l):
+        return False
     if any(bad in blob_l for bad in _ARGV_EXCLUDE):
         return False
     base = os.path.basename(name or "").lower()
@@ -2684,5 +2688,4 @@ def resume_session(runtime: str, session_id: str = "", cwd: str = "") -> Dict[st
     """Resume a paused family-runtime session (SIGCONT the tree)."""
     return _guarded("resume", runtime, session_id, cwd,
                     lambda pid: resume(pid, runtime))
-
 
