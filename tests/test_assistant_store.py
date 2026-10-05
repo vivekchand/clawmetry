@@ -3,8 +3,65 @@
 from __future__ import annotations
 
 import importlib
+import threading
+import time
 
 import pytest
+
+
+def test_sql_deadline_and_cancel_include_lock_wait(fresh_store):
+    """AC-ASSIST-008.6"""
+    from clawmetry.assistant_stream import Cancelled
+    _module, store = fresh_store
+    locked = threading.Event()
+    release = threading.Event()
+    stop = threading.Event()
+    def hold():
+        with store._write_lock:
+            locked.set()
+            release.wait(2)
+    def check():
+        if stop.is_set():
+            raise Cancelled()
+    thread = threading.Thread(target=hold)
+    thread.start()
+    assert locked.wait(1)
+    try:
+        started = time.monotonic()
+        result = store.query_assistant_sql(sql='SELECT 1', timeout_secs=.05)
+        assert 'timed out' in result['error']
+        assert time.monotonic()-started < .5
+        stop.set()
+        with pytest.raises(Cancelled):
+            store.query_assistant_sql(sql='SELECT 1', cancel=check)
+    finally:
+        release.set()
+        thread.join()
+    assert store.query_assistant_sql(sql='SELECT 1 AS value') == {'rows': [{'value': 1}]}
+
+
+def test_sql_cancel_interrupts_native_query_and_preserves_writer(fresh_store):
+    """AC-ASSIST-008.6"""
+    from clawmetry.assistant_stream import Cancelled
+    _module, store = fresh_store
+    with store._write_lock:
+        store._conn.execute("""INSERT INTO events(id,node_id,event_type,ts,created_at)
+            SELECT 'cancel-' || CAST(i AS VARCHAR), 'local', 'message',
+                '2026-10-04', 1 FROM range(1500) rows(i)""")
+    stop = threading.Event()
+    def check():
+        if stop.is_set():
+            raise Cancelled()
+    timer = threading.Timer(.1, stop.set)
+    timer.start()
+    try:
+        with pytest.raises(Cancelled):
+            store.query_assistant_sql(sql='SELECT COUNT(*) FROM events a,events b,events c', cancel=check)
+    finally:
+        timer.cancel()
+        timer.join()
+    assert store._conn.execute('SELECT 1').fetchone() == (1,)
+    assert not any(t.name == 'assistant-read-deadline' for t in threading.enumerate())
 
 
 @pytest.fixture
