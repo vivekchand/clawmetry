@@ -37,7 +37,8 @@ const document = {
   body: new _StubEl('body'),
 };
 const window = {};
-const fetch = () => Promise.reject(new Error('fetch not exercised'));
+let fetchImpl = () => Promise.reject(new Error('fetch not exercised'));
+const fetch = (...args) => fetchImpl(...args);
 
 const fn = new Function(
   'window', 'document', 'fetch',
@@ -407,6 +408,88 @@ check('aider replay says what the history file does not hold',
 check('other runtimes get no aider notice',
       !noteHtml({runtime: 'claude_code'}).includes('replay-tree-note') &&
       !populatedMount.innerHTML.includes('replay-tree-note'));
+
+// Stored branches (clawmetry-pro#135): the notice lists the branches the
+// mapper stored, a click draws that branch in place of the session, and
+// the way back needs no second request.
+const branchTurn = (prompt) => ({turn_id: 'u1', delegations: [], approvals: [],
+  events: [{span_id: 'u1', kind: 'llm.call', payload: {prompt}, runtime: 'pi'}]});
+const homeTree = {
+  session_id: 'pi:s1', runtime: 'pi', row_count: 1, mode: null, workflows: [],
+  turns: [branchTurn('active prompt')],
+  branches: {branch_points: 1, entries_off_active_path: 3, stored: [
+    {session_id: 'pi:s1::branch-b7', label: 'try <b>sqlite</b>', entries: 3, shared_entries: 2},
+    {session_id: 'pi:s1::branch-c9'},
+    {session_id: ''}, null, {label: 'no id'},
+  ]},
+};
+const clickOn = (mount, attrs) => mount.onclick({target: {
+  getAttribute: (k) => (k in attrs ? attrs[k] : null), parentNode: mount}});
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const branchMount = new _StubEl('div');
+api.renderTree(homeTree, branchMount);
+const listHtml = branchMount.innerHTML;
+check('stored branches are listed as buttons',
+      (listHtml.match(/data-branch-index=/g) || []).length === 2 &&
+      listHtml.includes('Open another branch:'));
+check('branch label is escaped and carries its entry count',
+      listHtml.includes('try &lt;b&gt;sqlite&lt;/b&gt;') && !listHtml.includes('<b>sqlite') &&
+      listHtml.includes('own entries: 3'));
+check('branch without a label gets a numbered name', listHtml.includes('Branch 2'));
+check('with stored branches the notice counts nothing as left out',
+      listHtml.includes('Branch points in this conversation: 1.') && !listHtml.includes('not shown'));
+check('a long branch label is cut so its entry count stays visible',
+      noteHtml({runtime: 'pi', branches: {branch_points: 1, stored: [
+        {session_id: 'b', label: 'y'.repeat(300), entries: 1}]}})
+        .includes('>' + 'y'.repeat(59) + '\u2026 <span'));
+check('no stored branches, no list',
+      !piHtml.includes('replay-tree-branches') &&
+      !noteHtml({runtime: 'pi', branches: {branch_points: 1, stored: 'x'}}).includes('data-branch-index'));
+
+const asked = [];
+fetchImpl = (url) => {
+  asked.push(url);
+  return Promise.resolve({ok: true, json: () => Promise.resolve({
+    session_id: 'pi:s1::branch-b7', runtime: 'pi', row_count: 1, mode: null,
+    workflows: [], branches: null, turns: [branchTurn('abandoned prompt')]})});
+};
+clickOn(branchMount, {'data-branch-index': '0'});
+await settle();
+check('a branch click asks for that branch by its stored session id',
+      asked.length === 1 && asked[0] === '/api/replay-tree/' + encodeURIComponent('pi:s1::branch-b7'));
+check('the branch replaces the session replay',
+      branchMount.innerHTML.includes('abandoned prompt') && !branchMount.innerHTML.includes('active prompt'));
+check('the branch view names the branch, the shared entries and the way back',
+      branchMount.innerHTML.includes('data-note="branch-view"') &&
+      branchMount.innerHTML.includes('Showing another branch: try &lt;b&gt;sqlite&lt;/b&gt;.') &&
+      branchMount.innerHTML.includes('Entries it shares with the active branch: 2.') &&
+      branchMount.innerHTML.includes('data-branch-back'));
+check('the branch view does not list branches again', !branchMount.innerHTML.includes('data-branch-index'));
+clickOn(branchMount, {'data-branch-back': '1'});
+check('back restores the session replay without a request',
+      asked.length === 1 && branchMount.innerHTML.includes('active prompt') &&
+      branchMount.innerHTML.includes('data-branch-index="0"') &&
+      !branchMount.innerHTML.includes('data-note="branch-view"'));
+
+fetchImpl = () => Promise.resolve({ok: false, status: 500});
+clickOn(branchMount, {'data-branch-index': '1'});
+await settle();
+check('a branch that fails to load says so and keeps the session replay',
+      branchMount.innerHTML.includes('data-note="branch-error"') &&
+      branchMount.innerHTML.includes('The branch &quot;Branch 2&quot; could not be loaded.') &&
+      branchMount.innerHTML.includes('active prompt'));
+fetchImpl = () => Promise.resolve({ok: true, json: () => Promise.resolve({row_count: 0, turns: []})});
+clickOn(branchMount, {'data-branch-index': '0'});
+await settle();
+check('a branch with no stored events is reported, one notice at a time',
+      (branchMount.innerHTML.match(/data-note="branch-error"/g) || []).length === 1 &&
+      branchMount.innerHTML.includes('active prompt'));
+clickOn(branchMount, {'data-other': '1'});
+clickOn(branchMount, {'data-branch-index': '9'});
+await settle();
+check('a click elsewhere or on an unknown branch changes nothing',
+      branchMount.innerHTML.includes('active prompt') && !branchMount.innerHTML.includes('data-note="branch-view"'));
+fetchImpl = () => Promise.reject(new Error('fetch not exercised'));
 
 if (fail > 0) {
   console.log(`\n${pass} passed, ${fail} failed`);
