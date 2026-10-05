@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Improved: Assistant investigates recorded commands and errors
+
+- **Why:** debugging answers could say that commands and error messages were unavailable even when the local store held them. Answers were limited to short query previews, and follow-ups lost their source references.
+- **What:** Assistant can read recorded commands and results, match a result to its call, and continue through pages or longer excerpts. Sources show the evidence and its coverage, with a link to the session. The same reader serves local and hosted conversations through the encrypted relay.
+- **Verified:** the Assistant test suite passed 510 tests with two platform skips. Focused investigation, browser and cancellation checks passed; a read-only check recovered all 17 recorded errors and their matching commands from the reported session window. Published and hosted verification follows release.
+- **Limits:** reads remain scoped to the selected node and session, with strict redaction and time and size budgets. Missing, withheld, partial and ambiguous evidence is reported explicitly. Stored outcome labels are not treated as measured quality, and error rates use a stated population.
+
 ### Fixed: an assignment that targets a project name is refused instead of stored without effect
 
 - **Why:** `POST /api/projects/assignments` accepted the id of a named project (`prjn_...`) as its target. Spend is moved by the repository or directory a session belongs to, so such an assignment was stored, answered `ok` and moved nothing (#5941).
