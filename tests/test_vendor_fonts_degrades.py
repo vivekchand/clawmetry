@@ -138,3 +138,33 @@ def test_keyboard_interrupt_is_not_swallowed() -> None:
 
     with pytest.raises(KeyboardInterrupt):
         _run(module, ["vendor_fonts.py", "--check"])
+
+
+def test_drift_capture_is_same_generation_and_still_fails(tmp_path):
+    """Never repair a failed generation using evidence from a second fetch."""
+    module = _load_module()
+    css_path = tmp_path / "fonts.css"
+    css_path.write_text("old generation")
+    module.FONT_SETS = [{"name": "test", "css_path": str(css_path)}]
+    calls = []
+    mirrors = []
+
+    def alternating_build(_spec):
+        calls.append(1)
+        return "failed generation" if len(calls) == 1 else "old generation"
+
+    module.build = alternating_build
+    module._mirror = lambda _spec, text: mirrors.append(text)
+    code, out = _run(module, ["vendor_fonts.py", "--check", "--capture-drift"])
+    assert code == 1
+    assert "DRIFT" in out and "CAPTURE" in out
+    assert calls == [1]
+    assert css_path.read_text() == "failed generation"
+    assert mirrors == ["failed generation"]
+
+
+def test_capture_flag_requires_check():
+    module = _load_module()
+    with pytest.raises(SystemExit) as error:
+        _run(module, ["vendor_fonts.py", "--capture-drift"])
+    assert error.value.code == 2

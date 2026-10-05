@@ -226,7 +226,13 @@ def main() -> int:
         help="verify the checked-in stylesheets match a fresh generation",
     )
     ap.add_argument("--only", help="limit to one font set by name")
+    ap.add_argument(
+        "--capture-drift", action="store_true",
+        help="with --check, write the exact failed generation for CI evidence; still exit nonzero",
+    )
     args = ap.parse_args()
+    if args.capture_drift and not args.check:
+        ap.error("--capture-drift requires --check")
 
     failed = False
     for spec in FONT_SETS:
@@ -273,16 +279,25 @@ def main() -> int:
             if os.path.exists(path):
                 with open(path, encoding="utf-8") as fh:
                     current = fh.read()
+            drifted = False
             if current != generated:
                 print(f"DRIFT  {spec['name']}: {os.path.relpath(path, REPO)} is stale")
                 print("       run: python3 scripts/vendor_fonts.py")
-                failed = True
+                failed = drifted = True
             elif not _mirror_is_current(spec, generated):
                 print(f"DRIFT  {spec['name']}: mirror in {os.path.relpath(spec['mirror_dir'], REPO)} is stale")
                 print("       run: python3 scripts/vendor_fonts.py")
-                failed = True
+                failed = drifted = True
             else:
                 print(f"ok     {spec['name']}: {os.path.relpath(path, REPO)}")
+            if drifted and args.capture_drift:
+                # Preserve the generation that actually failed. A second API
+                # request may hit another Google Fonts edge and return an
+                # older response, making the uploaded repair misleading.
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(generated)
+                _mirror(spec, generated)
+                print(f"CAPTURE {spec['name']}: exact failed generation written; check remains failed")
         else:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as fh:
