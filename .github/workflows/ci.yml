@@ -450,6 +450,20 @@ jobs:
       - name: Unpinned pip installs stay declared
         run: python3 -m pytest tests/test_unpinned_pip_installs_declared.py -q
 
+      # The advisory half of the same bookkeeping. supply-chain.yml used to
+      # audit requirements.txt alone, so the 34 hash-pinned sets the CI jobs
+      # install -- and the pins baked into the published, signed self-hosted
+      # image -- were scanned by nothing. scripts/audit_python_pins.py covers
+      # all 39 declared files; this test holds its two declaration lists to the
+      # tree, so an acceptance whose pin has since moved, or an "unauditable"
+      # entry whose cause is fixed, fails here instead of quietly shrinking the
+      # audit. Checked in THIS job because the supply-chain audit is
+      # non-blocking on pull requests by design, so a rotted declaration would
+      # otherwise surface only on the Monday schedule. Named explicitly because
+      # this job runs FILE LISTS.
+      - name: Python pin audit coverage stays declared
+        run: python3 -m pytest tests/test_python_pin_audit_coverage.py -q
+
       # Red-team corpus: every publicly disclosed agent attack we claim to
       # catch, we still catch. Named explicitly because this job runs FILE
       # LISTS -- a signature added without a line here is checked by nothing.

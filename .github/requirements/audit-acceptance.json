@@ -1,0 +1,115 @@
+{
+  "_README": [
+    "Machine-readable companion to scripts/audit_python_pins.py, which audits EVERY",
+    "declared Python dependency file in this repository rather than requirements.txt",
+    "alone. Two things have to be written down for that audit to be both complete and",
+    "quiet, and this file is where they are written instead of in a comment a reviewer",
+    "has to remember:",
+    "",
+    "  accepted_advisories -- a pin that is at the LAST release installable on the",
+    "    interpreter its job runs, where every fix requires a newer Python. The long",
+    "    form of each acceptance (what it accepts, why no fix is reachable, how narrow",
+    "    the exposure is, and what ends it) is in the header of the pin file itself;",
+    "    this file carries the machine-checkable half so the audit can pass over a",
+    "    known cap and still fail on anything new in the same file.",
+    "",
+    "  unauditable -- a pin set pip-audit cannot resolve on the auditing runner at all,",
+    "    so no verdict is available for it. These are REPORTED on every run, never",
+    "    rendered as clean. A file that is not listed here and fails to resolve FAILS",
+    "    the job: a scanner that cannot run must not look like a scanner that found",
+    "    nothing (the lesson of clawmetry-cloud #2546, clawmetry-pro #204 and #300).",
+    "",
+    "Both halves are ratcheted by tests/test_python_pin_audit_coverage.py, which fails",
+    "an entry that no longer matches the tree -- so this file cannot rot into a",
+    "description of a repository that has moved on."
+  ],
+  "accepted_advisories": {
+    ".github/requirements/ci-lint-verify.txt": [
+      {
+        "package": "click",
+        "version": "8.1.8",
+        "ids": [
+          "PYSEC-2026-2132"
+        ],
+        "ghsa_aliases": [
+          "GHSA-47fr-3ffg-hgmw"
+        ],
+        "reason": "ci.yml's \"Syntax & Lint\" job runs on CPython 3.9 deliberately -- it is the floor setup.py advertises, and running the guard tests there means they are exercised on the interpreter 0.12.753 broke on. All four names in this set sit at the LAST release that installs on 3.9, and every fix for the advisories below requires 3.10+, so no fix is reachable from here without first lifting that floor. click 8.2.0+ needs >=3.10; the advisory is fixed in 8.3.3. click arrives transitively via flask and nothing in this job calls click.edit(), the function the advisory is in."
+      },
+      {
+        "package": "pytest",
+        "version": "8.4.2",
+        "ids": [
+          "PYSEC-2026-1845"
+        ],
+        "ghsa_aliases": [
+          "GHSA-6w46-j5rx-g56g"
+        ],
+        "reason": "ci.yml's \"Syntax & Lint\" job runs on CPython 3.9 deliberately -- it is the floor setup.py advertises, and running the guard tests there means they are exercised on the interpreter 0.12.753 broke on. All four names in this set sit at the LAST release that installs on 3.9, and every fix for the advisories below requires 3.10+, so no fix is reachable from here without first lifting that floor. pytest 9.0.0+ needs >=3.10; the advisory is fixed in 9.0.3. It concerns tmpdir handling that another local user can race; the runner is single-tenant and ephemeral."
+      },
+      {
+        "package": "requests",
+        "version": "2.32.5",
+        "ids": [
+          "PYSEC-2026-2275"
+        ],
+        "ghsa_aliases": [
+          "GHSA-gc5v-m9x4-r6x2"
+        ],
+        "reason": "ci.yml's \"Syntax & Lint\" job runs on CPython 3.9 deliberately -- it is the floor setup.py advertises, and running the guard tests there means they are exercised on the interpreter 0.12.753 broke on. All four names in this set sit at the LAST release that installs on 3.9, and every fix for the advisories below requires 3.10+, so no fix is reachable from here without first lifting that floor. requests 2.33.0+ needs >=3.10, which is also where the fix is. requests is present so pytest can COLLECT at all (tests/conftest.py imports it at module scope); the one call site in that conftest is a health probe against a local dashboard."
+      },
+      {
+        "package": "urllib3",
+        "version": "2.6.3",
+        "ids": [
+          "PYSEC-2026-141",
+          "PYSEC-2026-142",
+          "PYSEC-2026-4175",
+          "PYSEC-2026-4176",
+          "PYSEC-2026-4177"
+        ],
+        "ghsa_aliases": [
+          "GHSA-qccp-gfcp-xxvc",
+          "GHSA-mf9v-mfxr-j63j",
+          "GHSA-8988-9cw3-xx77",
+          "GHSA-gh4c-6fx4-qh6g",
+          "GHSA-vxq7-64xx-v4gw"
+        ],
+        "reason": "ci.yml's \"Syntax & Lint\" job runs on CPython 3.9 deliberately -- it is the floor setup.py advertises, and running the guard tests there means they are exercised on the interpreter 0.12.753 broke on. All four names in this set sit at the LAST release that installs on 3.9, and every fix for the advisories below requires 3.10+, so no fix is reachable from here without first lifting that floor. urllib3 2.7.0+ needs >=3.10; fixes are in 2.7.0 and 2.8.0. The advisories concern HTTPS proxy TLS handling, sensitive headers on cross-origin redirects, and decompressing or buffering remote response bodies -- none has a reachable trigger in a job that fetches nothing beyond that local probe. The sweep that raised ten other CI pin sets to urllib3 2.8.0 (#6213) could not raise this one."
+      }
+    ],
+    ".github/requirements/pip-bootstrap-py39.txt": [
+      {
+        "package": "pip",
+        "version": "26.0.1",
+        "ids": [
+          "PYSEC-2026-196",
+          "PYSEC-2026-2875",
+          "PYSEC-2026-2876",
+          "PYSEC-2026-3721"
+        ],
+        "ghsa_aliases": [
+          "GHSA-58qw-9mgm-455v",
+          "GHSA-jp4c-xjxw-mgf9",
+          "GHSA-qwm4-qh6w-59xr",
+          "GHSA-wf93-45jw-7689"
+        ],
+        "reason": "pip 26.0.1 is the last pip that supports Python 3.9; 26.1 moved Requires-Python to >=3.10 and every release since has kept it there, so no fix is installable here. A bump is refused by tests/test_pip_bootstrap_py39_pin.py, which exists because the only job that installs this file (release-canary.yml) does not run on pull requests. Every one of these advisories concerns what pip does while RESOLVING and fetching from an index, and the two installs this pip performs are this file itself (--require-hashes, one name, artifact already verified) and a clawmetry==<version> from PyPI in the canary job. CI-only, one call site."
+      }
+    ]
+  },
+  "unauditable": {
+    ".github/requirements/windows-enterprise-tls.txt": {
+      "reason": "Pins mitmproxy==12.2.3, which declares Requires-Python >=3.12. The audit runner is 3.11 (matching the rest of this workflow), so pip cannot find an installable distribution and no closure can be resolved. Measured 2026-10-04: pip offers up to 11.0.2 on 3.11. The 15 advisories this set's mitmproxy cap accepts are declared in its own header (#6320).",
+      "retry_when": "the audit runner moves to Python 3.12 or later, at which point delete this entry and let the file be audited normally."
+    },
+    ".github/requirements/desktop-bundle.txt": {
+      "reason": "Resolving this set builds sdist metadata for a package whose build requires the girepository-2.0 system library, which is not present on a bare ubuntu-latest runner: 'Dependency girepository-2.0 is required but not found' during metadata generation. The failure is the runner's missing system libraries, not an advisory verdict.",
+      "retry_when": "the audit step installs the GObject introspection development headers, or the bundle drops the package that needs them."
+    },
+    "desktop/requirements-dev.txt": {
+      "reason": "Pins PyGObject==3.58.0 on linux, whose sdist metadata generation requires the girepository-2.0 system library; it is not present on a bare ubuntu-latest runner, so pip cannot resolve the set and no verdict is available. Same cause as .github/requirements/desktop-bundle.txt, which carries the same package. The failure is the runner's missing system libraries, not an advisory verdict.",
+      "retry_when": "the audit step installs the GObject introspection development headers, or the desktop dev set stops pinning PyGObject on linux."
+    }
+  }
+}
