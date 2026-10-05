@@ -1,6 +1,6 @@
 # Install-script finding, event queue and hook-failure fixes
 
-This release carries three changes that are on `main` and not yet on PyPI: #6335, #6313 and #6321.
+These notes describe #6335, #6313 and #6321, which shipped in 0.12.909. Subsequent changes carried by this release are documented under Unreleased in CHANGELOG.md.
 
 ## What changes
 
