@@ -17,8 +17,8 @@ separate problems for an enterprise deployment:
 So we fetch the CSS once, download every ``woff2`` subset, deduplicate them by
 content hash (Google serves one variable file per subset, referenced from many
 ``@font-face`` rules), and emit a stylesheet pointing at local copies. The
-``unicode-range`` descriptors are preserved verbatim, so a browser still
-downloads only the subsets it actually needs — a Latin-only viewer fetches
+``unicode-range`` descriptors are intersected with each font's actual cmap,
+so a browser still downloads only the subsets it actually needs — a Latin-only viewer fetches
 roughly 25 KB, not the whole set.
 
 Usage
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import os
 import re
 import ssl
@@ -133,6 +134,64 @@ def _parse(css: str) -> list[dict]:
     return out
 
 
+
+class FontDataError(ValueError):
+    """Downloaded font data or required decoder cannot be verified."""
+
+
+def _effective_range(raw: bytes, advertised: str) -> str:
+    """CSS font matching uses the intersection of unicode-range and cmap.
+
+    Google edges can advertise different unassigned points for identical
+    binaries. Canonicalize the effective set, keeping every actual glyph.
+    """
+    try:
+        from fontTools.ttLib import TTFont
+        with TTFont(io.BytesIO(raw), lazy=True) as font:
+            cmap = font.getBestCmap()
+            if not cmap:
+                raise FontDataError("font has no readable Unicode cmap")
+            supported = {point for point, glyph in cmap.items() if glyph != ".notdef"}
+    except Exception as exc:
+        if isinstance(exc, FontDataError):
+            raise
+        raise FontDataError("cannot decode font cmap; install .github/requirements/fonts-check.txt") from exc
+    if not advertised:
+        raise FontDataError("font has no advertised Unicode range")
+    spans = []
+    try:
+        for part in advertised.split(","):
+            token = part.strip().upper()
+            if not token.startswith("U+"):
+                raise ValueError("invalid Unicode range")
+            token = token[2:]
+            if "?" in token:
+                start, end = int(token.replace("?", "0"), 16), int(token.replace("?", "F"), 16)
+            else:
+                values = token.split("-")
+                if len(values) > 2:
+                    raise ValueError("invalid Unicode range")
+                start, end = int(values[0], 16), int(values[-1], 16)
+            if not 0 <= start <= end <= 0x10FFFF:
+                raise ValueError("Unicode range out of bounds")
+            spans.append((start, end))
+    except ValueError as exc:
+        raise FontDataError("invalid advertised Unicode range") from exc
+    points = sorted(point for point in supported if any(lo <= point <= hi for lo, hi in spans))
+    if not points:
+        return ""
+    merged = []
+    lo = hi = points[0]
+    for point in points[1:]:
+        if point == hi + 1:
+            hi = point
+        else:
+            merged.append((lo, hi))
+            lo = hi = point
+    merged.append((lo, hi))
+    return ", ".join(f"U+{lo:04X}" if lo == hi else f"U+{lo:04X}-{hi:04X}" for lo, hi in merged)
+
+
 def build(spec: dict) -> str:
     """Download + dedupe one font set. Returns the generated stylesheet text."""
     blocks = _parse(_fetch(spec["url"]).decode("utf-8"))
@@ -141,6 +200,8 @@ def build(spec: dict) -> str:
 
     os.makedirs(spec["fonts_dir"], exist_ok=True)
     by_hash: dict[str, str] = {}
+    by_url: dict[str, bytes] = {}
+    spec["_font_bytes_changed"] = False
     lines = [
         "/* ClawMetry — self-hosted webfonts. GENERATED, do not hand-edit.",
         f"   {spec['note']}",
@@ -155,19 +216,35 @@ def build(spec: dict) -> str:
 
     for b in blocks:
         slug = b["family"].lower().replace(" ", "-")
-        raw = _fetch(b["url"])
+        if b["url"] not in by_url:
+            by_url[b["url"]] = _fetch(b["url"])
+        raw = by_url[b["url"]]
         digest = hashlib.sha256(raw).hexdigest()
+        effective_range = _effective_range(raw, b["range"])
         if digest not in by_hash:
             filename = f"{slug}-{b['subset']}.woff2"
             n = 1
             while filename in by_hash.values():
                 n += 1
                 filename = f"{slug}-{b['subset']}-{n}.woff2"
-            with open(os.path.join(spec["fonts_dir"], filename), "wb") as fh:
+            font_path = os.path.join(spec["fonts_dir"], filename)
+            previous = None
+            if os.path.exists(font_path):
+                with open(font_path, "rb") as fh:
+                    previous = fh.read()
+            if previous != raw:
+                spec["_font_bytes_changed"] = True
+            with open(font_path, "wb") as fh:
                 fh.write(raw)
             by_hash[digest] = filename
         filename = by_hash[digest]
+        if not effective_range:
+            # An empty effective face cannot match any text. Keep its byte
+            # fingerprint without emitting a rule that expands coverage.
+            lines += [f"/* font-sha256: {digest}; empty effective range for {b['family']} {b['style']} {b['weight']}. */", ""]
+            continue
         lines += [
+            f"/* font-sha256: {digest} */",
             "@font-face {",
             f"  font-family: '{b['family']}';",
             f"  font-style: {b['style']};",
@@ -175,8 +252,7 @@ def build(spec: dict) -> str:
             "  font-display: swap;",
             f"  src: url('{spec['rel']}/{filename}') format('woff2');",
         ]
-        if b["range"]:
-            lines.append(f"  unicode-range: {b['range']};")
+        lines.append(f"  unicode-range: {effective_range};")
         lines += ["}", ""]
 
     return "\n".join(lines)
@@ -215,7 +291,13 @@ def _mirror_is_current(spec: dict, css_text: str) -> bool:
     dest_fonts = os.path.join(dest, os.path.basename(spec["fonts_dir"]))
     if not os.path.isdir(dest_fonts):
         return False
-    return set(os.listdir(dest_fonts)) == set(os.listdir(spec["fonts_dir"]))
+    if set(os.listdir(dest_fonts)) != set(os.listdir(spec["fonts_dir"])):
+        return False
+    for name in os.listdir(spec["fonts_dir"]):
+        with open(os.path.join(dest_fonts, name), "rb") as mirror, open(os.path.join(spec["fonts_dir"], name), "rb") as source:
+            if mirror.read() != source.read():
+                return False
+    return True
 
 
 def main() -> int:
@@ -262,6 +344,10 @@ def main() -> int:
                 raise
             if not args.check:
                 raise
+            if isinstance(exc, FontDataError):
+                print(f"DRIFT  {spec['name']}: downloaded font cannot be verified ({exc})")
+                failed = True
+                continue
             print(
                 f"SKIP   {spec['name']}: could not reach or parse the upstream "
                 f"font API ({type(exc).__name__}: {exc})"
@@ -280,7 +366,7 @@ def main() -> int:
                 with open(path, encoding="utf-8") as fh:
                     current = fh.read()
             drifted = False
-            if current != generated:
+            if current != generated or spec.get("_font_bytes_changed"):
                 print(f"DRIFT  {spec['name']}: {os.path.relpath(path, REPO)} is stale")
                 print("       run: python3 scripts/vendor_fonts.py")
                 failed = drifted = True
