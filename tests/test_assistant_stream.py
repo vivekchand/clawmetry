@@ -152,7 +152,10 @@ def test_no_query_stream_uses_real_synthesis_without_emitting_planner_json(chat,
     response = client.post("/api/assistant/chat", json={"message": "Hello", "stream": True})
     events = list(map(unpack, response.response))
     assert len(calls) == 2 and calls[-1][0] == assistant._SYNTHESIS
-    assert "untrusted" in calls[-1][1] and "Evidence:\n[]" in calls[-1][1]
+    packet = json.loads(calls[-1][1])
+    assert packet['evidence'] == []
+    assert 'No evidence was retrieved' in packet['no_evidence']
+    assert 'untrusted' in calls[-1][0]
     assert any(kind == "delta" for kind, _ in events)
     assert "PRIVATE PLANNER" not in json.dumps(events) + json.dumps(saved)
     assert events[-1][1]["answer"] == "Hello! Ask about your agents."

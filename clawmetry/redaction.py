@@ -637,6 +637,36 @@ def scrub_payload(value: Any, key: str = "", pii: bool = True) -> "tuple[Any, li
         return WITHHELD_ERROR, ["error"]
 
 
+def scrub_export_payload(value: Any) -> "tuple[Any, list[str]]":
+    """Fail closed before evidence leaves the node, even with ingest disabled.
+
+    This uses the audited secret scrubber without changing process-wide
+    environment settings. The export boundary also applies the personal-data
+    tier independently of the ingest switches. Callers must reject a value
+    with any withheld reason, and must scrub before taking text slices.
+    """
+    withheld: list = []
+    try:
+        scrubbed = _scrub_strict(value, "", withheld, pii=False)
+
+        def personal(item):
+            if isinstance(item, str):
+                return _pii_core(item, {category: True for category in PII_CATEGORIES})
+            if isinstance(item, dict):
+                return {personal(_scrub_strict(key, "", withheld, pii=False)): personal(part)
+                        for key, part in item.items()}
+            if isinstance(item, (list, tuple)):
+                return [personal(part) for part in item]
+            return item
+
+        if withheld:
+            return WITHHELD_ERROR, sorted(set(withheld))
+        result = personal(scrubbed)
+        return (WITHHELD_ERROR, sorted(set(withheld))) if withheld else (result, [])
+    except Exception:
+        return WITHHELD_ERROR, ["error"]
+
+
 def mark_withheld(attributes: Any, reasons: "list[str]") -> Any:
     """Stamp ``clawmetry.redaction: withheld:<reasons>`` on an attributes
     value, whatever its shape. No reasons: returned unchanged."""

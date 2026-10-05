@@ -10,6 +10,34 @@ import pytest
 from clawmetry import redaction
 
 
+def test_export_redaction_is_forced_without_changing_ingest_switches(monkeypatch):
+    """AC-ASSIST-008.6"""
+    import os
+    monkeypatch.setenv("CLAWMETRY_REDACT", "0")
+    monkeypatch.setenv("CLAWMETRY_REDACT_PII", "0")
+    secret = "sk-ant-" + "q" * 40
+    value = {secret: {"password": "private-value-123", "text": "alice@example.com"}}
+    scrubbed, reasons = redaction.scrub_export_payload(value)
+    assert not reasons
+    assert secret not in str(scrubbed)
+    assert "private-value-123" not in str(scrubbed)
+    assert "alice@example.com" not in str(scrubbed)
+    assert os.environ["CLAWMETRY_REDACT"] == "0"
+    assert os.environ["CLAWMETRY_REDACT_PII"] == "0"
+    assert redaction.scrub_payload(value) == (value, [])
+
+
+def test_export_redaction_reports_internal_failure_and_oversize(monkeypatch):
+    """AC-ASSIST-008.6"""
+    assert redaction.scrub_export_payload("x" * (redaction._MAX_SCAN + 1))[1] == ["too_large"]
+    def failed(*_args, **_kwargs):
+        raise RuntimeError("do not forward private error text")
+    monkeypatch.setattr(redaction, "_scrub_text", failed)
+    scrubbed, reasons = redaction.scrub_export_payload({"text": "private-original"})
+    assert reasons == ["error"]
+    assert "private-original" not in str(scrubbed)
+
+
 @pytest.mark.parametrize("prefix", ["sk-", "sk-proj-", "sk-ant-"])
 def test_provider_key_suffix_is_redacted_completely(prefix):
     key = prefix + "a" * 20 + "_" + "b" * 20 + "-"

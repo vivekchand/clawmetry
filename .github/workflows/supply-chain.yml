@@ -114,11 +114,33 @@ jobs:
           python3 -m pip install --quiet --require-hashes
           -r .github/requirements/python-deps.txt
       - name: Audit declared dependencies for known advisories
+        # Every declared Python dependency file, not just requirements.txt.
+        # That one file is the dashboard's own runtime range set; the 34
+        # hash-pinned sets in .github/requirements/ are what the CI jobs
+        # install, and deploy/self-hosted/*requirements.txt is baked into the
+        # PUBLISHED, SIGNED self-hosted image -- an advisory there ships to a
+        # user machine rather than to a runner. All of it went unscanned while
+        # this step named a single file.
+        #
+        # A --require-hashes pin guarantees provenance, not soundness, and the
+        # two are easy to confuse because the pin looks so deliberate.
+        # Dependabot opens version bumps for those directories, so they do not
+        # freeze -- but a bump is not an advisory gate, and nothing in CI said
+        # "this pinned closure is named by a published advisory".
+        #
+        # The script reports CLEAN / ACCEPTED / UNAUDITABLE per file and fails
+        # on an undeclared advisory OR an undeclared resolve failure, because
+        # `pip-audit || true` over 39 files renders a scanner outage as a green
+        # check -- the failure clawmetry-cloud #2546, clawmetry-pro #204 and
+        # clawmetry-pro #300 were each filed for. Declarations live in
+        # .github/requirements/audit-acceptance.json and are held to the tree
+        # by tests/test_python_pin_audit_coverage.py.
+        #
         # Non-blocking on PRs: a fresh advisory in a transitive dep should not
         # wedge unrelated work. It still fails the scheduled run, which is the
         # signal that someone needs to act.
         continue-on-error: ${{ github.event_name == 'pull_request' }}
-        run: pip-audit --requirement requirements.txt --strict --progress-spinner off
+        run: python3 scripts/audit_python_pins.py
       - name: Generate CycloneDX SBOM
         run: |
           # Deliberately NOT hash-pinned, unlike the scanner install above.
@@ -241,7 +263,7 @@ jobs:
       # hypothetical: clawmetry-pro#234 hit exactly that, where an unpinned old
       # npm returned a 400 from the retired `audits/quick` endpoint npm 6 uses.
       # That matters more here than it did there, because this job's gate
-      # treats an npm-audit outage as RED — an image bump could turn `main`
+      # treats an npm-audit outage as RED -- an image bump could turn `main`
       # red with nothing in the diff to explain it.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -260,7 +282,7 @@ jobs:
         env:
           # zizmor resolves action tags through the GitHub API. Unauthenticated,
           # those calls share the runner's IP rate limit and fail intermittently
-          # — which, because a reachability failure aborts the WHOLE audit, is
+          # -- which, because a reachability failure aborts the WHOLE audit, is
           # the difference between a scan and no scan. Read-only; the job's
           # `contents: read` default is enough to read public action repos.
           GH_TOKEN: ${{ github.token }}
@@ -270,7 +292,7 @@ jobs:
           #
           # A composite action's steps run inline in the calling job, with that
           # job's token and secrets, so it carries the same rule families a
-          # workflow does — and until now nothing scanned it. This was recorded
+          # workflow does -- and until now nothing scanned it. This was recorded
           # here as a known gap and deferred; clawmetry-cloud closed the same
           # gap on its own mirror of this scan (cloud #2299), which left this
           # repo the only one of the three whose actions nothing audited.
@@ -278,7 +300,7 @@ jobs:
           # The search is repo-wide, not `.github/actions` only. That narrower
           # walk closed the gap for `setup-openclaw` and left it open for
           # `integrations/github-action`, the action this repository PUBLISHES
-          # — whose steps run in OTHER people's jobs, with their token. It was
+          # -- whose steps run in OTHER people's jobs, with their token. It was
           # the one action definition here with a blast radius outside this
           # repository, and it was the one nothing audited. Coverage follows
           # what a file IS, not which directory happens to hold it.
@@ -309,8 +331,9 @@ jobs:
 
           # `--no-exit-codes` makes FINDINGS exit 0, so a non-zero exit here
           # means only "the tool failed". Without it the two cases are
-          # indistinguishable, and the usual `|| true` launders a crash — which
-          # writes NO json — into an empty file that reads as a clean scan.
+          # indistinguishable, and the usual `|| true` launders a crash --
+          # which writes NO json -- into an empty file that reads as a clean
+          # scan.
           rc=0
           # shellcheck disable=SC2086
           zizmor --no-exit-codes --format json --persona regular $inputs \
@@ -328,7 +351,7 @@ jobs:
           fi
           if [ "$rc" -ne 0 ]; then
             # Recorded, not raised: the artifact still has to upload, and the
-            # gate at the end of the job is what turns this red — once there
+            # gate at the end of the job is what turns this red -- once there
             # is something to diagnose it from.
             echo "$rc" > audit/zizmor.failed
             echo "::error::zizmor did not complete (exit $rc); this is a scanner outage, not a clean scan"
@@ -336,7 +359,7 @@ jobs:
           fi
 
       # Responsibility 3: static analysis on this repo's Python source.
-      # Scorecard's SAST probe with teeth — it scores the repository, this
+      # Scorecard's SAST probe with teeth -- it scores the repository, this
       # names the file and line.
       - name: Scan Python source (bandit)
         run: |
@@ -344,8 +367,8 @@ jobs:
           # this size is thousands of `assert` and `subprocess` notes, which
           # buries the findings that matter.
           #
-          # bandit exits 1 on FINDINGS and on failure alike, so — same
-          # reasoning as the zizmor step above — the exit code cannot tell a
+          # bandit exits 1 on FINDINGS and on failure alike, so -- same
+          # reasoning as the zizmor step above -- the exit code cannot tell a
           # finding from an outage. The report is what separates them: a real
           # run writes a dict with a `results` list, a crash writes nothing.
           bandit -r . -f json -o audit/bandit.json -ll \
@@ -363,7 +386,7 @@ jobs:
         run: |
           locks=$(find . -name package-lock.json -not -path '*/node_modules/*' -not -path './.git/*' | sort)
           if [ -z "$locks" ]; then
-            echo "no package-lock.json — nothing to audit"
+            echo "no package-lock.json -- nothing to audit"
             exit 0
           fi
           while IFS= read -r lock; do
@@ -391,8 +414,8 @@ jobs:
           done <<< "$locks"
 
       # Findings are reported, not gated. Today's tree has findings that are
-      # load-bearing by design — the release, quarantine and cloud-pin jobs
-      # persist their checkout credential BECAUSE they push with it — and a
+      # load-bearing by design -- the release, quarantine and cloud-pin jobs
+      # persist their checkout credential BECAUSE they push with it -- and a
       # gate that fails on those would be turned off within a week. The
       # summary is what makes a NEW finding visible in the PR that adds it.
       - name: Summarise findings
@@ -471,7 +494,7 @@ jobs:
           # NEW workflow finding in the PR that introduced it.
           print("#### GitHub Actions security (zizmor)\n")
           if zizmor_failed:
-              print("**SCAN FAILED** — see the `actions-security-audit` artifact.")
+              print("**SCAN FAILED** -- see the `actions-security-audit` artifact.")
               raise SystemExit(0)
           print(f"{len(findings)} finding(s) across {covered} audited file(s).\n")
           if not findings:
@@ -553,7 +576,7 @@ jobs:
       - name: Bandit findings ratchet (medium+ count, zero HIGH)
         if: always()
         env:
-          BANDIT_MEDIUM_BASELINE: "307"
+          BANDIT_MEDIUM_BASELINE: "309"
         run: |
           if [ -f audit/bandit.failed ] || [ ! -f audit/bandit.json ]; then
             echo "bandit produced no usable report; the outage gate above owns this. Skipping ratchet."

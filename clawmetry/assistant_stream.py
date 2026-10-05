@@ -277,7 +277,17 @@ def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
 
             def create_retained(*args, **kwargs):
                 control.check()
-                sock = create(*args, **kwargs)
+                # urllib retains the request's timeout across redirects. A
+                # later TCP connection has only the remaining phase budget.
+                arguments = list(args)
+                remaining = max(0.001, control.deadline - time.monotonic())
+                original = arguments[1] if len(arguments) > 1 else kwargs.get('timeout')
+                connect_timeout = min(remaining, original) if isinstance(original, (int, float)) else remaining
+                if len(arguments) > 1:
+                    arguments[1] = connect_timeout
+                else:
+                    kwargs['timeout'] = connect_timeout
+                sock = create(*arguments, **kwargs)
                 try:
                     connected(sock)
                 except BaseException:
@@ -313,6 +323,8 @@ def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
         opener = urllib.request.build_opener(
             HTTPHandler(), HTTPSHandler(context=build_ssl_context()))
         req = urllib.request.Request(url, data=payload, headers=headers, method=method)
-        with opener.open(req, timeout=10) as result:
+        control.check()
+        connect_timeout = min(10, max(0.001, control.deadline - time.monotonic()))
+        with opener.open(req, timeout=connect_timeout) as result:
             control.check()
             yield result

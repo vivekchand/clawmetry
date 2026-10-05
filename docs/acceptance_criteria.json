@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-10-04",
+    "synced_at": "2026-10-05",
     "synced_by": "codex"
   },
   "_scope": [
@@ -2514,6 +2514,42 @@
       "doc": "Conversational dashboards grounded in local agent evidence",
       "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
       "text": "When the hosted view is idle or another screen is active, the relay shall not add standing polling or inference. Active requests shall have bounded duration, concurrency, payload size and request volume, and shall preserve existing ownership and permission checks."
+    },
+    {
+      "id": "AC-ASSIST-008.1",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When a question requires session details, the system shall retrieve relevant recorded evidence from the owning daemon's DuckDB, including tool invocation arguments, results, recorded errors and available exit codes. It shall distinguish unavailable, missing, empty, withheld, unread and truncated evidence. A hidden analytics column shall never establish that underlying data was not stored."
+    },
+    {
+      "id": "AC-ASSIST-008.2",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When relating a result to a command, the system shall use a recorded call identity within the exact session. Intervening usage or other events shall not break the link. Missing or ambiguous links shall remain explicitly unresolved; adjacency shall not establish causation."
+    },
+    {
+      "id": "AC-ASSIST-008.3",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When the first results are insufficient, the Assistant shall be able to read additional filtered pages or text segments within bounded request resources. It shall retain relevant prior source queries, session IDs, filters and measurement definitions for follow-ups, avoiding repetitive offers for evidence it cannot retrieve."
+    },
+    {
+      "id": "AC-ASSIST-008.4",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When reporting rates, usage or outcomes, the answer shall state the date/time basis and relevant population, preserve or disclose changes to the denominator, distinguish cumulative usage from interval consumption, and distinguish heuristic outcome labels from verified completion or quality. Unknown provenance shall remain unknown."
+    },
+    {
+      "id": "AC-ASSIST-008.5",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When showing evidence, the existing Sources area shall display readable, redacted command/output excerpts and truthful coverage, with an action opening the recorded session. It shall preserve existing SQL sources, charts and saved conversations. No generated executable content or arbitrary URL shall run."
+    },
+    {
+      "id": "AC-ASSIST-008.6",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "The same investigation shall work locally and through the existing encrypted hosted Assistant relay. Reads shall remain bounded, cancellable, session/node/runtime scoped, and read-only. Credentials and internal reasoning shall not be exported; arbitrary SQL payload access, filesystem reads and command execution remain unavailable."
     }
   ]
 }

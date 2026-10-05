@@ -1045,6 +1045,7 @@ _DAEMON_METHODS = frozenset({
     "query_assistant_conversation",
     "save_assistant_conversation",
     "query_assistant_sql",
+    "query_assistant_session_evidence",
     "start_assistant_job",
     "read_assistant_job",
     "cancel_assistant_job",
