@@ -189,6 +189,58 @@ def test_build_tree_branch_counts_survive_a_later_mode_event():
     assert out["branches"] == {"branch_points": 1, "entries_off_active_path": 0}
 
 
+def test_build_tree_lists_the_branches_the_mapper_stored():
+    """The Pi mapper stores each other branch as its own replay stream and
+    names it on the mode event. The tree hands on the rows the viewer can
+    open and drops the rest."""
+    from routes.sessions import _build_replay_tree
+
+    listed = [
+        {"session_id": "pi:s1::branch-b7", "leaf_entry": "b7", "entries": 3,
+         "shared_entries": 2, "ended_at": 1700000000000, "label": "  try sqlite  "},
+        {"session_id": "pi:s1::branch-c9", "entries": -1, "shared_entries": True,
+         "label": "x" * 300},
+        {"session_id": "pi:s1::branch-b7", "label": "same id twice"},
+        {"session_id": ""}, {"label": "no id"}, {"session_id": 7}, "branch", None,
+    ]
+    rows = [
+        _e(span_id="m1", kind="mode.changed", ts=0.0, runtime="pi",
+           payload={"branch_points": 2, "entries_off_active_path": 5,
+                    "branches": listed}),
+        _e(span_id="u1", kind="llm.call", ts=1.0, runtime="pi"),
+    ]
+    out = _build_replay_tree("s1", rows)["branches"]
+    assert out["branch_points"] == 2
+    assert out["stored"] == [
+        {"session_id": "pi:s1::branch-b7", "entries": 3, "shared_entries": 2,
+         "label": "try sqlite"},
+        {"session_id": "pi:s1::branch-c9", "label": "x" * 200},
+    ]
+
+
+def test_build_tree_has_no_stored_branches_when_none_can_be_opened():
+    from routes.sessions import _build_replay_tree
+
+    for listed in (None, [], "pi:s1::branch-b7", [{"label": "no id"}], {"session_id": "x"}):
+        rows = [_e(span_id="m1", kind="mode.changed",
+                   payload={"branch_points": 1, "branches": listed}),
+                _e(span_id="u1", kind="llm.call", ts=1.0)]
+        out = _build_replay_tree("s1", rows)["branches"]
+        assert out == {"branch_points": 1, "entries_off_active_path": 0}, listed
+
+
+def test_build_tree_caps_the_stored_branch_list():
+    from routes.sessions import _REPLAY_TREE_MAX_BRANCHES, _build_replay_tree
+
+    listed = [{"session_id": f"pi:s1::branch-{i}"} for i in range(_REPLAY_TREE_MAX_BRANCHES + 5)]
+    rows = [_e(span_id="m1", kind="mode.changed",
+               payload={"branch_points": 1, "branches": listed}),
+            _e(span_id="u1", kind="llm.call", ts=1.0)]
+    stored = _build_replay_tree("s1", rows)["branches"]["stored"]
+    assert len(stored) == _REPLAY_TREE_MAX_BRANCHES
+    assert stored[-1]["session_id"] == f"pi:s1::branch-{_REPLAY_TREE_MAX_BRANCHES - 1}"
+
+
 def test_build_tree_folds_delegations_under_spawn():
     from routes.sessions import _build_replay_tree
 
