@@ -52,7 +52,10 @@ jobs:
       - name: Check quarantine list
         id: check
         run: |
-          count=$(grep -cEv '^\s*(#|$)' tests/quarantine.txt 2>/dev/null || echo 0)
+          # grep -c prints 0 AND exits 1 when nothing matches, so `|| echo 0`
+          # produced "0\n0" and broke both $GITHUB_OUTPUT and the test below.
+          count=$(grep -cEv '^\s*(#|$)' tests/quarantine.txt 2>/dev/null || true)
+          count=${count:-0}
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Quarantined tests: $count"
           if [ "$count" -eq 0 ]; then
