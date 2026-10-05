@@ -38,6 +38,7 @@
     conversationReady: true,
     scopeIdentity: null,
     resettingScope: false,
+    improveDraft: null,
   };
 
   function el(id) { return document.getElementById(id); }
@@ -58,6 +59,7 @@
     if (state.resettingScope) return;
     state.resettingScope = true;
     state.scopeIdentity = identity;
+    clearImproveDraft();
     state.navigationToken += 1;
     stopVoice();
     cancelChat('scope');
@@ -602,6 +604,7 @@
       renderManagedStatus();
       if (state.dataAvailable === false) renderRecovery(state.status);
       else clearRecovery();
+      maybeSendImprove();
     }).catch(function (error) {
       if (state.statusRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
       state.statusRequest = null;
@@ -1329,6 +1332,7 @@
 
   function loadConversation(id) {
     if (!id) return;
+    clearImproveDraft();
     var hadChat = cancelChat('conversation');
     var hadConversation = cancelConversationRequest('conversation');
     var hadWaiting = hadChat || hadConversation;
@@ -1368,6 +1372,7 @@
   }
 
   function newConversation() {
+    clearImproveDraft();
     var hadChat = cancelChat('new-chat');
     var hadConversation = cancelConversationRequest('new-chat');
     var hadWaiting = hadChat || hadConversation;
@@ -1450,6 +1455,15 @@
       return;
     }
     var question = message;
+    var improve = state.improveDraft;
+    if (improve && (state.statusRequest || !state.statusLoadedAt)) {
+      setStatusMessage('Checking whether this computer can investigate the selected message. Please wait.', 'warning');
+      return;
+    }
+    if (improve && (improve.scope !== scopeIdentity() || !supportsImprove())) {
+      setStatusMessage('Update ClawMetry on this computer, then refresh Assistant to investigate this message.', 'warning');
+      return;
+    }
     // Invalidate detached recovery actions from an earlier attempt.
     state.navigationToken += 1;
     clearRecovery();
@@ -1463,6 +1477,8 @@
     pending.article.classList.add('is-streaming');
     var answerText = '';
     var payload = { message: message, provider: provider, stream: true };
+    if (improve) payload.improve = improve.reference;
+    clearImproveDraft();
     if (state.conversationId) payload.conversation_id = state.conversationId;
     if (provider === 'anthropic' && apiKey) payload.api_key = apiKey;
     setComposerBusy(true);
@@ -1509,7 +1525,9 @@
       if (data && data.conversation_id) state.conversationId = data.conversation_id;
       renderDataNotice(data);
       appendResult(pending, data, question);
-      setStatusMessage('Answer ready. Review the sources before saving a panel.', 'success');
+      setStatusMessage(improve ? 'Explanation ready. Ask a follow-up or review the sources.'
+        : (data.panels && data.panels.length ? 'Answer ready. Review the sources before saving a panel.'
+          : 'Answer ready. Ask a follow-up or review the sources.'), 'success');
       loadHistory(true);
     }).catch(function (error) {
       var reason = request.cancelReason;
@@ -1539,6 +1557,62 @@
     updateComposerClearance();
   }
 
+  function clearImproveDraft() {
+    state.improveDraft = null;
+    var notice = el('cm-assistant-improve-context');
+    if (notice) notice.hidden = true;
+  }
+
+  function supportsImprove() {
+    return !!(state.status && state.status.capabilities && state.status.capabilities.improve_investigation);
+  }
+
+  function maybeSendImprove() {
+    var draft = state.improveDraft;
+    if (!draft || !draft.auto || !isMounted() || draft.scope !== scopeIdentity()
+        || draft.navigation !== state.navigationToken || state.statusRequest || !state.statusLoadedAt) return;
+    if (!supportsImprove()) {
+      draft.auto = false;
+      setStatusMessage('Update ClawMetry on this computer, then refresh Assistant to investigate this message.', 'warning');
+      return;
+    }
+    if (state.dataAvailable === false || !state.status.available) {
+      draft.auto = false;
+      setStatusMessage('Your question and selected message are ready. Connect an available engine, then select Send.', 'warning');
+      return;
+    }
+    if (!state.conversationReady || state.chatRequest) return;
+    draft.auto = false;
+    var input = el('cm-assistant-input');
+    if (input && input.value === draft.question) sendMessage();
+  }
+
+  function assistantExplainSignal(reference, excerpt) {
+    if (!reference || typeof reference.session_id !== 'string' || !reference.session_id
+        || typeof reference.runtime !== 'string' || !reference.runtime
+        || typeof reference.event_id !== 'string' || !reference.event_id
+        || typeof window.switchTab !== 'function') return false;
+    initialize();
+    window.switchTab('assistant');
+    loadAssistantPage();
+    if (!isMounted()) return false;
+    newConversation();
+    var question = 'Explain what happened around this message in plain English:\n\n'
+      + String(excerpt || 'The selected Improve message').slice(0, 600)
+      + '\n\nWhat was I trying to do, what did the agent actually do, and what remains uncertain? '
+      + 'Suggest one concrete way to prevent a repeat and how we could verify it in a future run.';
+    state.improveDraft = {reference: {session_id: reference.session_id, runtime: reference.runtime,
+      event_id: reference.event_id}, question: question, scope: scopeIdentity(),
+      navigation: state.navigationToken, auto: true};
+    var input = el('cm-assistant-input');
+    if (input) { input.value = question; resizeInput(); }
+    var notice = el('cm-assistant-improve-context');
+    if (notice) notice.hidden = false;
+    setStatusMessage('Selected message attached. Connecting to investigate what happened.', 'success');
+    maybeSendImprove();
+    return true;
+  }
+
   function updateComposerClearance() {
     var composer = el('cm-assistant-composer');
     var thread = el('cm-assistant-thread');
@@ -1566,6 +1640,7 @@
   }
 
   function startVoice() {
+    if (state.improveDraft) state.improveDraft.auto = false;
     var Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) {
       setStatusMessage('Voice input is not supported by this browser. You can still type your question.', 'warning');
@@ -1637,7 +1712,10 @@
     if (composer) composer.addEventListener('submit', function (event) { event.preventDefault(); sendMessage(); });
     var input = el('cm-assistant-input');
     if (input) {
-      input.addEventListener('input', resizeInput);
+      input.addEventListener('input', function () {
+        if (state.improveDraft) state.improveDraft.auto = false;
+        resizeInput();
+      });
       input.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
@@ -1689,6 +1767,9 @@
   }
 
   function assistantLeave() {
+    // Keep the visible attachment for a manual send on return, but never
+    // submit a queued question merely because the user revisits the tab.
+    if (state.improveDraft) state.improveDraft.auto = false;
     state.mounted = false;
     state.navigationToken += 1;
     clearRecovery();
@@ -1708,6 +1789,7 @@
 
   window.loadAssistantPage = loadAssistantPage;
   window.assistantLeave = assistantLeave;
+  window.assistantExplainSignal = assistantExplainSignal;
 
   if (typeof window.addEventListener === 'function') window.addEventListener('cm-assistant-scope-changed', function () {
     if (!window.CLOUD_MODE || !state.initialized) return;

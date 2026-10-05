@@ -98,6 +98,49 @@ def real_stack(tmp_path, monkeypatch):
         local_store._reset_singleton_for_tests()
 
 
+@pytest.mark.parametrize('mode', ['claude_cli', 'anthropic', 'managed'])
+def test_improve_reference_survives_http_executor_save_and_followup(real_stack, monkeypatch, mode):
+    """AC-IMPROVE-CHAT-001.6: persisted provenance reaches a later HTTP turn."""
+    from types import SimpleNamespace
+    from clawmetry import entitlements
+    from tests.test_assistant_evidence import event
+
+    monkeypatch.setattr(entitlements, 'get_entitlement', lambda: SimpleNamespace(allows_runtime=lambda _: True))
+    monkeypatch.setattr(assistant, '_provider', lambda *args: (mode, 'test-credential'))
+    store = real_stack['store_ref']['store']
+    sid = 'codex:session-2'
+    reference = {'session_id': sid, 'runtime': 'codex', 'event_id': 'events:selected'}
+    store._conn.execute('UPDATE sessions SET node_id=? WHERE session_id=?', ['test-node', sid])
+    event(store, 'selected', sid=sid, node='test-node', data={'role': 'user', 'content': 'Please start the service again.'})
+    calls = []
+
+    def generate(control, mode, credential, system, prompt, **kwargs):
+        packet = json.loads(prompt)
+        calls.append(packet)
+        assert packet['improve_review']['event_id'] == reference['event_id']
+        assert 'future run' in system
+        if system.startswith(assistant._PLAN):
+            return json.dumps({'session_reads': [{**reference, 'mode': 'event'}]})
+        return 'Confirm the intended service and check its recorded status [1].'
+
+    monkeypatch.setattr(assistant, '_stream_generate', generate)
+    client = real_stack['client']
+    response = client.post('/api/assistant/chat', json={'message': 'Explain this moment', 'improve': reference})
+    body = response.get_json()
+    assert response.status_code == 200, body
+    saved = client.get('/api/assistant/conversations/' + body['conversation_id']).get_json()
+    assert saved['title'] == 'Explain: Please start the service again.'
+    assert saved['messages'][0]['improve'] == reference
+    assert saved['messages'][1]['sources'][0]['read']['event_id'] == reference['event_id']
+    followup = client.post('/api/assistant/chat', json={
+        'message': 'What would show that it helped?', 'conversation_id': body['conversation_id']})
+    assert followup.status_code == 200, followup.get_json()
+    assert len(calls) == 4
+    saved_again = client.get('/api/assistant/conversations/' + body['conversation_id']).get_json()
+    assert saved_again['title'] == saved['title']
+    assert len(saved_again['messages']) == 4
+
+
 def _two_chart_plan():
     runtime_case = (
         "CASE WHEN split_part(session_id, ':', 1) IN ('codex') "

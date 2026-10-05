@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-327 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+328 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -162,6 +162,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/assistant_evidence.py` | medium | Scoped, bounded, redacted session evidence on the daemon's own connection. |
 | `clawmetry/assistant_executor.py` | medium | Single daemon-owned Assistant execution and persistence boundary. |
 | `clawmetry/assistant_http.py` | small | Local HTTP adapters for typed daemon Assistant jobs; no inference here. |
+| `clawmetry/assistant_improve.py` | small | Seed an Improve conversation from an exact, redacted store occurrence. |
 | `clawmetry/assistant_managed.py` | medium | Optional bridge to ClawMetry's account-metered managed assistant. |
 | `clawmetry/assistant_phase.py` | small | A cancellable planning phase that leaves time to explain retrieved evidence. |
 | `clawmetry/assistant_providers.py` | medium | Assistant text-only CLI and Anthropic streaming transports (no SDK needed). |

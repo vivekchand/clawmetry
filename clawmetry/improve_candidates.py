@@ -299,6 +299,9 @@ def _build_candidates(rows: list[dict[str, Any]], *, window_days: int) -> dict[s
                 "ts": row.get("ts"),
                 "workspace": label,
                 "runtime": runtime,
+                "_source": {"session_id": str(row.get("session_id") or ""),
+                            "runtime": runtime, "event_id": "events:" + str(row.get("id") or "")}
+                if row.get("session_id") and row.get("id") else None,
             }
         )
 
@@ -319,6 +322,17 @@ def _build_candidates(rows: list[dict[str, Any]], *, window_days: int) -> dict[s
         kind_label = group["kind"].capitalize()
         scope = "project" if len(workspaces) == 1 else "workspace"
         runtimes = sorted(group["runtimes"])
+        investigation = examples[0].get("_source")
+        investigation_unavailable = None
+        if investigation:
+            from clawmetry.assistant_improve import validate_reference
+            try:
+                investigation = validate_reference(investigation)
+            except ValueError:
+                investigation = None
+                investigation_unavailable = (
+                    "The recorded context for this runtime cannot yet be attached to Assistant. "
+                    "You can review the available evidence below.")
         candidates.append(
             {
                 "id": f"{group['kind']}-{digest}",
@@ -328,7 +342,11 @@ def _build_candidates(rows: list[dict[str, Any]], *, window_days: int) -> dict[s
                 "summary": examples[0]["excerpt"],
                 "normalized_key": f"{group['kind']}.{group['key'].replace(' ', '_')}",
                 "excerpt": examples[0]["excerpt"],
-                "evidence": examples[:_MAX_EVIDENCE],
+                "evidence": [{k: v for k, v in example.items() if k != "_source"}
+                             for example in examples[:_MAX_EVIDENCE]],
+                "investigation": investigation,
+                **({"investigation_unavailable": investigation_unavailable}
+                   if investigation_unavailable else {}),
                 "signal_count": count,
                 "seen_count": count,
                 "conversation_count": conversation_count,
@@ -520,8 +538,20 @@ def _build_bundle(store, *, days, node_id, allowed):
             break
         index = max(populated, key=lambda i: sizes[i])
         body = slices[index]
-        body["signals"].pop()
-        body["clusters"].pop()
+        # Preserve a quiet runtime's final occurrence when shorter display
+        # excerpts can make room for its exact investigation reference.
+        compacted = False
+        if index and len(body["signals"]) == 1:
+            signal = body["signals"][0]
+            for item, fields in [(signal, ("summary", "excerpt")),
+                                 *[(e, ("excerpt",)) for e in signal["evidence"]]]:
+                for field in fields:
+                    if len(item.get(field) or "") > 140:
+                        item[field] = _excerpt(item[field], 140)
+                        compacted = True
+        if not compacted:
+            body["signals"].pop()
+            body["clusters"].pop()
         body["candidate_count"] = len(body["signals"])
         body["coverage"]["candidates_truncated"] = True
         new_size = _size(body)
