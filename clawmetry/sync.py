@@ -1995,7 +1995,7 @@ def _sync_auto_update_with_plan(
                 _cfg2 = load_config() or {}
                 _ak2 = _cfg2.get("api_key", "")
                 if _ak2:
-                    _ok2, _ = _app2(_ak2, _cfg2.get("node_id"))
+                    _ok2, _ = _app2(_ak2, _cfg2.get("node_id"), background=True)
                     if _ok2:
                         log.info("clawmetry-pro provisioned on upgrade to %s — paid "
                                  "runtimes will sync on the next cycle", tier)
@@ -2080,24 +2080,33 @@ def _persist_cloud_plan_to_disk(
     _sync_auto_update_with_plan(tier, allow_provision=allow_provision)
     # Idempotent reconcile: this is now called on EVERY heartbeat (not just on a
     # plan change), so short-circuit when the on-disk cache already reflects this
-    # tier. We compare only the ``plan`` field (the entitlement-relevant part) so
-    # the trial ``expiry`` countdown doesn't churn a write + entitlement
-    # invalidation every cycle. Only an actual tier transition re-writes + flips
-    # the resolver, so paid runtimes start syncing the moment the plan upgrades.
+    # tier and authoritative trial verdict. A days-left estimate must not churn
+    # a write every cycle, but an exact cloud deadline must repair caches made
+    # by older clients that rounded a trial down to whole days.
     _trial_end_epoch = _parse_trial_end(trial_end)
     _trial_used = bool(trial_used) if trial_used is not None else None
+    _trial_deadline_applies = (
+        _trial_end_epoch is not None
+        and (tier == "trial" or tier not in _PAID_PLAN_TIERS)
+    )
     try:
         _existing_plan = None
         _existing_trial = None
+        _existing_expiry = None
         if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
             with open(_CLOUD_PLAN_CACHE_PATH, encoding="utf-8") as _fh:
                 _cached = json.load(_fh) or {}
             _existing_plan = _cached.get("plan")
             _existing_trial = (_cached.get("trial_used"), _cached.get("trial_end"))
+            _existing_expiry = _cached.get("expiry")
         if tier is None:
             if _existing_plan is None and not os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
                 return  # already absent; nothing to reconcile
-        elif _existing_plan == tier and _existing_trial == (_trial_used, _trial_end_epoch):
+        elif (
+            _existing_plan == tier
+            and _existing_trial == (_trial_used, _trial_end_epoch)
+            and (not _trial_deadline_applies or _existing_expiry == _trial_end_epoch)
+        ):
             # Cache already matches the live tier AND the trial verdict; no
             # write, no invalidate. The trial pair is part of the comparison
             # because a lapsing trial does NOT change ``plan`` (it stays
@@ -2121,18 +2130,18 @@ def _persist_cloud_plan_to_disk(
             except Exception:
                 expiry = None
             # An authoritative trial_end from the cloud wins over the derived
-            # days-left countdown for UNPAID tiers: it is the same value
+            # days-left countdown for trials and unpaid tiers: the same value
             # Stripe/billing reconcile against, and it keeps working after the
             # trial lapses (days_left goes to 0/None but trial_end stays
             # meaningful).
             #
-            # NEVER for a paid tier. Signup is trial-by-default, so essentially
-            # every paying customer carries trial_used=True and a trial_end
+            # Never for a purchased subscription. Signup is trial-by-default,
+            # so every paying customer carries trial_used=True and a trial_end
             # that is long past -- stamping that onto their entitlement makes
             # Entitlement.expired True and hard-blocks a subscriber who is
             # paying us right now. Their subscription expiry comes from the
             # plan, not from the trial they took before they bought.
-            if _trial_end_epoch is not None and tier not in _PAID_PLAN_TIERS:
+            if _trial_deadline_applies:
                 expiry = _trial_end_epoch
             payload = {"plan": tier, "node_limit": 1, "expiry": expiry}
             if _trial_used is not None:
@@ -9687,6 +9696,7 @@ def send_heartbeat(config: dict) -> bool:
 # sync daemon without the dashboard module loaded).
 _PENDING_SHAPES = {
     "incidents", "investigation", "activity", "error_groups", "session_catalog",
+    "robotics_runs", "robotics_events",
     "events", "sessions", "aggregates", "health", "transcript",
     # Added in P4 (#2990): new live shapes from P2 materialized rollups.
     "runtimes", "models", "rollup_sessions",
@@ -9729,6 +9739,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
         "error_groups": "query_error_groups",
         "session_catalog": "query_session_catalog",
         "activity": "query_activity",
+        "robotics_runs": "robotics_runs",
+        "robotics_events": "robotics_events",
         "events":     "query_events",
         "sessions":   "query_sessions",
         "aggregates": "query_aggregates",
@@ -9770,6 +9782,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
 # but defined here so the daemon-only fallback path doesn't need the
 # routes package on sys.path.
 _SHAPE_ALLOWED_KWARGS = {
+    "robotics_runs": {"limit", "before_ns", "before_run_id"},
+    "robotics_events": {"run_id", "after", "limit", "before", "tail"},
     "events":     {"session_id", "agent_id", "event_type", "since", "until", "limit"},
     "sessions":   {"agent_id", "since", "until", "limit"},
     "aggregates": {"agent_id", "since", "until"},
@@ -12622,7 +12636,8 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                 "blob": blob,
                 "shape": shape,
                 "args_hash": _canonical_args_hash(args),
-                "ttl": 15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600,
+                "ttl": (5 if shape in {"robotics_runs", "robotics_events"} else
+                        15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600),
             }, api_key)
         except Exception as e:
             log.warning("pending_query dispatch failed (id=%s shape=%s): %s",
@@ -24913,6 +24928,16 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     if _spend_flow_slice is not None:
         payload["spendFlow"] = _spend_flow_slice
 
+    # Paid robotics summary shares the normal encrypted envelope.
+    try:
+        from clawmetry.extensions import call as _robotics_snapshot
+        from clawmetry.local_store import get_store as _robotics_store
+        _robotics_slice = _robotics_snapshot("robotics.snapshot", {"store": _robotics_store()})
+        if _robotics_slice is not None:
+            payload["robotics"] = _robotics_slice
+    except Exception as _robotics_error:
+        log.warning("Robotics snapshot unavailable: %s", _robotics_error)
+
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
     # Detect NemoClaw and add optional sandbox metadata to the snapshot.
     # The cloud stores this as generic key-value metadata — no NemoClaw-
@@ -25572,7 +25597,7 @@ def run_daemon() -> None:
         _ak = config.get("api_key", "")
         if _ak:
             from clawmetry.license import auto_provision_pro as _auto_pro
-            _pro_ok, _pro_msg = _auto_pro(_ak, config.get("node_id"))
+            _pro_ok, _pro_msg = _auto_pro(_ak, config.get("node_id"), background=True)
             if _pro_ok:
                 log.info("clawmetry-pro present (entitled account) — all runtimes enabled")
                 try:
@@ -25691,6 +25716,14 @@ def run_daemon() -> None:
             log.info("local query server: listening on 127.0.0.1:%d", _ls_port)
     except Exception as _e:
         log.warning("local query server: failed to start: %s", _e)
+
+    # Local collectors must not wait for cloud I/O or historical backfill.
+    # The daemon already owns its store and has published the query service.
+    try:
+        from clawmetry import extensions as _store_extensions
+        _store_extensions.emit("daemon.store.ready", {"node_id": config.get("node_id")})
+    except Exception as _e:
+        log.warning("local extension collectors could not start: %s", _e)
 
     # ── Startup sync: recent-first so Brain feed shows current activity ──
     try:
@@ -26071,7 +26104,7 @@ def run_daemon() -> None:
                             from clawmetry.license import (
                                 refresh_pro_from_license as _rpl,
                             )
-                            _up, _rmsg = _rpl(config.get("node_id"))
+                            _up, _rmsg = _rpl(config.get("node_id"), background=True)
                             if _up:
                                 log.info("clawmetry-pro refreshed: %s", _rmsg)
                                 from clawmetry.extensions import (
@@ -26100,7 +26133,7 @@ def run_daemon() -> None:
                         )
                         if _sdp():
                             if _pv():
-                                _rm, _rmsg = _dpp("trial lapsed")
+                                _rm, _rmsg = _dpp("trial lapsed", background=True)
                                 log.info(
                                     "clawmetry-pro removal: %s", _rmsg
                                 ) if _rm else log.warning(
@@ -26109,7 +26142,7 @@ def run_daemon() -> None:
                             _pro_stop.wait(timeout=1800)
                             continue  # never re-provision on the same tick
                         _was = bool(_pv())
-                        _ok, _msg = _wp(_ak, config.get("node_id"))
+                        _ok, _msg = _wp(_ak, config.get("node_id"), background=True)
                         if _ok and not _was:
                             log.info("clawmetry-pro just installed (account became "
                                      "entitled) — paid runtimes now enabled")

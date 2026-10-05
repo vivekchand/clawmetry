@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, current_app
 
 logger = logging.getLogger("clawmetry.routes.extensions")
 
@@ -33,6 +33,7 @@ def api_extensions():
     Response shape::
 
         {
+          "navigation":           [{"label": "Workbench", "href": "/workbench"}],
           "plugins":              ["clawmetry-pro", ...],
           "plugin_count":         1,
           "failed_plugins":       [{"name": "clawmetry-pro", "error": "..."}],
@@ -105,7 +106,9 @@ def api_extensions():
             probed = []
         events = list(_ext.registered_events())
         handler_counts = {evt: _ext.handler_count(evt) for evt in events}
+        navigation = _ext.call("ui.navigation", {"endpoints": list(current_app.view_functions)}, default=[])
         return jsonify({
+            "navigation": navigation if isinstance(navigation, list) else [],
             "plugins": plugins,
             "plugin_count": len(plugins),
             "failed_plugins": failed,
@@ -119,6 +122,7 @@ def api_extensions():
         logger.warning("extensions: introspection failed: %s", exc)
         return jsonify({
             "plugins": [],
+            "navigation": [],
             "plugin_count": 0,
             "failed_plugins": [],
             "failed_plugin_count": 0,

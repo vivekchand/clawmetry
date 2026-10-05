@@ -1,0 +1,7 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "robotics_incidents",
+  "_via": "<volatile>",
+  "error": "unavailable",
+  "message": "Install ClawMetry Pro and restart the collector to view robot traces."
+}

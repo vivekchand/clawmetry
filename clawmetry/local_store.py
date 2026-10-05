@@ -4157,6 +4157,26 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
     process owns the writer lock.
     """
 
+    def robotics_runs(self, *, limit=50, before_ns=None, before_run_id=None) -> dict:
+        return self.robotics_query("runs", {"limit": limit, "before_ns": before_ns,
+                                            "before_run_id": before_run_id})
+
+    def robotics_events(self, *, run_id, after=0, limit=500, before=None, tail=False) -> dict:
+        return self.robotics_query("events", {"run_id": run_id, "after": after, "limit": limit,
+                                              "before": before, "tail": tail})
+
+    def robotics_query(self, operation: str, args: dict | None = None) -> dict:
+        """Private plugin query on the daemon-owned connection. No raw SQL RPC."""
+        from clawmetry.extensions import call
+        if operation not in {"runs", "events", "snapshot", "inventory", "guard_ack", "guard_incidents", "set_observation_only"}:
+            raise ValueError("Unsupported robotics query")
+        return call("robotics.query", {"store": self, "operation": operation, "args": args or {}},
+                    default={"error": "unavailable", "message": "Install ClawMetry Pro and restart the collector to view robot traces."})
+
+    def robotics_incidents(self, *, run_id, before_ns=None, before_id=None, limit=64) -> dict:
+        return self.robotics_query("guard_incidents", {"run_id": run_id, "before_ns": before_ns,
+                                                       "before_id": before_id, "limit": limit})
+
     def __init__(self, read_only: bool = False) -> None:
         self._read_only = read_only
         self._ring: deque[dict[str, Any]] = deque(maxlen=RING_MAX)

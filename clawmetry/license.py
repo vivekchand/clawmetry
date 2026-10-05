@@ -371,7 +371,14 @@ def _purge_pro_from_memory() -> None:
         pass
 
 
-def deprovision_pro(reason: str = "") -> tuple[bool, str]:
+def _background_pro_changes_allowed() -> bool:
+    """An explicit update opt-out also protects the installed private package."""
+    return os.environ.get("CLAWMETRY_AUTO_UPDATE", "").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def deprovision_pro(reason: str = "", *, background: bool = False) -> tuple[bool, str]:
     """Remove the clawmetry-pro package from this machine.
 
     Called when an account's trial has demonstrably lapsed. Gating the paid
@@ -385,7 +392,13 @@ def deprovision_pro(reason: str = "") -> tuple[bool, str]:
     hole. Re-provisioning is automatic (``auto_provision_pro`` on the next
     entitled heartbeat, or ``activate``), so this is reversible by paying.
 
+    Background removal honors the package-update opt-out. Entitlement gates
+    still deny expired paid features when an operator retains package files.
+    Explicit removal keeps its existing behavior.
+
     Never raises. Returns (removed_something, status_message)."""
+    if background and not _background_pro_changes_allowed():
+        return False, "Automatic Pro package changes are disabled; entitlement limits still apply."
     import shutil
 
     removed = []
@@ -910,7 +923,7 @@ def _download_and_install_pro(payload: dict) -> str:
         return f"clawmetry-pro install deferred ({exc})"
 
 
-def refresh_pro_from_license(node_id: str | None = None) -> tuple[bool, str]:
+def refresh_pro_from_license(node_id: str | None = None, *, background: bool = False) -> tuple[bool, str]:
     """SELF-HOSTED refresh: keep an activated node's clawmetry-pro current.
 
     ``_download_and_install_pro`` is reached only from :func:`activate_license`
@@ -937,6 +950,8 @@ def refresh_pro_from_license(node_id: str | None = None) -> tuple[bool, str]:
             return False, ""            # no signed license — not this path
         if _offline_mode():
             return False, "offline mode: skipping clawmetry-pro refresh"
+        if background and not _background_pro_changes_allowed():
+            return False, "Automatic Pro package changes are disabled."
         before = _pro_installed_version()
         if not before:
             # Nothing installed: activation's own install path handles the
@@ -961,7 +976,7 @@ def refresh_pro_from_license(node_id: str | None = None) -> tuple[bool, str]:
         return False, ""
 
 
-def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, str]:
+def auto_provision_pro(api_key: str, node_id: str | None = None, *, background: bool = False) -> tuple[bool, str]:
     """CLOUD ACCOUNT path, called by ``clawmetry connect`` after the cm_ key is
     saved. Ask the cloud whether this account is ENTITLED to clawmetry-pro and,
     if so, download+install the wheel so the node gets all 33 runtimes.
@@ -972,6 +987,8 @@ def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, 
       * NEVER raises / NEVER blocks connect — any failure returns (False, msg)
         and the node continues on the free runtimes.
       * Idempotent — skips the download when clawmetry-pro is already current.
+      * Background calls honor CLAWMETRY_AUTO_UPDATE after checking entitlement;
+        explicit connect and update calls may still install the package.
       * The wheel is fetched only from our own HTTPS /api/license/download.
       * ``CLAWMETRY_OFFLINE=1`` skips the entitlement probe AND the wheel
         download — no outbound network is touched. Symmetric with
@@ -1012,6 +1029,8 @@ def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, 
             return False, ""
         if not ent.get("pro_available", True):
             return False, "Pro entitled, but the clawmetry-pro wheel is not yet published."
+        if background and not _background_pro_changes_allowed():
+            return bool(_pro_installed_version()), "Automatic Pro package changes are disabled."
         # 2) Entitled: download + install (idempotent, never-raise).
         url = base + "/api/license/download"
         msg = _provision_pro_wheel(url, headers=headers, node_id=node_id)

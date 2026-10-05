@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-324 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+325 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -303,6 +303,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/resume_hints.py` | medium | How a human restarts a session ClawMetry can no longer control. |
 | `clawmetry/retention.py` | small | How long this node keeps event data — one answer, with its reason. |
 | `clawmetry/risk.py` | medium | Hallucination Risk Indicator (issue #567). |
+| `clawmetry/robotics.py` | small | OSS CLI seam. |
 | `clawmetry/runtime_gates.py` | medium | Pre-tool gates for Cursor and GitHub Copilot CLI — "block before it runs". |
 | `clawmetry/runtime_memory.py` | large | Per-runtime Memory & Skills file browser. |
 | `clawmetry/runtime_probe.py` | medium | zero-dependency presence probes for every supported agent runtime (#3917, founder request 2026-07-22). |

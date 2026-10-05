@@ -34821,3 +34821,37 @@ async function renderFirstRunReport(overview) {
   el.innerHTML = h;
   el.style.display = 'block';
 }
+// Optional private-package views. Shared by the local extension response and
+// cloud's decrypted, node-scoped snapshot. Never discover through a standing poller.
+window.cmInstallWorkbenchNavigation = function (entries) {
+    var sidebar = document.querySelector('.nav-tabs');
+    (Array.isArray(entries) ? entries : []).slice(0, 8).forEach(function (entry) {
+        if (!entry || typeof entry.href !== 'string' || !/^\/[a-zA-Z0-9][a-zA-Z0-9/_-]*$/.test(entry.href)) return;
+        if (entry.view_group === 'physical_ai') {
+            if (document.getElementById('cm-ai-view-switch')) return;
+            var runtime = document.getElementById('cm-global-runtime-wrap');
+            var top = runtime && runtime.parentNode || document.querySelector('.nav');
+            if (!top) return;
+            var group = document.createElement('nav'); group.id = 'cm-ai-view-switch';
+            group.className = 'cm-ai-view-switch'; group.setAttribute('aria-label', 'AI view');
+            var digital = document.createElement('a'); digital.textContent = 'Digital AI';
+            digital.href = window.CLOUD_MODE ? '/cloud/node/' + encodeURIComponent(window.CLOUD_NODE_ID) : '/';
+            digital.setAttribute('aria-current', 'page');
+            var physical = document.createElement('a'); physical.id = 'cm-robotics-link';
+            physical.textContent = 'Physical AI'; physical.href = entry.href;
+            group.appendChild(digital); group.appendChild(physical);
+            if (runtime) top.insertBefore(group, runtime); else top.appendChild(group);
+        } else if (sidebar) {
+            var link = document.createElement('a'); link.className = 'nav-tab'; link.href = entry.href;
+            link.textContent = String(entry.label || 'Workbench').slice(0, 40); sidebar.appendChild(link);
+        }
+    });
+};
+document.addEventListener('DOMContentLoaded', function () {
+    if (window.CLOUD_MODE) return;
+    fetch('/api/extensions', {credentials: 'same-origin'}).then(function (response) {
+        return response.ok ? response.json() : {};
+    }).then(function (body) {
+        window.cmInstallWorkbenchNavigation(body.navigation);
+    }).catch(function () {});
+});
