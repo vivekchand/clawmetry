@@ -30271,7 +30271,12 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 //: The tab the dashboard opens on. One place, because the nav markup's
-//: `active` class and the e2e landing guards have to agree with it.
+//: `active` class and the e2e landing guards have to agree with it -- and
+//: because local and hosted are the same product. Hosted used to fork to the
+//: roster here, from a time when Assistant could not reach the user's node at
+//: all; it can now, over the cloud relay, and a relay that cannot reach the
+//: machine says so on the screen with a retry rather than rendering nothing.
+//: One constant, one landing tab, every deployment.
 var CM_LANDING_TAB = 'assistant';
 
 function _cmTabFromHash() {
@@ -30289,7 +30294,7 @@ function _cmBootLanding() {
     if (typeof switchTab === 'function') switchTab('transcripts');
     return;
   }
-  if (typeof switchTab === 'function') switchTab(window.CLOUD_MODE ? 'inventory' : CM_LANDING_TAB);
+  if (typeof switchTab === 'function') switchTab(CM_LANDING_TAB);
 }
 
 // Hash router. Tab links and `#trail=` route here; `#session=` is consumed by
