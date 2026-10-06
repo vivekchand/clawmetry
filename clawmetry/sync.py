@@ -18198,31 +18198,64 @@ def _build_usage_snapshot():
     spend-optimization, forecast). Trial-bug #12: these Usage cards were blank on
     the hosted dashboard (the /api/usage/* + /api/sessions/cost-breakdown routes
     return empty without DuckDB and had no interceptor). Reuses the store-backed
-    fast-paths; each returns {} when the builder defers."""
+    fast-paths; each returns {} when the builder defers.
+
+    An empty slice here is INVISIBLE downstream: the cm-cloud-usage
+    interceptor reads ``{}``, falls through to the hosted container's empty
+    store, and the card renders as if the node had nothing to say. On
+    2026-10-06 a node whose own dashboard showed a red banner --
+    "Anomaly detected: cost spike (5.4x baseline) + 3 more", a CRITICAL spike
+    on a $128 session -- pushed ``usage.anomalies == {}`` and the hosted
+    dashboard showed no banner at all. cacheTrends, costComparison and
+    spendOptimization were empty in the same snapshot; forecast was partial.
+    Running these same builders by hand against the same store returned full
+    data, so the builders are right and something about the daemon's own
+    execution context defeats them.
+
+    Nobody could tell, because ``_safe`` discarded the reason. It no longer
+    does: a deferral and a raise are different events and both are logged
+    with the slice's name, so the next person reads sync.log instead of
+    guessing. This records WHY a slice is empty; it does not stop it being
+    empty."""
     out = {}
-    def _safe(fn):
+
+    def _safe(name, fn):
         try:
             r = fn()
-            return r if r is not None else {}
-        except Exception:
+        except Exception as e:
+            log.warning("snapshot: usage slice %r raised %s: %s -- the hosted "
+                        "dashboard will render this card as empty",
+                        name, type(e).__name__, e)
             return {}
+        if r is None:
+            # The builders return None to mean "no store / nothing to read",
+            # which is a deferral, not a measurement of zero.
+            log.warning("snapshot: usage slice %r deferred (no readable store) "
+                        "-- the hosted dashboard will render this card as empty",
+                        name)
+            return {}
+        return r
     try:
         from routes.usage import (
             _try_local_store_anomalies, _try_local_store_cost_comparison,
             _try_local_store_cache_trends, _try_local_store_spend_optimization,
             _try_local_store_usage_forecast,
         )
-        out["anomalies"] = _safe(_try_local_store_anomalies)
-        out["costComparison"] = _safe(_try_local_store_cost_comparison)
-        out["cacheTrends"] = _safe(lambda: _try_local_store_cache_trends(30))
-        out["spendOptimization"] = _safe(_try_local_store_spend_optimization)
-        out["forecast"] = _safe(_try_local_store_usage_forecast)
-    except Exception:
-        pass
+        out["anomalies"] = _safe("anomalies", _try_local_store_anomalies)
+        out["costComparison"] = _safe("costComparison", _try_local_store_cost_comparison)
+        out["cacheTrends"] = _safe("cacheTrends", lambda: _try_local_store_cache_trends(30))
+        out["spendOptimization"] = _safe("spendOptimization", _try_local_store_spend_optimization)
+        out["forecast"] = _safe("forecast", _try_local_store_usage_forecast)
+    except Exception as _e_usage:
+        log.warning("snapshot: usage slices unavailable (%s: %s) -- every Usage "
+                    "card on the hosted dashboard will be empty",
+                    type(_e_usage).__name__, _e_usage)
     try:
         from routes.sessions import _try_local_store_cost_breakdown
-        out["costBreakdown"] = _safe(_try_local_store_cost_breakdown)
-    except Exception:
+        out["costBreakdown"] = _safe("costBreakdown", _try_local_store_cost_breakdown)
+    except Exception as _e_cb:
+        log.warning("snapshot: costBreakdown slice unavailable (%s: %s)",
+                    type(_e_cb).__name__, _e_cb)
         out["costBreakdown"] = {}
     return out
 

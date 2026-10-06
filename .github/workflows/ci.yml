@@ -1129,6 +1129,7 @@ jobs:
             tests/test_activity_heatmap_runtime_scope.py \
             tests/test_cost_optimizer_route_honesty.py \
             tests/test_cost_optimizer_snapshot_slice.py \
+            tests/test_snapshot_slices_are_not_silent.py \
             tests/test_cost_basis_labels.py \
             tests/test_provenance.py \
             tests/test_provenance_render_coverage.py \

@@ -3813,6 +3813,18 @@ def mark_writer_owner() -> None:
     _writer_owner = True
 
 
+def is_writer_owner() -> bool:
+    """True when THIS process owns the DuckDB writer — i.e. we are the daemon.
+
+    The counterpart to :func:`mark_writer_owner`. Any reader that would
+    otherwise proxy to "the daemon" must ask this first: inside the daemon
+    the proxy is a call to our own HTTP handler, which ``_proxy_dispatch``
+    refuses by returning ``None`` — and a store whose every query answers
+    ``None`` reads as an empty machine. See ``routes/usage.py::_ls_get_store``.
+    """
+    return _writer_owner
+
+
 def _daemon_registered() -> bool:
     """True when a daemon has registered as the DuckDB writer owner — i.e.
     ``~/.clawmetry/local_query.json`` exists for a DIFFERENT pid.

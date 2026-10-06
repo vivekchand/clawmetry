@@ -149,6 +149,35 @@ def _ls_get_store():
 
     Returns ``None`` if neither path is available.
     """
+    # Loop-break: when local_server runs in THIS process we ARE the daemon,
+    # and the proxy would HTTP-call our own handler. ``_proxy_dispatch``
+    # already refuses that ("dispatch is in-daemon; skipping proxy") -- but it
+    # refuses by returning None, and _DaemonProxyStore turns that into a store
+    # whose every query answers None. So the daemon's own snapshot builders
+    # read an empty store and shipped empty slices.
+    #
+    # That is how a node showing a red "Anomaly detected: cost spike (5.4x
+    # baseline) + 3 more" banner on localhost:8900 -- a CRITICAL spike on a
+    # $128 session -- pushed ``usage.anomalies == {}`` to the hosted
+    # dashboard, which showed no banner at all (founder report 2026-10-06).
+    # cacheTrends, costComparison, spendOptimization and costBreakdown went
+    # the same way. ``_build_usage_snapshot`` logged nothing because its
+    # ``_safe`` wrapper discarded the reason; it now records every deferral.
+    #
+    # In-process this is also the FASTEST path, not a fallback:
+    # ``get_store(read_only=True)`` returns the writer singleton the daemon
+    # already holds (``if _store_rw is not None: return _store_rw``), so the
+    # read costs one function call instead of an HTTP round trip.
+    try:
+        from clawmetry import local_store
+        _daemon_here = bool(getattr(local_store, "is_writer_owner", lambda: False)())
+        if not _daemon_here:
+            from clawmetry import local_server as _ls_srv
+            _daemon_here = _ls_srv.is_running()
+        if _daemon_here:
+            return local_store.get_store(read_only=True)
+    except Exception:
+        pass
     # Prefer the daemon proxy under standard installs (daemon owns the
     # writer lock; direct opens fail with IOException).
     try:
