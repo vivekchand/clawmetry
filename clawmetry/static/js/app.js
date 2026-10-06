@@ -30574,7 +30574,8 @@ async function checkUpdateStatus() {
       var current = (data.latest_check && data.latest_check.current) || '';
       msg.textContent = t("app.update_available_v", null, "Update available: v") + latest + ' is out. You are on v' + current + '.';
       banner.style.display = 'flex';
-      _renderAutoUpdateToggle(!!(data.config && data.config.auto_update));
+      _renderAutoUpdateToggle(!!(data.config && data.config.auto_update),
+                              !!(data.updater && data.updater.env_disabled));
     }
   } catch(e) {}
 }
@@ -30582,7 +30583,16 @@ async function checkUpdateStatus() {
 // Reflect the persisted auto_update preference in the banner toggle. On the
 // hosted cloud (CLOUD_MODE) the local pip-updater doesn't apply — the cloud
 // stays current centrally — so show that instead of a functional switch.
-function _renderAutoUpdateToggle(isOn) {
+// `envDisabled` is the node's CLAWMETRY_AUTO_UPDATE=0 kill switch, which
+// outranks the stored preference. The status endpoint has always reported it
+// as `updater.env_disabled`; this function used to read only the stored flag,
+// so a machine that could never update rendered a ticked "Auto-update on"
+// beside a permanent "update available" banner. Founder node 2026-10-06: the
+// banner said auto-update was on while the daemon sat four releases behind,
+// its last attempt having failed days earlier. A checkbox that reports a
+// preference the machine cannot honour is the same defect as a card that
+// reports a zero it cannot stand behind.
+function _renderAutoUpdateToggle(isOn, envDisabled) {
   var wrap = document.getElementById('update-banner-auto');
   var box = document.getElementById('update-banner-auto-toggle');
   var label = document.getElementById('update-banner-auto-label');
@@ -30596,6 +30606,19 @@ function _renderAutoUpdateToggle(isOn) {
     return;
   }
   wrap.style.display = 'flex';
+  if (envDisabled) {
+    // Say what is true and why, and hide a control that cannot take effect.
+    if (box) box.style.display = 'none';
+    wrap.style.cursor = 'default';
+    wrap.title = t('app.auto_update_env_off_tip', null,
+      'CLAWMETRY_AUTO_UPDATE=0 is set for this process, so updates are not '
+      + 'installed automatically however this is set. Update with the button, '
+      + 'or restart the daemon without that variable.');
+    if (label) label.textContent = t('app.auto_update_env_off', null,
+      'Auto-update off on this machine');
+    return;
+  }
+  wrap.style.cursor = '';
   if (box) { box.style.display = ''; box.checked = !!isOn; }
   if (label) label.textContent = isOn ? 'Auto-update on' : 'Auto-update';
 }

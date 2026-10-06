@@ -61,6 +61,8 @@
   "app.auto_pause_is_a_cloud_pro_feature": "Auto-pause is a Cloud Pro feature.",
   "app.auto_refreshing_last_updated": "Auto-refreshing - Last updated: ",
   "app.auto_updates_on_cloud": "☁ Auto-updates on Cloud",
+  "app.auto_update_env_off": "Auto-update off on this machine",
+  "app.auto_update_env_off_tip": "CLAWMETRY_AUTO_UPDATE=0 is set for this process, so updates are not installed automatically however this is set. Update with the button, or restart the daemon without that variable.",
   "app.automation": "🧠 Automation",
   "app.avg_latency": "AVG LATENCY",
   "app.back_to_sessions": "← Back to sessions",
