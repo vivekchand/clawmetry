@@ -652,7 +652,17 @@ def _fetch_sessions_table_rows(limit: int = 200):
     standard install runs daemon + dashboard as separate processes and
     DuckDB's exclusive lock blocks direct opens), then falls back to a
     direct ``get_store()`` open for single-process boots (tests + dev mode).
+
+    Returns ``None`` — "unknown", never ``[]`` — in the hosted container.
+    The fallback open SUCCEEDS there against a DuckDB no daemon ever wrote
+    to, so every caller got a confident empty list describing the container
+    rather than the user's machine. That is how app.clawmetry.com came to
+    say "It's idle right now." over a node that localhost:8900 showed hard
+    at work (founder report 2026-10-06). See :mod:`helpers.node_store`.
     """
+    from helpers.node_store import store_is_authoritative
+    if not store_is_authoritative():
+        return None
     # 1. Cross-process: ask the daemon over HTTP.
     try:
         from routes.local_query import local_store_via_daemon
