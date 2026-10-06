@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixed: the update banner stops claiming auto-update is on when it cannot be
+
+- **Why:** a node's banner read "Update available: v0.12.912. You are on v0.12.908" with a ticked "Auto-update on" beside it, and the daemon had not updated in days (founder node 2026-10-06). `CLAWMETRY_AUTO_UPDATE=0` was set for that daemon process, which `routes/update_check.py` treats as a hard kill switch regardless of the stored preference. `/api/update-check/status` reported `config.auto_update: true` and `updater.env_disabled: true` at the same time, and the banner rendered the first and threw the second away. The machine could never update, and the one surface that could have said so said the opposite. It also hid a real failure: the last attempt errored with "No matching distribution found for clawmetry==0.12.904" and nothing surfaced it.
+- **What:** the banner now reads "Auto-update off on this machine", hides a checkbox that cannot take effect, and names the variable responsible in the tooltip along with what to do about it. A node without the variable renders exactly as before. The backend is unchanged, because it was already honest.
+- **Verified:** 4 new tests in `tests/test_auto_update_claim_matches_reality.py` drive the shipped renderer under node against a fake DOM: the exact reported state never renders "Auto-update on" and names the variable, a normal node is unchanged in both its on and off cases, the caller still forwards the override, and the endpoint still reports it.
+- **Limits:** this surfaces the kill switch; it does not change what the switch does, and a node that has it set still needs a human to update. The repeated "No matching distribution" failure is reported but not diagnosed here.
+
+
 ### Fixed: the hosted dashboard no longer says a working machine is idle
 
 - **Why:** the Overview hero on app.clawmetry.com read "It's idle right now." with "No agents running" above it, while localhost:8900 on the same node, with the same runtime filter, read "It's working right now." over two Claude Code sessions mid-task (founder report 2026-10-06). `/api/live-sessions` is served by the same route module in the hosted container, and `get_store(read_only=True)` succeeds there against a DuckDB no daemon ever wrote to, so the route answered `{"available": true, "counts": {"working": 0}}`. `available: true` is the hero's licence to state the negative as fact, and that confident zero also overrode the hero's own fallback, which reads runtime recency from the snapshot and would have been right unaided. Third time this shape shipped: the hosted Guard tab and the Signals drill-down were the first two (2026-09-14).
