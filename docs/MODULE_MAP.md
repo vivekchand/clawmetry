@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-327 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+328 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -134,6 +134,7 @@ Helpers extracted out of `dashboard.py`. Route modules still reach the ones that
 | `helpers/gateway.py` | medium |  |  | OpenClaw gateway WebSocket RPC + HTTP invoke client. |
 | `helpers/hardware.py` | small |  |  | Real host hardware detection (CPU / cores / RAM / backend). |
 | `helpers/logs.py` | medium |  |  | Filesystem helpers for OpenClaw log discovery + tail + grep. |
+| `helpers/node_store.py` | small |  |  | Is the DuckDB this process can open actually *a node's* store? |
 | `helpers/openapi.py` | medium | `bp_openapi` | `/api/docs`, `/openapi.json` | auto-generate an OpenAPI 3.1 spec from Flask routes. |
 | `helpers/pricing.py` | small |  |  | Pure helpers for mapping model names to providers. |
 | `helpers/server.py` | small |  |  | Server-startup helpers for dashboard.py. |
