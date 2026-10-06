@@ -415,7 +415,8 @@ def _ensure_daemon_for_choice(choice: str) -> None:
 @bp_onboarding.route("/api/onboarding/state")
 def api_onboarding_state():
     try:
-        if os.environ.get("CLAWMETRY_CLOUD", "").strip():
+        from helpers.node_store import running_in_cloud
+        if running_in_cloud():
             # Hosted dashboard: signing up WAS the onboarding.
             return jsonify({"required": False, "state": "managed",
                             "source": "cloud_mode"})
@@ -785,7 +786,8 @@ def api_account_signout():
     gate regardless; the one hard failure is the hosted dashboard, where
     account state lives in the cloud session rather than on disk.
     """
-    if os.environ.get("CLAWMETRY_CLOUD", "").strip():
+    from helpers.node_store import running_in_cloud
+    if running_in_cloud():
         return jsonify({
             "ok": False,
             "error": "Sign out from your account menu on app.clawmetry.com.",

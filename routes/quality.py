@@ -30,7 +30,6 @@ so a capped scan is never mistaken for full coverage.
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
@@ -207,7 +206,8 @@ def quality_report_card():
     # fine, so the hosted process refuses to answer from it at all. The real
     # grade reaches the cloud through the daemon's encrypted snapshot; when
     # that slice is missing (older daemon) this honest message is what shows.
-    if os.environ.get("CLAWMETRY_CLOUD", "").strip():
+    from helpers.node_store import running_in_cloud
+    if running_in_cloud():
         return jsonify(unavailable_report_card(window_hours, runtime))
 
     since = _iso_cutoff(window_hours)
