@@ -1553,7 +1553,14 @@
   gap: 4px;
   position: sticky;
   top: 56px;
-  height: calc(100vh - 56px);
+  /* The nav's real top is 56px ONLY when nothing sits between the header and
+     the shell. A banner (update, trial, promo) pushes it down while the
+     height stays 100vh-56px, so the last ~50px of the nav hang below the
+     fold and cannot be scrolled to -- they are outside the window, not
+     inside the scroll box. --cm-nav-top is measured by bug-report.js and
+     falls back to the old constant, so the nav is never taller than the
+     space it actually has. */
+  height: calc(100vh - var(--cm-nav-top, 56px));
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -4135,3 +4142,222 @@ body.has-profile-menu #logout-btn { display: none !important; }
 body.cm-assistant-active #update-banner,
 body.cm-assistant-active #license-expired-banner[data-ending-trial="true"] { display: none !important; }
 .cm-dashboard-number { font-size: 42px; font-weight: 650; padding: 22px; }
+
+/* ── Report a bug ──────────────────────────────────────────────────────────
+   A dialog inside an established product, so it borrows the house tokens
+   rather than inventing a second visual language. Everything here is quiet
+   except the receipt: the ticket id is set large and in the data face
+   because it is a code a person will copy, read aloud or paste into an
+   email, not decoration. */
+
+.bug-overlay .bug-card { max-width: 560px; }
+.bug-subtitle {
+  margin-top: 3px; font-size: 12.5px; line-height: 1.45;
+  color: var(--text-muted); white-space: normal;
+}
+.bug-content { padding: 20px 22px 24px; }
+
+.bug-form { display: flex; flex-direction: column; gap: 18px; }
+.bug-form[hidden] { display: none; }
+
+.bug-field { display: block; position: relative; border: 0; padding: 0; margin: 0; }
+.bug-label {
+  display: block; margin-bottom: 6px;
+  font-size: 13px; font-weight: 650; color: var(--text-secondary);
+}
+.bug-field input[type="text"],
+.bug-field input[type="email"],
+.bug-field textarea {
+  width: 100%; box-sizing: border-box;
+  padding: 10px 12px;
+  font: inherit; font-size: 13.5px; line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary); border-radius: 9px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.bug-field textarea { resize: vertical; min-height: 96px; }
+.bug-field input::placeholder, .bug-field textarea::placeholder { color: var(--text-faint); }
+.bug-field input:focus, .bug-field textarea:focus {
+  outline: none; border-color: var(--text-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-accent) 22%, transparent);
+}
+.bug-counter {
+  display: block; margin-top: 5px; text-align: right;
+  font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
+.bug-help { display: block; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+
+/* Severity: four rows, each carrying its own plain-language explanation.
+   A colour-coded left edge appears only on the chosen one, so the list
+   reads as calm until the person makes a choice. */
+.bug-severity { display: flex; flex-direction: column; gap: 7px; }
+.bug-severity legend { padding: 0; }
+.bug-sev {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 10px 13px; cursor: pointer;
+  border: 1px solid var(--border-primary); border-left: 3px solid var(--border-primary);
+  border-radius: 9px; background: var(--bg-secondary);
+  transition: background .12s, border-color .12s;
+}
+.bug-sev:hover { background: var(--bg-hover); }
+.bug-sev input { position: absolute; opacity: 0; pointer-events: none; }
+.bug-sev-name { font-size: 13.5px; font-weight: 650; color: var(--text-primary); }
+.bug-sev-note { font-size: 12.5px; color: var(--text-muted); }
+.bug-sev:focus-within { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+/* Selected state is expressed twice on purpose: :has() for browsers that
+   have it, and a data-checked attribute set by bug-report.js for the ones
+   that do not. The radio itself is visually hidden, so a browser that
+   matched neither would leave the person unable to see their own choice. */
+.bug-sev:has(input:checked),
+.bug-sev[data-checked] { background: var(--bg-hover); border-color: var(--border-primary); }
+.bug-sev[data-sev="blocking"]:has(input:checked),
+.bug-sev[data-sev="blocking"][data-checked] { border-left-color: var(--text-error); }
+.bug-sev[data-sev="major"]:has(input:checked),
+.bug-sev[data-sev="major"][data-checked]    { border-left-color: var(--text-warning); }
+.bug-sev[data-sev="normal"]:has(input:checked),
+.bug-sev[data-sev="normal"][data-checked]   { border-left-color: var(--text-accent); }
+.bug-sev[data-sev="minor"]:has(input:checked),
+.bug-sev[data-sev="minor"][data-checked]    { border-left-color: var(--text-muted); }
+
+/* Screenshot: a dashed well that accepts a drop, a paste or a pick. Dashed
+   because it is the one field that is a target, not a box to type in. */
+.bug-drop {
+  display: flex; align-items: center; justify-content: center;
+  padding: 18px 14px; text-align: center; cursor: pointer;
+  border: 1.5px dashed var(--border-primary); border-radius: 10px;
+  background: var(--bg-secondary); color: var(--text-muted); font-size: 12.5px;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.bug-drop:hover, .bug-drop.over {
+  border-color: var(--text-accent); color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+.bug-drop:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+.bug-drop[hidden] { display: none; }
+.bug-drop-pick { color: var(--text-link); text-decoration: underline; }
+
+.bug-shot { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.bug-shot[hidden] { display: none; }
+.bug-shot img {
+  display: block; width: 100%; max-height: 220px; object-fit: contain;
+  border-radius: 10px; border: 1px solid var(--border-primary);
+  background: var(--log-bg);
+}
+.bug-shot-meta {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 12px; color: var(--text-muted);
+}
+.bug-shot-meta button { padding: 6px 12px; font-size: 12px; }
+
+.bug-attach { border-top: 1px solid var(--border-secondary); padding-top: 14px; }
+.bug-attach summary {
+  cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text-tertiary);
+}
+.bug-attach summary:hover { color: var(--text-secondary); }
+.bug-attach[open] summary { margin-bottom: 8px; }
+.bug-diag {
+  margin: 8px 0 0; padding: 11px 13px; max-height: 190px; overflow: auto;
+  background: var(--log-bg); border: 1px solid var(--border-secondary);
+  border-radius: 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; line-height: 1.55; color: var(--text-tertiary);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.bug-error {
+  padding: 11px 13px; border-radius: 9px;
+  background: var(--bg-error); border: 1px solid var(--text-error);
+  color: var(--text-error); font-size: 13px; line-height: 1.5;
+}
+.bug-error[hidden] { display: none; }
+
+.bug-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bug-send {
+  padding: 10px 18px; border: 0; border-radius: 9px; cursor: pointer;
+  font: inherit; font-size: 13.5px; font-weight: 650;
+  color: #fff; background: var(--text-accent); text-decoration: none;
+  transition: filter .15s;
+}
+.bug-send:hover { filter: brightness(1.08); }
+.bug-send:disabled { opacity: .6; cursor: default; }
+.bug-secondary {
+  padding: 10px 16px; border-radius: 9px; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600;
+  color: var(--text-tertiary); background: var(--button-bg);
+  border: 1px solid var(--border-primary);
+  transition: background .15s, color .15s;
+}
+.bug-secondary:hover { background: var(--button-hover); color: var(--text-secondary); }
+.bug-send:focus-visible, .bug-secondary:focus-visible {
+  outline: 2px solid var(--text-accent); outline-offset: 2px;
+}
+
+/* The receipt. The one loud moment in the dialog. */
+.bug-receipt { display: flex; flex-direction: column; gap: 14px; padding: 6px 0 2px; }
+.bug-receipt[hidden] { display: none; }
+.bug-receipt-mark {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-success); color: var(--text-success);
+}
+.bug-receipt-lead { margin: 0; font-size: 15px; font-weight: 650; color: var(--text-primary); }
+.bug-ticket-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.bug-ticket {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 26px; font-weight: 600; letter-spacing: .06em;
+  color: var(--text-primary);
+  padding: 8px 14px; border-radius: 10px;
+  background: var(--log-bg); border: 1px solid var(--border-primary);
+  user-select: all;
+}
+.bug-copy { padding: 8px 14px; }
+.bug-receipt-note { margin: 0; font-size: 13px; line-height: 1.55; color: var(--text-muted); max-width: 46ch; }
+
+.bug-mine { margin-top: 24px; border-top: 1px solid var(--border-secondary); padding-top: 16px; }
+.bug-mine[hidden] { display: none; }
+.bug-mine-title { margin: 0 0 10px; font-size: 13px; font-weight: 650; color: var(--text-secondary); }
+.bug-mine-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.bug-mine-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 9px;
+  background: var(--bg-secondary); border: 1px solid var(--border-secondary);
+}
+.bug-mine-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; color: var(--text-tertiary); flex-shrink: 0;
+}
+.bug-mine-label {
+  flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bug-mine-status {
+  flex-shrink: 0; padding: 3px 9px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600;
+  color: var(--text-tertiary); background: var(--button-bg);
+}
+.bug-mine-status[data-status="fixed"],
+.bug-mine-status[data-status="released"] { color: var(--text-success); background: var(--bg-success); }
+.bug-mine-status[data-status="in_progress"],
+.bug-mine-status[data-status="triaged"] { color: var(--text-accent); background: var(--bg-hover); }
+.bug-mine-status[data-status="needs_info"] { color: var(--text-warning); background: var(--bg-warning); }
+
+/* The sidebar entry sits apart from the tab list: it is not a place in the
+   product, it is a way out of a bad moment. */
+/* Pinned, not appended: the nav scrolls, and the one entry a stuck person
+   needs must not be the one they have to scroll to find. */
+.left-nav-footer {
+  margin-top: auto; position: sticky; bottom: -16px; z-index: 2;
+  padding: 10px 0 14px; background: var(--bg-secondary);
+  border-top: 1px solid var(--border-secondary);
+}
+.left-nav-item.left-nav-report { color: var(--text-muted); }
+.left-nav-item.left-nav-report:hover { color: var(--text-secondary); }
+
+@media (max-width: 640px) {
+  .bug-overlay .bug-card { max-width: 100%; width: 100%; max-height: 100%; border-radius: 0; }
+  .bug-ticket { font-size: 21px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bug-sev, .bug-send, .bug-secondary, .bug-field input, .bug-field textarea { transition: none; }
+}

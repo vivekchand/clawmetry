@@ -1,0 +1,141 @@
+<!-- Report a bug — one dialog, every surface.
+
+     Reachable from the sidebar footer on every tab, on localhost and on the
+     hosted dashboard alike, because a person who has just hit a bug should
+     never have to go looking for where to say so.
+
+     The form is deliberately quiet: two text fields, four plain-language
+     severity rows, an optional address. The one loud moment is the receipt
+     it turns into once the report is sent, because the ticket id is the
+     whole promise of this feature — a report you can check on later is a
+     report that went somewhere.
+
+     Behaviour lives in static/js/bug-report.js. -->
+<div class="modal-overlay bug-overlay" id="bug-overlay" role="dialog" aria-modal="true"
+     aria-labelledby="bug-modal-title" onclick="if(event.target===this)closeBugModal()">
+  <div class="modal-card bug-card">
+
+    <div class="modal-header">
+      <div class="modal-header-left">
+        <div class="modal-title" id="bug-modal-title">Report a bug</div>
+        <div class="bug-subtitle">Something in ClawMetry itself is wrong? This reaches the people who build it.</div>
+      </div>
+      <div class="modal-header-right">
+        <div class="modal-close" onclick="closeBugModal()" aria-label="Close" role="button" tabindex="0">×</div>
+      </div>
+    </div>
+
+    <div class="modal-content bug-content">
+
+      <!-- ── The form ───────────────────────────────────────────────── -->
+      <form id="bug-form" class="bug-form" onsubmit="return submitBugReport(event)">
+
+        <label class="bug-field">
+          <span class="bug-label">What went wrong</span>
+          <input type="text" id="bug-title" maxlength="160" required autocomplete="off"
+                 placeholder="One line, for example: the Cost tab shows zero for Claude Code">
+          <span class="bug-counter"><span id="bug-title-count">0</span>/160</span>
+        </label>
+
+        <label class="bug-field">
+          <span class="bug-label">What happened, in your own words</span>
+          <textarea id="bug-body" rows="5" maxlength="5000"
+                    placeholder="What you did, what happened, and what you expected instead."></textarea>
+          <span class="bug-counter"><span id="bug-body-count">0</span>/5000</span>
+        </label>
+
+        <fieldset class="bug-field bug-severity">
+          <legend class="bug-label">How much is it holding you up</legend>
+          <label class="bug-sev" data-sev="blocking">
+            <input type="radio" name="bug-severity" value="blocking">
+            <span class="bug-sev-name">Blocking</span>
+            <span class="bug-sev-note">I cannot use ClawMetry at all</span>
+          </label>
+          <label class="bug-sev" data-sev="major">
+            <input type="radio" name="bug-severity" value="major">
+            <span class="bug-sev-name">Major</span>
+            <span class="bug-sev-note">Something important is broken</span>
+          </label>
+          <label class="bug-sev" data-sev="normal">
+            <input type="radio" name="bug-severity" value="normal" checked>
+            <span class="bug-sev-name">Normal</span>
+            <span class="bug-sev-note">It is wrong but I can carry on</span>
+          </label>
+          <label class="bug-sev" data-sev="minor">
+            <input type="radio" name="bug-severity" value="minor">
+            <span class="bug-sev-name">Minor</span>
+            <span class="bug-sev-note">Cosmetic, or a small annoyance</span>
+          </label>
+        </fieldset>
+
+        <label class="bug-field">
+          <span class="bug-label">Where we reply</span>
+          <input type="email" id="bug-email" maxlength="300" autocomplete="email"
+                 placeholder="you@example.com">
+          <span class="bug-help">Optional. Without it we cannot tell you when this is fixed.</span>
+        </label>
+
+        <div class="bug-field">
+          <span class="bug-label">A picture of it, if that is easier</span>
+          <div class="bug-drop" id="bug-drop" tabindex="0" role="button"
+               aria-describedby="bug-shot-help">
+            <input type="file" id="bug-file" accept="image/png,image/jpeg,image/webp" hidden>
+            <span class="bug-drop-text">Drop a screenshot here, paste one, or
+              <span class="bug-drop-pick">choose a file</span></span>
+          </div>
+          <figure class="bug-shot" id="bug-shot" hidden>
+            <img id="bug-shot-img" alt="The screenshot you attached">
+            <figcaption class="bug-shot-meta">
+              <span id="bug-shot-name"></span>
+              <button type="button" class="bug-secondary" id="bug-shot-remove">Remove</button>
+            </figcaption>
+          </figure>
+          <span class="bug-help" id="bug-shot-help">It reaches the ClawMetry team
+            only. It is never attached to the public issue, so hide anything on
+            screen you would not want us to see.</span>
+        </div>
+
+        <details class="bug-attach" id="bug-attach">
+          <summary>What gets sent with this report</summary>
+          <p class="bug-help">Facts about this machine and this install, so we can
+             reproduce it. No prompts, no transcripts, no file contents, no paths.</p>
+          <pre id="bug-diagnostics" class="bug-diag">Loading…</pre>
+        </details>
+
+        <div class="bug-error" id="bug-error" role="alert" hidden></div>
+
+        <div class="bug-actions">
+          <button type="submit" class="bug-send" id="bug-send">Send report</button>
+          <button type="button" class="bug-secondary" onclick="closeBugModal()">Cancel</button>
+        </div>
+      </form>
+
+      <!-- ── The receipt ────────────────────────────────────────────── -->
+      <div class="bug-receipt" id="bug-receipt" hidden>
+        <div class="bug-receipt-mark" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <p class="bug-receipt-lead">Report sent. Keep this id.</p>
+        <div class="bug-ticket-row">
+          <span class="bug-ticket" id="bug-ticket">CM-000000</span>
+          <button type="button" class="bug-secondary bug-copy" id="bug-copy"
+                  onclick="copyBugTicket()">Copy</button>
+        </div>
+        <p class="bug-receipt-note" id="bug-receipt-note"></p>
+        <div class="bug-actions">
+          <a class="bug-send" id="bug-status-link" target="_blank" rel="noopener">Check its status</a>
+          <button type="button" class="bug-secondary" onclick="resetBugForm()">Report another</button>
+        </div>
+      </div>
+
+      <!-- ── Reports filed from this browser ────────────────────────── -->
+      <div class="bug-mine" id="bug-mine" hidden>
+        <h3 class="bug-mine-title">Your earlier reports</h3>
+        <ul class="bug-mine-list" id="bug-mine-list"></ul>
+      </div>
+
+    </div>
+  </div>
+</div>
