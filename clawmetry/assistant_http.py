@@ -1,8 +1,6 @@
 """Local HTTP adapters for typed daemon Assistant jobs; no inference here."""
 from __future__ import annotations
 
-import os
-import sys
 import time
 import uuid
 
@@ -21,7 +19,12 @@ def rpc(method, **kwargs):
 
 def invoke(operation, payload, *, stream=False):
     # A hosted container must never execute using its own credentials or data.
-    if os.environ.get('CLOUD_MODE') == '1' or getattr(sys.modules.get('dashboard'), 'CLOUD_MODE', False):
+    # Through the shared probe, not a local spelling: this one read CLOUD_MODE
+    # and dashboard.CLOUD_MODE but NOT CLAWMETRY_CLOUD, which is the spelling
+    # the hosted image's Dockerfile actually sets -- so the guard leaned on
+    # two signals that are incidental there while ignoring the deliberate one.
+    from helpers.node_store import running_in_cloud
+    if running_in_cloud():
         return jsonify(error='Connect the encrypted node transport to use Assistant.'), 503
     rid = uuid.uuid4().hex
     try:
