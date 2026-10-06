@@ -165,3 +165,62 @@ def test_a_real_slice_is_passed_through_untouched(only_anomalies, monkeypatch):
     body = {"anomalies": [{"id": 1}], "active_count": 1}
     monkeypatch.setattr(usage, "_try_local_store_anomalies", lambda: body)
     assert sync._build_usage_snapshot()["anomalies"] == body
+
+
+# ---------------------------------------------------------------------------
+# The cron slice read the filesystem while the dashboard read the store
+# ---------------------------------------------------------------------------
+#
+# Same family, different mechanism. `/api/crons` answers from DuckDB
+# (`_source: local_store`) and listed three jobs; `_build_cron_jobs` read
+# `~/.openclaw/**/cron/jobs.json`, which does not exist on that node, and
+# shipped `cronJobs: []`. The hosted Crons tab was therefore empty beside a
+# node running three crons. CLAUDE.md names the rule: the store is the data
+# layer features read, and a filesystem read "works locally but returns empty
+# in cloud".
+
+def test_cron_slice_prefers_the_store_the_dashboard_reads(monkeypatch):
+    import clawmetry.sync as sync
+    import routes.crons as crons
+
+    monkeypatch.setattr(crons, "_try_local_store_crons", lambda: {
+        "jobs": [{"id": "a", "name": "heartbeat-main", "enabled": True}],
+        "_source": "local_store"})
+    # No jobs.json anywhere: the file path alone would have returned [].
+    monkeypatch.setattr(sync.os.path, "isfile", lambda p: False)
+
+    jobs = sync._build_cron_jobs(None)
+    assert [j["name"] for j in jobs] == ["heartbeat-main"], (
+        "the hosted Crons tab would be empty beside a node running crons")
+
+
+def test_cron_slice_still_falls_back_to_the_file(monkeypatch, tmp_path):
+    """The gateway-managed layout that does write jobs.json must keep working."""
+    import json
+
+    import clawmetry.sync as sync
+    import routes.crons as crons
+
+    monkeypatch.setattr(crons, "_try_local_store_crons", lambda: None)
+    d = tmp_path / "cron"
+    d.mkdir()
+    (d / "jobs.json").write_text(json.dumps(
+        {"jobs": [{"id": "b", "name": "from-file", "enabled": True,
+                   "schedule": {"kind": "cron", "expr": "0 3 * * *"}}]}))
+    monkeypatch.setattr(sync, "_get_openclaw_dir", lambda: str(tmp_path))
+
+    jobs = sync._build_cron_jobs(None)
+    assert [j["name"] for j in jobs] == ["from-file"]
+
+
+def test_a_store_read_that_raises_is_logged_not_swallowed(sync_log, monkeypatch):
+    import clawmetry.sync as sync
+    import routes.crons as crons
+
+    def boom():
+        raise RuntimeError("store unavailable")
+    monkeypatch.setattr(crons, "_try_local_store_crons", boom)
+    monkeypatch.setattr(sync.os.path, "isfile", lambda p: False)
+
+    assert sync._build_cron_jobs(None) == []
+    assert any("cron jobs could not be read" in m for m in sync_log)

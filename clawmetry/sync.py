@@ -20778,7 +20778,32 @@ def _build_channel_data(config):
 
 
 def _build_cron_jobs(paths):
-    """Build cron jobs list for snapshot."""
+    """Build cron jobs list for snapshot.
+
+    Reads the DuckDB store FIRST, the way ``/api/crons`` does, and only then
+    falls back to ``~/.openclaw/**/cron/jobs.json``.
+
+    It used to read the file alone. On a node whose crons live in the store
+    and whose jobs.json does not exist, that returned ``[]`` -- so the local
+    dashboard listed three cron jobs (``/api/crons`` -> ``_source:
+    local_store``) while the hosted Crons tab, reading ``cronJobs`` from this
+    snapshot, showed none (founder report 2026-10-06). CLAUDE.md states the
+    rule this broke: the store is the data layer features read, and a
+    filesystem read "works locally but returns empty in cloud".
+
+    The file fallback stays for the gateway-managed layout that still writes
+    it, so a node on either arrangement is covered.
+    """
+    try:
+        from routes.crons import _try_local_store_crons
+        body = _try_local_store_crons()
+        jobs = (body or {}).get("jobs") or []
+        if jobs:
+            return jobs
+    except Exception as _e_cron:
+        log.warning("snapshot: cron jobs could not be read from the store "
+                    "(%s: %s); falling back to jobs.json",
+                    type(_e_cron).__name__, _e_cron)
     import json as _j2
 
     home = str(Path.home())
