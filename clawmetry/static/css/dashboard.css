@@ -28,6 +28,13 @@
     --card-shadow-hover: 0 10px 18px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.06);
     --nav-active-bg: #eef1f6;
     --nav-active-border: #e4e8ee;
+    /* The serif this product already speaks in (the Overview hero sentence,
+       the flow journey title). It was retyped at each use with a different
+       stack; naming it once stops them drifting apart. */
+    --font-serif: Georgia, "Iowan Old Style", Palatino, "Times New Roman", "Noto Serif", serif;
+    /* The page wash. Light mode can carry a cool tint; dark mode cannot, see
+       the dark block below. */
+    --page-wash: rgba(15, 111, 255, 0.06);
   }
 
   [data-theme="dark"] {
@@ -38,6 +45,13 @@
     --bg-tertiary: #131316;
     --bg-hover: #1a1a1e;
     --bg-accent: #3b82f6;
+    /* The body wash was a hardcoded rgba(15,111,255,.06) in BOTH themes: the
+       LIGHT theme's blue, laid over a near-black page. At 6% on #0a0a0b it
+       does not read as an accent, it reads as a murky cast across the top of
+       every screen, which is what "something is odd about the background"
+       turned out to be (founder report 2026-10-08). Dark mode gets a neutral
+       lift instead: the same depth, no hue. */
+    --page-wash: rgba(255, 255, 255, 0.022);
     --border-primary: #232329;
     --border-secondary: #1c1c21;
     --text-primary: #f2f2f3;
@@ -64,7 +78,7 @@
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
-  body { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans Hebrew', 'Noto Sans JP', 'Noto Sans SC', 'Noto Sans TC', 'Noto Sans KR', 'Noto Sans Devanagari', 'Noto Sans Bengali', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Malayalam', 'Noto Sans Gujarati', 'Noto Sans Gurmukhi', 'Noto Sans Thai', sans-serif; background: radial-gradient(1200px 600px at 70% -20%, rgba(15,111,255,0.06), transparent 55%), var(--bg-primary); color: var(--text-primary); min-height: 100vh; font-size: 14px; font-weight: 500; line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  body { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans Hebrew', 'Noto Sans JP', 'Noto Sans SC', 'Noto Sans TC', 'Noto Sans KR', 'Noto Sans Devanagari', 'Noto Sans Bengali', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Malayalam', 'Noto Sans Gujarati', 'Noto Sans Gurmukhi', 'Noto Sans Thai', sans-serif; background: radial-gradient(1200px 600px at 70% -20%, var(--page-wash), transparent 55%), var(--bg-primary); color: var(--text-primary); min-height: 100vh; font-size: 14px; font-weight: 500; line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
   /* The blue radial glow reads as a tint on near-black; dark stays flat. */
   [data-theme="dark"] body { background: var(--bg-primary); }
 
@@ -1864,7 +1878,7 @@
   box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 30px rgba(0,0,0,0.25);
 }
 .inv-hero-headline {
-  font-family: Georgia, 'Times New Roman', serif; font-size: 32px; line-height: 1.15;
+  font-family: var(--font-serif); font-size: 32px; line-height: 1.15;
   font-weight: 600; color: var(--text-primary); margin: 10px 0 4px;
 }
 .inv-hero-sub { font-size: 14px; color: var(--text-secondary); line-height: 1.6; max-width: 720px; }
@@ -2252,7 +2266,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
   gap: 24px; flex-wrap: wrap; margin-bottom: 22px;
 }
 .q-brand {
-  font-family: Georgia, "Iowan Old Style", "Palatino", "Times New Roman", serif;
+  font-family: var(--font-serif);
   font-size: 30px; font-weight: 700; color: var(--text-primary);
   letter-spacing: -0.01em;
 }
@@ -2299,7 +2313,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
 /* The stamped letter grade — hand-graded red pen. */
 .q-grade {
   position: relative;
-  font-family: Georgia, "Iowan Old Style", "Palatino", "Times New Roman", serif;
+  font-family: var(--font-serif);
   font-weight: 900; font-style: italic; line-height: 0.85;
   font-size: 210px; color: #d33528; transform: rotate(-4deg);
   text-shadow:
@@ -2328,7 +2342,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .q-grade[data-grade="—"]::before { opacity: 0; }
 
 .q-verdict h2 {
-  font-family: Georgia, "Iowan Old Style", "Palatino", "Times New Roman", serif;
+  font-family: var(--font-serif);
   font-size: 30px; font-weight: 600; line-height: 1.15;
   margin: 0 0 10px; color: #1a1611;
   text-wrap: balance; letter-spacing: -0.01em;
@@ -2356,7 +2370,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .q-week .day .g {
   width: 22px; height: 22px; display: grid; place-items: center;
   border-radius: 50%;
-  font-family: Georgia, "Iowan Old Style", "Palatino", serif;
+  font-family: var(--font-serif);
   font-weight: 700; font-style: italic; font-size: 12px; color: white;
   background: rgba(26,22,17,0.15);
 }
@@ -2393,7 +2407,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
 }
 .q-oc:first-child { padding-left: 0; border-left: none; }
 .q-oc-n {
-  font-family: Georgia, "Iowan Old Style", "Palatino", "Times New Roman", serif;
+  font-family: var(--font-serif);
   font-size: 26px; font-weight: 700; color: var(--text-primary);
   font-variant-numeric: tabular-nums; line-height: 1;
 }
@@ -2429,7 +2443,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
   font-size: 13px; color: var(--text-secondary);
 }
 .q-spot-score b {
-  font-family: Georgia, "Iowan Old Style", "Palatino", serif;
+  font-family: var(--font-serif);
   font-weight: 700; color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
@@ -2519,7 +2533,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
 }
 .q-patterns li:first-child { border-top: none; padding-top: 4px; }
 .q-patterns .count {
-  font-family: Georgia, "Iowan Old Style", "Palatino", serif;
+  font-family: var(--font-serif);
   font-weight: 700; font-size: 22px; color: var(--text-primary);
   font-variant-numeric: tabular-nums; text-align: right;
 }

@@ -1276,16 +1276,78 @@
     parent.appendChild(wrap);
   }
 
+  // The assistant already ends most answers by proposing the next question
+  // ("Follow-up: would you like to compare Codex sessions with and without
+  // compaction?"). We rendered that as a sentence, so the one moment the
+  // product invites you further was a dead end you had to retype by hand.
+  // Pull it out and make it the thing you can press.
+  //
+  // Conservative on purpose: only a trailing line that literally announces
+  // itself, and only when it reads as a question. A false positive would
+  // delete prose from the answer, which is far worse than missing a chip.
+  var FOLLOW_UP_LINE = /^\s*follow[-\s]?ups?\s*:\s*(.+)$/i;
+
+  function splitFollowUps(content) {
+    var text = String(content == null ? '' : content);
+    var lines = text.split('\n');
+    var last = -1;
+    for (var i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].trim()) { last = i; break; }
+    }
+    if (last < 0) return { body: text, questions: [] };
+    var match = FOLLOW_UP_LINE.exec(lines[last]);
+    if (!match) return { body: text, questions: [] };
+    var proposal = match[1].trim();
+    // A follow-up that is not a question is a statement about what we did
+    // next, not an offer. Leave it in the prose where it belongs.
+    if (proposal.indexOf('?') < 0) return { body: text, questions: [] };
+    var questions = proposal.split(/(?<=\?)\s+/)
+      .map(function (q) { return q.trim(); })
+      .filter(function (q) { return q.length > 8 && q.length <= 180 && q.indexOf('?') >= 0; });
+    if (!questions.length) return { body: text, questions: [] };
+    return { body: lines.slice(0, last).join('\n').replace(/\s+$/, ''), questions: questions.slice(0, 3) };
+  }
+
+  function askQuestion(text) {
+    var input = el('cm-assistant-input');
+    var form = el('cm-assistant-composer');
+    if (!input || !form) return;
+    input.value = text;
+    resizeInput();
+    input.focus();
+    // Go through the composer's own submit path so every guard it applies
+    // (busy state, scope, conversation readiness) applies here too.
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+  }
+
+  function appendFollowUps(messageNode, questions) {
+    if (!questions || !questions.length) return;
+    var wrap = make('div', 'cm-assistant-followups');
+    wrap.setAttribute('aria-label', 'Suggested next questions');
+    questions.forEach(function (q) {
+      var chip = make('button', 'cm-assistant-followup', q);
+      chip.type = 'button';
+      chip.addEventListener('click', function () { askQuestion(q); });
+      wrap.appendChild(chip);
+    });
+    messageNode.body.appendChild(wrap);
+  }
+
   function appendResult(messageNode, data, question) {
     var response = data || {};
     var content = response.answer || (Array.isArray(response.panels) && response.panels.length ? 'I found these views from the available evidence.' : 'The assistant returned no answer.');
-    setAnswerText(messageNode.content, content);
+    var split = splitFollowUps(content);
+    setAnswerText(messageNode.content, split.body || content);
     var stack = make('div', 'cm-assistant-result-stack');
     (Array.isArray(response.panels) ? response.panels : []).forEach(function (panel) {
       stack.appendChild(renderPanel(panel, question));
     });
     appendSources(stack, response.sources);
     if (stack.childElementCount) messageNode.body.appendChild(stack);
+    // After the sources, so the offer is the last thing on the page and sits
+    // directly above the composer it fills.
+    appendFollowUps(messageNode, split.questions);
   }
 
   function renderConversationMessage(message) {
