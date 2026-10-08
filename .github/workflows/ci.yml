@@ -1221,6 +1221,7 @@ jobs:
             tests/test_live_sessions_all_runtimes.py \
             tests/test_scoped_hero_names_the_runtime.py \
             tests/test_hero_refuses_unbacked_realtime_claim.py \
+            tests/test_snapshot_carries_process_liveness.py \
             tests/test_auto_update_claim_matches_reality.py \
             tests/test_cloud_never_claims_idle.py \
             tests/test_needs_you_ui_contract.py \

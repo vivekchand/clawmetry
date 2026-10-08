@@ -17630,9 +17630,41 @@ def _build_agent_inventory(
         except Exception as _be:
             log.debug("inventory billing enrichment skipped: %s", _be)
 
+        # GROUND TRUTH for the hosted dashboard. Everything above infers
+        # liveness from how recently a transcript was WRITTEN, which fails
+        # while an agent sits in a long tool call and fails again whenever
+        # ingest lags. On 2026-10-07 seven Claude Code processes were running
+        # against a store whose newest row was 6.1 hours old, and the hero
+        # said "It's idle right now."
+        #
+        # The local dashboard can settle that by reading the process table
+        # (routes/sessions.py::api_live_sessions). The HOSTED one cannot: the
+        # container has no access to this machine. So the node has to carry
+        # the answer, or app.clawmetry.com is left asserting "idle" with no
+        # way to know better. Pid-backed, ~3ms cold, counted per runtime so a
+        # scoped hosted hero can use it without borrowing another runtime's.
+        procs_by_rt = {}
+        procs_total = None
+        try:
+            from clawmetry import process_control as _pc
+            _live_procs = _pc.live_sessions() or []
+            procs_total = len(_live_procs)
+            for _p in _live_procs:
+                _rt = str((_p or {}).get("runtime") or "").strip().lower()
+                if _rt:
+                    procs_by_rt[_rt] = procs_by_rt.get(_rt, 0) + 1
+        except Exception as _pe:
+            # Unknown is not zero: a reader must not turn a failed probe into
+            # "no agents are running".
+            procs_total = None
+            log.debug("inventory process probe skipped: %s", _pe)
+
         node_wide = {
             "nodeId": node_id,
             "agents": agents,
+            # None means "could not look", which a reader must treat as
+            # unknown rather than as zero.
+            "processesLive": procs_total,
             # NODE-WIDE (not per-agent): tool provenance counts + eval summary
             # are cross-runtime (query_eval_summary has no runtime param; the
             # tool_catalog groups are cross-runtime). They live in the header
@@ -17671,6 +17703,8 @@ def _build_agent_inventory(
                 # a slice-served roster still leads with a live headline instead
                 # of falling back to a "nothing is running" default.
                 "liveKnown": live_known,
+                "processesLive": (procs_by_rt.get(rt, 0)
+                                  if procs_total is not None else None),
                 "liveCounts": {
                     "working": int(a.get("liveWorking") or 0),
                     "waiting": int(a.get("liveWaiting") or 0),
