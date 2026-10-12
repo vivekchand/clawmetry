@@ -138,3 +138,85 @@ def test_keyboard_interrupt_is_not_swallowed() -> None:
 
     with pytest.raises(KeyboardInterrupt):
         _run(module, ["vendor_fonts.py", "--check"])
+
+
+def test_drift_capture_is_same_generation_and_still_fails(tmp_path):
+    """Never repair a failed generation using evidence from a second fetch."""
+    module = _load_module()
+    css_path = tmp_path / "fonts.css"
+    css_path.write_text("old generation")
+    module.FONT_SETS = [{"name": "test", "css_path": str(css_path)}]
+    calls = []
+    mirrors = []
+
+    def alternating_build(_spec):
+        calls.append(1)
+        return "failed generation" if len(calls) == 1 else "old generation"
+
+    module.build = alternating_build
+    module._mirror = lambda _spec, text: mirrors.append(text)
+    code, out = _run(module, ["vendor_fonts.py", "--check", "--capture-drift"])
+    assert code == 1
+    assert "DRIFT" in out and "CAPTURE" in out
+    assert calls == [1]
+    assert css_path.read_text() == "failed generation"
+    assert mirrors == ["failed generation"]
+
+
+def test_capture_flag_requires_check():
+    module = _load_module()
+    with pytest.raises(SystemExit) as error:
+        _run(module, ["vendor_fonts.py", "--capture-drift"])
+    assert error.value.code == 2
+
+
+def _real_font():
+    return open(os.path.join(REPO_ROOT, 'clawmetry/static/fonts/manrope-latin-ext.woff2'), 'rb').read()
+
+
+def test_metadata_without_additional_glyphs_has_identical_effective_range():
+    module = _load_module()
+    raw = _real_font()
+    old = 'U+0100-02BA, U+20AD-20C0'
+    new = 'U+0100-02BA, U+20AD-20C4'
+    assert module._effective_range(raw, old) == module._effective_range(raw, new)
+    # A genuine loss of supported points must still alter the generation.
+    assert module._effective_range(raw, 'U+0101-02BA') != module._effective_range(raw, 'U+0100-02BA')
+
+
+def test_invalid_downloaded_font_is_failure_not_unverified():
+    module = _load_module()
+    module.build = lambda _spec: (_ for _ in ()).throw(module.FontDataError('corrupt downloaded font'))
+    code, output = _run(module, ['vendor_fonts.py', '--check'])
+    assert code == 1 and 'DRIFT' in output
+    assert 'SKIP' not in output
+
+
+def test_corrupt_committed_binary_fails_even_when_css_matches(tmp_path):
+    module = _load_module()
+    spec = {'name':'test', 'url':'https://fonts.invalid/css', 'fonts_dir': str(tmp_path/'fonts'), 'css_path':str(tmp_path/'fonts.css'), 'rel':'fonts', 'note':'test'}
+    raw = _real_font()
+    css = b"/* latin-ext */ @font-face { font-family: 'Manrope'; font-weight: 400; font-style: normal; src: url(https://fonts.invalid/manrope.woff2); unicode-range: U+0100-02BA; }"
+    module._fetch = lambda url: raw if url.endswith('.woff2') else css
+    expected = module.build(spec)
+    assert 'font-sha256:' in expected
+    with open(spec['css_path'], 'w') as out:
+        out.write(expected)
+    module.FONT_SETS = [spec]
+    code, _ = _run(module, ['vendor_fonts.py', '--check'])
+    assert code == 0
+    with open(os.path.join(spec['fonts_dir'], 'manrope-latin-ext.woff2'), 'wb') as out:
+        out.write(b'corrupt committed font')
+    code, output = _run(module, ['vendor_fonts.py', '--check'])
+    assert code == 1 and 'DRIFT' in output
+
+
+def test_mirror_binary_mismatch_fails(tmp_path):
+    module = _load_module()
+    source=tmp_path/'fonts'; source.mkdir()
+    (source/'one.woff2').write_bytes(b'valid source')
+    mirror=tmp_path/'mirror'; mirror.mkdir(); (mirror/'fonts').mkdir()
+    (mirror/'fonts'/'one.woff2').write_bytes(b'wrong mirror')
+    (mirror/'fonts.css').write_text('same css')
+    spec={'fonts_dir':str(source),'css_path':str(tmp_path/'fonts.css'),'mirror_dir':str(mirror)}
+    assert module._mirror_is_current(spec,'same css') is False
