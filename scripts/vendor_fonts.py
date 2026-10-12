@@ -27,16 +27,22 @@ Usage
     python3 scripts/vendor_fonts.py --check    # verify checked-in output is current
 
 ``--check`` is what CI runs: it re-derives the stylesheet and fails if the
-checked-in one drifted, so a hand-edit or a stale regeneration is caught.
+checked-in one drifted, so a hand-edit or a stale regeneration is caught. It
+generates into a temporary directory and never writes into the tree it is
+verifying, and it corroborates any difference with a second independent
+generation before calling it drift -- see ``main`` for why both matter.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import os
 import re
+import shutil
 import ssl
 import sys
+import tempfile
 import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -133,13 +139,20 @@ def _parse(css: str) -> list[dict]:
     return out
 
 
-def build(spec: dict) -> str:
-    """Download + dedupe one font set. Returns the generated stylesheet text."""
+def build(spec: dict, fonts_dir: str | None = None) -> str:
+    """Download + dedupe one font set. Returns the generated stylesheet text.
+
+    ``fonts_dir`` is where the woff2 files land, defaulting to the set's
+    checked-in directory. Both modes now pass a temporary directory so that
+    generating is never a partial write into the tree -- and so that --check
+    cannot write into the very tree it is about to compare.
+    """
+    dest = spec["fonts_dir"] if fonts_dir is None else fonts_dir
     blocks = _parse(_fetch(spec["url"]).decode("utf-8"))
     if not blocks:
         raise SystemExit(f"{spec['name']}: no @font-face blocks parsed — API shape changed?")
 
-    os.makedirs(spec["fonts_dir"], exist_ok=True)
+    os.makedirs(dest, exist_ok=True)
     by_hash: dict[str, str] = {}
     lines = [
         "/* ClawMetry — self-hosted webfonts. GENERATED, do not hand-edit.",
@@ -163,7 +176,7 @@ def build(spec: dict) -> str:
             while filename in by_hash.values():
                 n += 1
                 filename = f"{slug}-{b['subset']}-{n}.woff2"
-            with open(os.path.join(spec["fonts_dir"], filename), "wb") as fh:
+            with open(os.path.join(dest, filename), "wb") as fh:
                 fh.write(raw)
             by_hash[digest] = filename
         filename = by_hash[digest]
@@ -202,20 +215,100 @@ def _mirror(spec: dict, css_text: str) -> None:
         out.write(css_text)
 
 
-def _mirror_is_current(spec: dict, css_text: str) -> bool:
-    dest = spec.get("mirror_dir")
-    if not dest:
-        return True
-    css_dest = os.path.join(dest, os.path.basename(spec["css_path"]))
-    if not os.path.exists(css_dest):
-        return False
-    with open(css_dest, encoding="utf-8") as fh:
-        if fh.read() != css_text:
-            return False
-    dest_fonts = os.path.join(dest, os.path.basename(spec["fonts_dir"]))
-    if not os.path.isdir(dest_fonts):
-        return False
-    return set(os.listdir(dest_fonts)) == set(os.listdir(spec["fonts_dir"]))
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _digests(directory: str) -> dict[str, str]:
+    """``{filename: sha256}`` for one font directory; ``{}`` when it is absent.
+
+    Compared by CONTENT, not by name. Names are derived from the family and
+    the subset, so a changed font file keeps its old name: comparing listings
+    alone cannot tell a current woff2 from a superseded or hand-edited one.
+    """
+    if not os.path.isdir(directory):
+        return {}
+    return {
+        name: _sha256_file(os.path.join(directory, name))
+        for name in sorted(os.listdir(directory))
+    }
+
+
+def _read_text(path: str) -> str:
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _rel(path: str) -> str:
+    return os.path.relpath(path, REPO)
+
+
+def _describe_drift(spec: dict, css_text: str, fonts: dict[str, str]) -> str | None:
+    """What in the checked-in tree disagrees with this generation, if anything.
+
+    Returns a one-line description, or None when every checked-in copy matches.
+    Every copy the generator writes is checked: the stylesheet, the woff2 files
+    beside it, and the mirrored bundle. Previously only the stylesheet and the
+    mirror's file NAMES were compared, and the comparison ran after --check had
+    already overwritten the font files -- so a font whose bytes moved upstream
+    without changing its name could never be reported at all.
+    """
+    if _read_text(spec["css_path"]) != css_text:
+        return f"{_rel(spec['css_path'])} is stale"
+    if _digests(spec["fonts_dir"]) != fonts:
+        return (
+            f"the woff2 files in {_rel(spec['fonts_dir'])} do not match the "
+            "fresh download"
+        )
+
+    mirror = spec.get("mirror_dir")
+    if mirror:
+        mirror_css = os.path.join(mirror, os.path.basename(spec["css_path"]))
+        if _read_text(mirror_css) != css_text:
+            return f"the mirrored stylesheet in {_rel(mirror)} is stale"
+        mirror_fonts = os.path.join(mirror, os.path.basename(spec["fonts_dir"]))
+        if _digests(mirror_fonts) != fonts:
+            return f"the mirrored woff2 files in {_rel(mirror_fonts)} are stale"
+    return None
+
+
+@contextlib.contextmanager
+def _generation(spec: dict):
+    """One independent generation, into a throwaway directory.
+
+    Yields ``(css_text, {filename: sha256}, directory)``. The directory is
+    removed on exit, so a generation has no effect on the repository unless the
+    caller copies it out.
+    """
+    tmp = tempfile.mkdtemp(prefix="clawmetry-fonts-")
+    try:
+        css_text = build(spec, fonts_dir=tmp)
+        yield css_text, _digests(tmp), tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _sync_dir(src: str, dest: str) -> None:
+    """Make ``dest`` hold exactly ``src``, dropping anything else.
+
+    The prune half matters: without it a subset that upstream stopped serving
+    lingers in the tree forever, and the exact-set comparison in
+    _describe_drift would then report drift that `vendor_fonts.py` could not
+    clear -- a check with no path to green, which is the thing this script's
+    whole degrade-on-outage posture exists to avoid.
+    """
+    os.makedirs(dest, exist_ok=True)
+    keep = set(os.listdir(src))
+    for stale in set(os.listdir(dest)) - keep:
+        os.remove(os.path.join(dest, stale))
+    for name in keep:
+        shutil.copyfile(os.path.join(src, name), os.path.join(dest, name))
 
 
 def main() -> int:
@@ -250,7 +343,16 @@ def main() -> int:
         # there. Mirrors the same posture scripts/verify_vendor.py already
         # takes for the npm registry.
         try:
-            generated = build(spec)
+            with _generation(spec) as (generated, fonts, fresh_dir):
+                if args.check:
+                    drift = _describe_drift(spec, generated, fonts)
+                else:
+                    _sync_dir(fresh_dir, spec["fonts_dir"])
+                    os.makedirs(os.path.dirname(spec["css_path"]), exist_ok=True)
+                    with open(spec["css_path"], "w", encoding="utf-8") as fh:
+                        fh.write(generated)
+                    _mirror(spec, generated)
+                    drift = None
         except BaseException as exc:  # noqa: BLE001 - includes SystemExit from _parse
             if isinstance(exc, KeyboardInterrupt):
                 raise
@@ -267,36 +369,72 @@ def main() -> int:
             )
             continue
 
-        path = spec["css_path"]
-        if args.check:
-            current = ""
-            if os.path.exists(path):
-                with open(path, encoding="utf-8") as fh:
-                    current = fh.read()
-            if current != generated:
-                print(f"DRIFT  {spec['name']}: {os.path.relpath(path, REPO)} is stale")
-                print("       run: python3 scripts/vendor_fonts.py")
-                failed = True
-            elif not _mirror_is_current(spec, generated):
-                print(f"DRIFT  {spec['name']}: mirror in {os.path.relpath(spec['mirror_dir'], REPO)} is stale")
-                print("       run: python3 scripts/vendor_fonts.py")
-                failed = True
-            else:
-                print(f"ok     {spec['name']}: {os.path.relpath(path, REPO)}")
-        else:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(generated)
-            _mirror(spec, generated)
+        if not args.check:
             count = len(os.listdir(spec["fonts_dir"]))
             size = sum(
                 os.path.getsize(os.path.join(spec["fonts_dir"], f))
                 for f in os.listdir(spec["fonts_dir"])
             )
             print(
-                f"wrote  {spec['name']}: {os.path.relpath(path, REPO)} "
+                f"wrote  {spec['name']}: {os.path.relpath(spec['css_path'], REPO)} "
                 f"({count} woff2, {size / 1024:.0f} KB)"
             )
+            continue
+
+        if drift is None:
+            print(f"ok     {spec['name']}: {os.path.relpath(spec['css_path'], REPO)}")
+            continue
+
+        # A single disagreeing generation is not yet evidence of drift. The
+        # upstream API answers the same request inconsistently often enough to
+        # matter: this job failed on main on 2026-10-05 reporting a stale
+        # stylesheet, and the regeneration the very next step ran -- same
+        # commit, same runner, seconds later -- produced output byte-identical
+        # to what was already checked in. Nothing had drifted; one fetch simply
+        # came back different.
+        #
+        # That is the third case the two existing ones do not cover:
+        #
+        #   could not fetch        -> SKIP  (unverified)
+        #   fetched inconsistently -> SKIP  (unverified)   <- this branch
+        #   fetched and differs    -> DRIFT (fails)
+        #
+        # So corroborate: generate a second, independent time. Report drift only
+        # when the two agree with each other, which is what a real upstream
+        # change looks like. When they disagree, the upstream -- not the tree --
+        # is what could not be pinned down, and that is not a contributor's
+        # problem to fix. A genuine difference is stable and still fails here.
+        #
+        # This costs a second download only on the path that was about to fail,
+        # so the ordinary green run is unchanged.
+        try:
+            with _generation(spec) as (again, fonts_again, _unused):
+                corroborated = (again, fonts_again) == (generated, fonts)
+        except BaseException as exc:  # noqa: BLE001
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            print(
+                f"SKIP   {spec['name']}: {drift}, but the second generation "
+                f"needed to confirm it could not be fetched "
+                f"({type(exc).__name__}: {exc})"
+            )
+            print("       Treated as UNVERIFIED, not as drift. Re-run to confirm.")
+            continue
+
+        if not corroborated:
+            print(
+                f"SKIP   {spec['name']}: upstream served two different answers "
+                f"for the same request, so {drift} could not be confirmed"
+            )
+            print(
+                "       Treated as UNVERIFIED, not as drift. Nothing in the "
+                "tree is known to be stale. Re-run to confirm."
+            )
+            continue
+
+        print(f"DRIFT  {spec['name']}: {drift}")
+        print("       run: python3 scripts/vendor_fonts.py")
+        failed = True
 
     return 1 if failed else 0
 
