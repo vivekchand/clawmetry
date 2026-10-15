@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Feat: explain node activity beyond agent transcripts (#6412)
+
+- **Why:** agent transcripts and machine resource totals cannot explain a change made by another process. Operators need to see the evidence and its coverage before deciding whether a change needs investigation.
+- **What:** a Node activity tab with Observe, Govern and Guard views. The daemon stores bounded CPU, memory, process, listener, available login and selected-settings observations in DuckDB, including change evidence and separate historical reviews. The view includes recorded resource history and event replay. Hosted detail uses the encrypted node snapshot; monitoring choices and reviews require a sealed request and confirmed node persistence. Unknown activity stays unattributed, and incomplete scans do not imply removals.
+- **Verified:** focused collector, store, route, encrypted relay, frontend and existing Guard checks; actual isolated daemon and full dashboard with a harmless selected-file change; confirmed review and preference writes; narrow layouts, reduced motion and stopped off-tab polling. The local wheel contains the complete feature assets and its portable psutil dependency. Independent review found and corrected event loss under process churn, hidden older findings, listener enrichment changes, unbounded review history, confirmation polling after navigation and cached process creation times.
+- **Limits:** periodic account and namespace observations can miss short-lived activity. Socket permissions and collection caps remain explicit. This release does not provide complete execution capture, automatic attacker identity, supported-session process correlation or arbitrary process termination. Privileged event sensors and stronger attribution remain further work.
+
 ### Feat: see which pull request your agent spend bought (#6407)
 
 - **Why:** every cost figure in ClawMetry was keyed on an input, a session, a runtime, a model or a node, and none on an output, so the person defending the bill had a numerator and no denominator. The git outcome join answers the adjacent question, did the work ship, by scanning a working copy, which cannot answer for history already ingested, for a machine whose clone has since been deleted, or on the hosted dashboard, where no repository exists. Measured on one real node before anything was built: 201 sessions and $3,843.33 of spend, of which 48 sessions holding 76% of the spend referenced a specific pull request, across 142 pull requests and 6 repositories. The product showed none of it.
