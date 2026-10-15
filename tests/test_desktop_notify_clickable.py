@@ -46,6 +46,7 @@ def on(monkeypatch):
     # the next one's capability report.
     monkeypatch.setattr(dn, "_tn_refusal", {"reason": ""})
     monkeypatch.setattr(dn, "_tn_versions", {})
+    monkeypatch.setattr(dn, "_tn_authorization", {})
 
 
 @pytest.fixture
@@ -582,3 +583,76 @@ def test_linux_click_opens_the_url_through_real_processes(on, monkeypatch, tmp_p
 
     assert opened.read_text() == _URL
     assert "#session=" in opened.read_text()
+
+
+# ── Saying it before it breaks ──────────────────────────────────────────────
+
+
+def _mac_with_notifier(monkeypatch, diagnose_out, tmp_path):
+    """A darwin with a v3 notifier whose -diagnose prints `diagnose_out`."""
+    notifier = tmp_path / "terminal-notifier"
+    notifier.write_text("")
+    monkeypatch.setattr(dn.sys, "platform", "darwin")
+    monkeypatch.setattr(dn, "_macos_notifier", lambda: str(notifier))
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
+
+    def fake_run(argv, **kw):
+        if "-diagnose" in argv:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=diagnose_out.encode(), stderr=b"")
+        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(dn.subprocess, "run", fake_run)
+    return str(notifier)
+
+
+def test_a_mac_that_denied_notifications_is_not_called_clickable(
+    on, monkeypatch, tmp_path
+):
+    """The report must not be optimistic until something breaks.
+
+    Nothing has been refused yet on this machine - no incident has been sent.
+    But macOS has already decided it will refuse, and terminal-notifier will
+    say so if asked. Without asking, `capability()` answers `clickable: true`
+    and the first urgent incident is what discovers the truth, which is the
+    failure mode this whole module exists to remove.
+    """
+    _mac_with_notifier(
+        monkeypatch,
+        "terminal-notifier 3.1.0\n  authorization       denied\n",
+        tmp_path,
+    )
+    cap = dn.capability()
+    assert cap["can_notify"] is True, "a banner still goes out"
+    assert cap["clickable"] is False
+    assert "denied" in cap["reason"]
+    assert "System Settings" in cap["reason"]
+
+
+def test_an_unaskable_notifier_keeps_the_benefit_of_the_doubt(
+    on, monkeypatch, tmp_path
+):
+    """`-diagnose` arrived in 3.1; 3.0 posts and clicks perfectly well.
+
+    An unreadable answer is not a denial. Condemning every build that cannot
+    answer would report `clickable: false` on a Mac where the click works,
+    which is the same dishonesty pointed the other way.
+    """
+    _mac_with_notifier(monkeypatch, "unrecognised option: -diagnose", tmp_path)
+    cap = dn.capability()
+    assert cap["clickable"] is True
+    assert cap["mechanism"] == "terminal-notifier"
+
+
+def test_the_authorization_probe_never_costs_a_notification(
+    on, monkeypatch, tmp_path
+):
+    """A probe that throws must not take the alert down with it."""
+    _mac_with_notifier(monkeypatch, "", tmp_path)
+
+    def boom(argv, **kw):
+        raise OSError("probe exploded")
+
+    monkeypatch.setattr(dn.subprocess, "run", boom)
+    assert dn._macos_notifier_authorization("/x/terminal-notifier") == ""
+    assert dn.capability()["clickable"] is True

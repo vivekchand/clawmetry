@@ -161,6 +161,40 @@ def _macos_notifier_version(path: str) -> tuple:
     return version
 
 
+#: Authorization state per notifier path, from ``-diagnose``. "" means the
+#: question could not be answered (an older build, or the probe failed), which
+#: is deliberately NOT the same as "denied".
+_tn_authorization: dict = {}
+
+
+def _macos_notifier_authorization(path: str) -> str:
+    """``"authorized"``, ``"denied"``, ``"notDetermined"``, or ``""``.
+
+    Without this, a capability report is optimistic until something breaks:
+    it calls a v3 notifier clickable and only learns otherwise once a real
+    incident has already been refused, which makes the first urgent alert on
+    a locked-down Mac the thing that discovers the problem. terminal-notifier
+    3.1 answers the question directly, so ask it instead of waiting.
+
+    An unreadable answer leaves the verdict alone rather than condemning the
+    notifier: a build too old for ``-diagnose`` still posts and still clicks.
+    """
+    if path in _tn_authorization:
+        return _tn_authorization[path]
+    state = ""
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv
+            [path, "-diagnose"], capture_output=True, timeout=5)
+        blob = ((done.stdout or b"") + (done.stderr or b"")).decode("utf-8", "replace")
+        match = re.search(r"^\s*authorization\s+(\S+)\s*$", blob, re.MULTILINE)
+        if match:
+            state = match.group(1)
+    except Exception:  # noqa: BLE001 - a probe is never worth an exception
+        state = ""
+    _tn_authorization[path] = state
+    return state
+
+
 def _macos_notifier() -> str:
     """Path to ``terminal-notifier``, or "" when this Mac has none."""
     env = os.environ.get("CLAWMETRY_TERMINAL_NOTIFIER", "").strip()
@@ -521,6 +555,18 @@ def capability() -> dict:
                        "System Settings > Notifications; alerts fall back to "
                        "an unclickable banner until then."
                        % _tn_refusal["reason"])
+        elif notifier and version >= _MIN_CLICKABLE_TN and _macos_notifier_authorization(
+                notifier) not in ("", "authorized"):
+            # Nothing has failed yet, but the machine has already decided it
+            # will. Say so now rather than letting the first urgent incident
+            # be the discovery.
+            out.update(
+                mechanism="terminal-notifier (not permitted)", can_notify=True,
+                clickable=False,
+                reason="macOS reports notifications for terminal-notifier as "
+                       "'%s'. Allow them under System Settings > Notifications; "
+                       "alerts fall back to an unclickable banner until then."
+                       % _macos_notifier_authorization(notifier))
         elif notifier and version >= _MIN_CLICKABLE_TN:
             out.update(mechanism="terminal-notifier", can_notify=True,
                        clickable=True, reason="")
