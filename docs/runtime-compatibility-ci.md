@@ -101,3 +101,11 @@ To stop the local consumer, run
 `launchctl bootout gui/$(id -u)/com.clawmetry.runtime-dispatch` and remove the
 private `OSS_RUNTIME_CI_LOCAL_BRIDGE` variable. Remove `OSS_RUNTIME_CI_ENABLED`
 to stop automatic production of requests. Logs and state remain local.
+
+The local consumer rechecks each automatic request against its original private
+branch head. It confirms an inactive head on a later poll before marking the
+request superseded, so a new producer run cannot lose a race with an older head
+snapshot. Explicit manual comparisons remain available for historical candidates.
+Retrying a public run refreshes pending and the new conclusion while that run
+still owns the source status. A newer request or different public run on the
+same source SHA keeps ownership of its own status.

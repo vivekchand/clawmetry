@@ -103,5 +103,65 @@ class BridgeTests(unittest.TestCase):
             self.assertFalse(path.with_suffix('.tmp').exists())
 
 
+    def test_automatic_superseded_candidate_never_dispatches(self):
+        record = self.request()
+        with patch.object(bridge, 'latest_status', return_value=STATUS), patch.object(bridge, 'api') as api:
+            bridge.reconcile(record, [], 1000, lambda: None, current=False)
+            api.assert_not_called()
+            self.assertNotIn('done', record)
+            bridge.reconcile(record, [], 1061, lambda: None, current=False)
+            api.assert_called_once()
+            self.assertEqual(api.call_args.args[0], f'repos/{bridge.SOURCE}/statuses/{SHA}')
+            self.assertEqual(api.call_args.kwargs['body']['state'], 'failure')
+            self.assertEqual(record['done'], 'superseded')
+
+    def test_head_snapshot_race_waits_and_then_accepts_current_candidate(self):
+        record = self.request()
+        with patch.object(bridge, 'latest_status', return_value=STATUS), patch.object(bridge, 'api') as api:
+            bridge.reconcile(record, [], 1000, lambda: None, current=False)
+            bridge.reconcile(record, [], 1001, lambda: None, current=True)
+            self.assertNotIn('done', record)
+            self.assertNotIn('inactive_since', record)
+            self.assertEqual(api.call_args.args[0], f'repos/{bridge.DESTINATION}/dispatches')
+
+    def test_retry_replaces_old_success_with_actual_new_conclusion(self):
+        record = self.request()
+        record.update(manual=True, claimed=True, run_id=123, done='success', finished_attempt=1)
+        target = f'https://github.com/{bridge.DESTINATION}/actions/runs/123'
+        status = dict(STATUS, state='success', target_url=target)
+        receipt = {'id': 123, 'display_title': bridge.title(record), 'status': 'completed',
+                   'conclusion': 'failure', 'run_attempt': 2}
+        with patch.object(bridge, 'latest_status', return_value=status) as latest, patch.object(bridge, 'api') as api:
+            api.side_effect = [receipt, {}]
+            observed = bridge.watch_reruns({'requests': {record['nonce']: record}}, {}, lambda: None)
+            self.assertNotIn('done', record)
+            self.assertEqual(api.call_args.kwargs['body']['state'], 'pending')
+            api.side_effect = None
+            latest.return_value = dict(STATUS, description=bridge.queued_marker(record))
+            bridge.reconcile(record, list(observed.values()), 2000, lambda: None)
+            self.assertEqual(api.call_args.kwargs['body']['state'], 'failure')
+            self.assertEqual(record['done'], 'failure')
+            self.assertEqual(record['finished_attempt'], 2)
+
+    def test_old_rerun_cannot_overwrite_a_new_request_on_same_sha(self):
+        record = self.request()
+        record.update(manual=True, claimed=True, run_id=123, done='success')
+        with patch.object(bridge, 'latest_status', return_value=STATUS), patch.object(bridge, 'api') as api:
+            bridge.watch_reruns({'requests': {record['nonce']: record}}, {}, lambda: None)
+            api.assert_not_called()
+            self.assertEqual(record['done'], 'success')
+
+    def test_branch_heads_are_read_from_every_graphql_page(self):
+        def page(name, sha, more, cursor):
+            return {'data': {'repository': {'refs': {
+                'nodes': [{'name': name, 'target': {'oid': sha}}],
+                'pageInfo': {'hasNextPage': more, 'endCursor': cursor}}}}}
+        with patch.object(bridge, 'api', side_effect=[page('feature', SHA, True, 'next'),
+                                                     page('main', BASE, False, None)]) as api:
+            self.assertEqual(bridge.current_heads(), {'feature': SHA, 'main': BASE})
+            self.assertEqual(api.call_args_list[1].kwargs['body']['variables']['cursor'], 'next')
+            self.assertTrue(all(call.args == ('graphql',) for call in api.call_args_list))
+
+
 if __name__ == '__main__':
     unittest.main()
