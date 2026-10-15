@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: keep partial node observations current (#6419)
+
+- **Why:** stale rows could occupy the public cap and hide fresh observations on busy nodes, while permanently partial process scans produced no positive history.
+- **What:** prioritize fresh rows, retain each row's observation time, and record qualified first-observed process sightings with bounded durable deduplication. Preserve knowledge across gaps and disable/re-enable, disclose exhausted sighting history, and remove the map connector that could imply an unsupported actor identity.
+- **Verified:** 56 focused tests and five combined browser checks pass, with failing-before regression evidence and independent review. An owned harmless process on a real capped host appeared in the isolated stored payload and rendered component. Released-daemon and hosted verification follow publication.
+- **Limits:** partial sightings do not prove actual starts, removals, actor identity or malicious intent. Polling and OS permissions still limit coverage.
+
 ### Fixed: the Delivered tab stops inventing artifacts and double-counting money (#6417)
 
 - **Why:** the tab shipped green with 52 tests and was wrong in five independent ways, none of which a fixture could show. Run over 45 real sessions and 14,329 events on the node it was built for, 1,122 of its 2,501 rows were not artifacts at all, and 11% of the money it attributed was the same money counted twice. The tab existed to answer "what did this spend buy", and a reader who finds `<tr><td>Vapi</td><td>Voice` listed as a file their agent wrote stops believing the dollar figure next to it, correctly.
