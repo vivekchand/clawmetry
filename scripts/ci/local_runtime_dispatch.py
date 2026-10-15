@@ -49,8 +49,9 @@ def runs(repository, workflow, since, event=None):
 
 
 def latest_status(sha):
-    statuses = api(f'repos/{SOURCE}/commits/{sha}/status')['statuses']
-    return next((s for s in statuses if s['context'] == CONTEXT), None)
+    # Combined status summaries omit creator; individual statuses retain it.
+    pages = api(f'repos/{SOURCE}/commits/{sha}/statuses', query={'per_page': '100'})
+    return next((s for page in pages for s in page if s['context'] == CONTEXT), None)
 
 
 def current_heads():

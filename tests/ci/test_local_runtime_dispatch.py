@@ -19,6 +19,12 @@ class BridgeTests(unittest.TestCase):
     def request(self):
         return bridge.request_from(RUN, STATUS)
 
+    def test_status_lookup_preserves_creator_and_newest_context(self):
+        with patch.object(bridge, 'api', return_value=[[{'context': 'other'}], [STATUS]]) as api:
+            self.assertEqual(bridge.latest_status(SHA), STATUS)
+            self.assertEqual(api.call_args.args[0], f'repos/{bridge.SOURCE}/commits/{SHA}/statuses')
+            self.assertEqual(api.call_args.kwargs['query'], {'per_page': '100'})
+
     def test_rejects_untrusted_fork_and_malformed_markers(self):
         for change in ({'state': 'success'}, {'creator': {'login': 'someone'}},
                        {'description': 'CM_OSS_REQUEST:../../../private:9'},
