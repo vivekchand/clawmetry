@@ -13,7 +13,10 @@ all three operating systems. Shared code, dependencies, new runtime names and
 unknown paths select the entire catalogue. Only README.md, CHANGELOG.md and
 .gitignore are explicitly cosmetic. An unavailable comparison base selects all
 runtimes. Missing suites and entirely skipped suites fail rather than claim
-coverage. Each runtime has a five-minute execution limit.
+coverage. Each runtime has a five-minute execution limit. Main pushes watch all package Python modules,
+adapter suite families and runtime fixtures, so a new shared helper cannot
+bypass the conservative full-catalogue fallback. UI-only assets do not trigger
+this adapter matrix.
 
 Suite discovery recognizes `test_<runtime>_adapter*.py`,
 `test_adapter_<runtime>.py` and `test_<runtime>_runtime_adapter.py` in both
@@ -27,14 +30,17 @@ Pro and OSS suites execute in separate pytest processes with their own
 working directories and conftests, within one five-minute runtime deadline.
 Paid catalogue entries require a Pro-side suite. Every group must execute at
 least one case, and stale JUnit is removed before execution. The exact built
-Pro wheel is force-reinstalled even when its package version is unchanged.
+Pro wheel is force-reinstalled even when its package version is unchanged. Private checkouts disable Git
+newline conversion and allow long Windows fixture paths through transient
+configuration, preserving the indexed recorded data on every platform.
 
 Successful results are keyed by both repositories' indexed file contents, the
 selected runtimes, actual hosted OS image/platform/architecture and exact Python
 patch version. Image and interpreter updates invalidate reuse. A partial success
 cannot satisfy a full-catalogue run. Only a success marker is cached. Manual
 dispatch accepts an exact `pro_sha` (or resolves `main` once) and `force: true`
-bypasses result reuse for a fresh dependency/platform check.
+bypasses result reuse for a fresh dependency/platform check, including reruns
+of that forced workflow attempt.
 
 ## Authentication and confidentiality
 

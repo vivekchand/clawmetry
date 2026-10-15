@@ -17,14 +17,16 @@ on:
   push:
     branches: [main]
     paths:
-      - clawmetry/adapters/**
-      - clawmetry/sync.py
-      - clawmetry/local_store.py
-      - clawmetry/extensions.py
-      - clawmetry/entitlements.py
-      - clawmetry/providers_pricing.py
+      - clawmetry/**/*.py
+      - tests/test_*adapter*.py
+      - tests/test_openclaw_list_events.py
+      - tests/test_openclaw_replay_events.py
+      - tests/fixtures/runtimes/**
+      - .gitattributes
       - setup.py
-      - requirements.txt
+      - requirements*.txt
+      - pyproject.toml
+      - setup.cfg
       - SUPPORTED_RUNTIMES.txt
       - scripts/ci/runtime_compatibility.py
       - scripts/ci/local_runtime_dispatch.py
@@ -175,7 +177,7 @@ jobs:
         id: success
         with:
           path: ${{ runner.temp }}/runtime-success
-          key: runtime-compat-v2-${{ matrix.os }}-${{ steps.environment.outputs.identity }}-${{ needs.plan.outputs.fingerprint }}-${{ github.event_name == 'workflow_dispatch' && inputs.force && github.run_id || 'reuse' }}
+          key: runtime-compat-v2-${{ matrix.os }}-${{ steps.environment.outputs.identity }}-${{ needs.plan.outputs.fingerprint }}-${{ github.event_name == 'workflow_dispatch' && inputs.force && format('{0}-{1}', github.run_id, github.run_attempt) || 'reuse' }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         if: steps.success.outputs.cache-hit != 'true'
         with:
