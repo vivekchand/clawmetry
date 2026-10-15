@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-335 modules, 95 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+336 modules, 95 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -198,6 +198,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/daemon_registration.py` | medium | one place that knows how to make the sync daemon survive a reboot/logoff/crash, on every OS. |
 | `clawmetry/deepeval_bridge.py` | medium | optional DeepEval metric engine (local-first). |
 | `clawmetry/delegated_usage.py` | medium | Usage for work a runtime handed to another vendor's agent. |
+| `clawmetry/desktop_notify.py` | medium | a desktop notification you can click. |
 | `clawmetry/detector_behaviour.py` | medium | Is this agent doing something it does not normally do? |
 | `clawmetry/detector_calibration.py` | medium | How a detector decides what "too many" means, for THIS runtime and THIS team. |
 | `clawmetry/detector_decoding.py` | small | Bounded, inert text views for credential inspection (REQ-GOV-DET-001). |

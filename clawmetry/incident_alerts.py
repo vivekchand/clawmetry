@@ -75,32 +75,20 @@ def is_urgent(kind: str, severity: str) -> bool:
     return severity == "critical" or kind in URGENT_KINDS
 
 
-def send_desktop(title: str, message: str) -> bool:
-    """A native notification on this machine, no configuration: ``osascript``
-    on macOS, ``notify-send`` on Linux. The text travels as argv, never inside
-    the AppleScript source, so an incident title cannot inject script. Off
-    with ``CLAWMETRY_DESKTOP_ALERTS=0``. Never raises."""
-    if os.environ.get("CLAWMETRY_DESKTOP_ALERTS", "1").strip() == "0":
-        return False
+def send_desktop(title: str, message: str, url: str = "") -> bool:
+    """A native notification on this machine, no configuration, and clicking
+    it opens ``url`` (the session that caused the incident).
+
+    The per-platform mechanics live in :mod:`clawmetry.desktop_notify`:
+    ``terminal-notifier`` on macOS, a native toast on Windows, ``notify-send``
+    with an action on Linux. Incident text always travels as argv or base64,
+    never inside a script body. Off with ``CLAWMETRY_DESKTOP_ALERTS=0``.
+    Never raises."""
     try:
-        import shutil
-        import subprocess
-        t = str(title or "ClawMetry")[:120]
-        m = str(message or "")[:400]
-        if sys.platform == "darwin" and shutil.which("osascript"):
-            argv = ["osascript",
-                    "-e", "on run argv",
-                    "-e", "display notification (item 2 of argv) with title "
-                          "(item 1 of argv) sound name \"Basso\"",
-                    "-e", "end run", t, m]
-        elif sys.platform.startswith("linux") and shutil.which("notify-send"):
-            argv = ["notify-send", "--urgency=critical", "--app-name=ClawMetry", t, m]
-        else:
-            return False
-        return subprocess.run(argv, timeout=5, capture_output=True).returncode == 0
-    except Exception as e:  # noqa: BLE001
-        log.debug("desktop notification failed: %s", e)
+        from clawmetry import desktop_notify
+    except Exception:  # noqa: BLE001
         return False
+    return desktop_notify.notify(title, message, url=url)
 
 
 def send_cloud(incident: dict, message: str) -> bool:
@@ -486,6 +474,16 @@ def compose_message(incident: dict) -> str:
     return msg[:1500]
 
 
+def _session_url(session_id: str) -> str:
+    """Local dashboard deep link for one session, or "" when it cannot be
+    resolved. Never raises: a missing link must not cost the notification."""
+    try:
+        from clawmetry import desktop_notify
+        return desktop_notify.dashboard_url(session_id=session_id)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # ── Main entry point ────────────────────────────────────────────────────────
 
 def deliver_incident(store: Any, incident: dict, *,
@@ -568,7 +566,9 @@ def deliver_incident(store: Any, incident: dict, *,
         # Urgent: also the channels nobody has to configure.
         if is_urgent(kind, sev):
             head = str(incident.get("title") or "Your agent needs attention")
-            if send_desktop(f"ClawMetry: {head}", message):
+            # A notification about a session is only useful if it can take
+            # you to that session, so it carries the local deep link.
+            if send_desktop(f"ClawMetry: {head}", message, _session_url(sid)):
                 via.append("desktop")
             if send_cloud(incident, message):
                 via.append("cloud")
