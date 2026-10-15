@@ -432,3 +432,76 @@ def test_capability_stops_advertising_a_click_the_machine_refused(on, monkeypatc
     cap = dn.capability()
     assert cap["clickable"] is False
     assert "System Settings" in cap["reason"]
+
+
+# ── The first-run permission prompt a plain CLI cannot raise ───────────────
+
+def test_the_app_bundle_is_found_behind_a_homebrew_wrapper(tmp_path):
+    """A notification is attributed to an application, so terminal-notifier
+    lives in a bundle, but Homebrew puts a shell wrapper on PATH. Opening the
+    wrapper would register nothing."""
+    app = tmp_path / "Cellar" / "terminal-notifier" / "3.1.0" / "terminal-notifier.app"
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    binary = app / "Contents" / "MacOS" / "terminal-notifier"
+    binary.write_text("#!/bin/sh\n")
+
+    # a) already inside the bundle
+    assert dn._macos_notifier_app(str(binary)) == str(app)
+
+    # b) the Homebrew wrapper, which only names the real binary
+    wrapper = tmp_path / "bin" / "terminal-notifier"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text('#!/bin/bash\nexec "%s" "$@"\n' % binary)
+    assert dn._macos_notifier_app(str(wrapper)) == str(app)
+
+    # c) the Cellar layout: <version>/bin/tn beside <version>/terminal-notifier.app
+    sibling_bin = app.parent / "bin" / "terminal-notifier"
+    sibling_bin.parent.mkdir(parents=True)
+    sibling_bin.write_bytes(b"\x00" * 10)
+    assert dn._macos_notifier_app(str(sibling_bin)) == str(app)
+
+    assert dn._macos_notifier_app(str(tmp_path / "nope")) == ""
+
+
+def test_a_refused_notifier_asks_macos_for_permission_once(on, monkeypatch, caplog):
+    """terminal-notifier run as a plain command cannot raise its own
+    permission prompt; it just reports that notifications are not allowed.
+    Only a LaunchServices start can ask, so a refusal triggers exactly one.
+    """
+    monkeypatch.setattr(dn, "_warned_unclickable", False)
+    monkeypatch.setattr(dn, "_permission_asked", {"done": False})
+    monkeypatch.setattr(dn.sys, "platform", "darwin")
+    monkeypatch.setattr(dn, "_macos_notifier", lambda: "/brew/bin/terminal-notifier")
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
+    monkeypatch.setattr(dn, "_macos_notifier_app", lambda p: "/brew/tn.app")
+    monkeypatch.setattr(dn.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(dn.shutil, "which", lambda n: "/usr/bin/osascript")
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(list(argv))
+        if argv[0].endswith("terminal-notifier"):
+            return subprocess.CompletedProcess(
+                argv, 3, stdout=b"",
+                stderr=b"Notifications are not allowed for this application\n")
+        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(dn.subprocess, "run", fake_run)
+    with caplog.at_level("WARNING", logger="clawmetry.desktop_notify"):
+        assert dn.notify("t", "m", url=_URL) is True
+
+    opens = [a for a in seen if a[0] == "/usr/bin/open"]
+    assert len(opens) == 1, "asked exactly once"
+    assert "-g" in opens[0], "must not steal focus from the person's work"
+    assert opens[0][opens[0].index("-a") + 1] == "/brew/tn.app"
+    # The launch is a request for permission, NOT this incident's delivery:
+    # `open` returns as soon as the app starts and the prompt may be
+    # unanswered, so the banner still has to go out.
+    assert seen[-1][0].endswith("osascript")
+    assert "permission" in " ".join(r.getMessage() for r in caplog.records)
+
+    # A second incident in the same process must not re-ask.
+    monkeypatch.setattr(dn, "_warned_unclickable", False)
+    seen.clear()
+    dn.notify("t", "m", url=_URL)
+    assert [a for a in seen if a[0] == "/usr/bin/open"] == []

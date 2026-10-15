@@ -45,6 +45,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 import shutil
 import subprocess  # noqa: S404 - fixed argv, never shell=True
 import sys
@@ -151,7 +152,6 @@ def _macos_notifier_version(path: str) -> tuple:
         done = subprocess.run(  # noqa: S603 - fixed argv
             [path, "-help"], capture_output=True, timeout=5)
         blob = ((done.stdout or b"") + (done.stderr or b"")).decode("utf-8", "replace")
-        import re
         match = re.search(r"\((\d+)\.(\d+)(?:\.(\d+))?\)", blob)
         if match:
             version = tuple(int(g) for g in match.groups() if g is not None)
@@ -182,6 +182,66 @@ def _macos_notifier() -> str:
     return ""
 
 
+def _macos_notifier_app(binary: str) -> str:
+    """The ``.app`` bundle behind a terminal-notifier binary, or "".
+
+    A notification is attributed to an application, so terminal-notifier
+    ships inside a bundle. Homebrew puts a tiny ``exec`` wrapper on ``PATH``,
+    so the binary we run is often not itself inside the bundle.
+    """
+    try:
+        real = os.path.realpath(binary)
+        marker = ".app/Contents/MacOS/"
+        at = real.find(marker)
+        if at != -1:
+            return real[:at + 4]
+        # Homebrew's wrapper is a few lines of shell naming the real binary.
+        if os.path.getsize(real) < 4096:
+            with open(real, "r", errors="replace") as fh:
+                found = re.search(r"(/[^\s\"']+\.app)/Contents/MacOS/", fh.read())
+            if found and os.path.isdir(found.group(1)):
+                return found.group(1)
+        # Cellar layout: <version>/bin/terminal-notifier next to the bundle.
+        sibling = os.path.join(os.path.dirname(os.path.dirname(real)),
+                               "terminal-notifier.app")
+        if os.path.isdir(sibling):
+            return sibling
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+_permission_asked = {"done": False}
+
+
+def _macos_request_permission(binary: str) -> bool:
+    """Start the notifier once through LaunchServices so macOS can ask.
+
+    terminal-notifier 3 needs the user's permission to post notifications,
+    and run as a plain command it cannot raise the prompt: it just reports
+    that notifications are not allowed and exits. Opening its bundle
+    registers it with the notification system and lets the prompt appear, so
+    a Mac that has never been asked gets asked once instead of silently
+    never having a clickable alert.
+
+    Deliberately NOT treated as having delivered this notification: ``open``
+    returns as soon as the app launches, and the permission it just asked
+    for may still be unanswered. The caller falls through to the banner, and
+    the NEXT incident goes out through terminal-notifier.
+    """
+    if _permission_asked["done"]:
+        return False
+    _permission_asked["done"] = True
+    app = _macos_notifier_app(binary)
+    if not app or not os.path.isfile("/usr/bin/open"):
+        return False
+    # -g: register and ask without stealing focus from whatever the person
+    # is doing. The permission prompt is presented by the system regardless.
+    return _run(["/usr/bin/open", "-g", "-a", app, "--args",
+                 "-title", "ClawMetry", "-message",
+                 "Allow notifications so alerts can open the session."])
+
+
 def _send_macos(title: str, message: str, url: str, group: str) -> bool:
     """terminal-notifier when it can really carry a click, osascript always.
 
@@ -209,12 +269,20 @@ def _send_macos(title: str, message: str, url: str, group: str) -> bool:
             # Remember it, so capability() stops advertising a click that
             # this machine has already demonstrated it will not deliver.
             _tn_refusal["reason"] = (err.strip().splitlines() or ["refused"])[-1]
+            # A fresh Mac refuses because macOS has never been asked. Run the
+            # bundle once through LaunchServices, which is the only start that
+            # can raise the prompt, then say what happens next.
+            asked = _macos_request_permission(notifier)
             _warn_unclickable_once(
-                "terminal-notifier would not post this notification (%s). "
-                "Allow it under System Settings > Notifications, then alerts "
-                "will open the session on click. Falling back to a banner "
-                "that cannot be clicked."
-                % (err.strip().splitlines()[-1] if err.strip() else "no reason given"))
+                "terminal-notifier would not post this notification (%s). %s "
+                "This alert is going out as a banner that cannot be clicked."
+                % (_tn_refusal["reason"],
+                   "macOS has now been asked for permission: allow it (the "
+                   "prompt may be in Notification Centre) and the next alert "
+                   "will open the session on click."
+                   if asked else
+                   "Allow terminal-notifier under System Settings > "
+                   "Notifications and the next alert will open the session."))
         else:
             # 2.x shows a banner, but its click callback rides the
             # NSUserNotification relaunch path that modern macOS no longer
