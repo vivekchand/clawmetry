@@ -7,6 +7,7 @@ AC-OBS-NODE-006.4: the view stays explicitly node-wide.
 """
 from pathlib import Path
 import json
+import logging
 import time
 
 import pytest
@@ -18,6 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 def server():
     """These integration tests need no gateway or network server."""
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolated_sync_environment(monkeypatch, tmp_path):
+    """Importing sync must not send test warnings to the live daemon log."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWMETRY_AUDIT_DB", str(tmp_path / "audit.db"))
+    monkeypatch.setattr(logging.getLogger("clawmetry-sync"), "handlers", [logging.NullHandler()])
 
 
 @pytest.fixture
@@ -73,7 +82,7 @@ def test_sealed_update_confirms_persisted_readback_and_binding(relay):
     assert result["node_id"] == "node-one" and result["request_id"] == "a" * 32
     assert result["data"]["preferences"]["enabled"] is False
     assert store.preferences["enabled"] is False
-    assert send({})["applied"] is False  # Replay does not apply twice.
+    assert send({}) is result  # Duplicate leaves the original result intact.
 
 
 @pytest.mark.parametrize("body", [
@@ -177,3 +186,174 @@ def test_authenticated_daemon_rpc_persists_typed_choice(relay, monkeypatch):
     assert response.status_code == 200
     assert response.json["result"]["saved"] is True
     assert store.preferences["enabled"] is False
+
+
+@pytest.fixture
+def real_relay(monkeypatch, tmp_path):
+    """Real DuckDB methods, with no production paths, host scans or HTTP posts."""
+    from types import SimpleNamespace
+    from clawmetry import local_store, sync
+    from clawmetry.node_activity import DEFAULT_PREFERENCES
+    path = tmp_path / "real-relay.duckdb"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(path))
+    monkeypatch.setenv("CLAWMETRY_AUDIT_DB", str(tmp_path / "audit.db"))
+    monkeypatch.setattr(local_store, "DB_PATH", path)
+    monkeypatch.setattr(local_store, "LEGACY_DB_PATH", tmp_path / "legacy.duckdb")
+    monkeypatch.setattr(local_store, "AUTO_COMPACT_ENABLED", False)
+    stores = [local_store.LocalStore()]
+    clock = [time.time()]
+    monkeypatch.setattr(sync.time, "time", lambda: clock[0])
+    results = []
+    monkeypatch.setattr(local_store, "get_store", lambda *a, **k: stores[0])
+    monkeypatch.setattr(sync, "_post_process_control_result", lambda c, a, r: results.append(r))
+    config = {"encryption_key": sync.generate_encryption_key(), "node_id": "node-one"}
+    def request(**overrides):
+        body = {"operation": "preferences", "preferences": dict(DEFAULT_PREFERENCES),
+                "node_id": "node-one", "request_id": "a" * 32, "sent_at": clock[0]}
+        body.update(overrides)
+        return body
+    def deliver(body):
+        action = {"type": "node_activity_update", "id": "isolated-action", "cache_key": "isolated-cache",
+                  "sealed": sync.encrypt_payload(body, config["encryption_key"])}
+        sync._action_node_activity(config, action)
+    def reopen():
+        stores[0]._conn.close()
+        stores[0] = local_store.LocalStore()
+    harness = SimpleNamespace(stores=stores, clock=clock, results=results, request=request,
+                              deliver=deliver, reopen=reopen, sync=sync)
+    yield harness
+    stores[0]._conn.close()
+
+
+def test_real_store_duplicate_preserves_original_confirmation(real_relay):
+    """
+    AC-GOV-NODE-ACK-001.1: one claimant executes a duplicated hosted action.
+    AC-GOV-NODE-ACK-001.2: duplicates do not replace the claimant's acknowledgement.
+    """
+    h = real_relay
+    body = h.request()
+    h.deliver(body)
+    assert len(h.results) == 1 and h.results[0]["applied"] is True
+    original = json.dumps(h.results[0], sort_keys=True)
+    h.deliver(body)
+    assert len(h.results) == 1
+    assert json.dumps(h.results[0], sort_keys=True) == original
+    assert len(json.loads(h.stores[0].get_node_setting("node_activity.request_ids"))) == 1
+    assert all(h.stores[0].query_node_activity()["preferences"].values())
+
+
+def test_real_store_changed_body_and_expired_duplicate_do_not_post(real_relay):
+    """
+    AC-GOV-NODE-ACK-001.3: retained duplicate claims take priority over expiry errors.
+    """
+    h = real_relay
+    body = h.request(preferences={"enabled": False})
+    h.deliver(body)
+    assert h.results[0]["applied"] is True
+    # A reused nonce never applies a different choice or manufactures another result.
+    h.deliver(dict(body, preferences={"enabled": True}))
+    h.deliver(dict(body, operation="unsupported", unexpected="field"))
+    h.clock[0] += 301
+    h.deliver(body)
+    assert len(h.results) == 1
+    assert h.stores[0].query_node_activity()["preferences"]["enabled"] is False
+    # Fresh nonce still requires ordinary envelope validation.
+    h.deliver(dict(body, request_id="b" * 32))
+    assert len(h.results) == 2 and h.results[-1]["applied"] is False
+    assert len(json.loads(h.stores[0].get_node_setting("node_activity.request_ids"))) == 1
+
+
+def test_real_store_duplicate_after_reopen_does_not_repeat_mutation(real_relay):
+    h = real_relay
+    body = h.request(preferences={"enabled": False})
+    h.deliver(body)
+    h.reopen()
+    h.deliver(body)
+    assert len(h.results) == 1 and h.results[0]["applied"] is True
+    events = h.stores[0].query_node_activity()["events"]
+    assert len(events) == 1 and events[0]["kind"] == "monitoring_preferences_changed"
+
+
+def test_real_store_original_failure_and_incomplete_claim_stay_unconfirmed(real_relay, monkeypatch):
+    """
+    AC-GOV-NODE-ACK-001.4: claimed failures cannot be retried or confirmed by duplicates.
+    """
+    h = real_relay
+    body = h.request(preferences={"enabled": False})
+    with monkeypatch.context() as patch:
+        def fail_apply(*args, **kwargs):
+            raise RuntimeError("isolated apply failure")
+        patch.setattr(h.stores[0], "set_node_activity_preferences", fail_apply)
+        h.deliver(body)
+    assert len(h.results) == 1 and h.results[0]["applied"] is False
+    h.deliver(body)
+    assert len(h.results) == 1 and h.stores[0].query_node_activity()["preferences"]["enabled"] is True
+    # Simulate a persisted claim followed by a crash before mutation or acknowledgement.
+    ledger = json.loads(h.stores[0].get_node_setting("node_activity.request_ids"))
+    ledger["b" * 32] = h.clock[0]
+    h.stores[0].set_node_setting("node_activity.request_ids", json.dumps(ledger))
+    h.deliver(h.request(request_id="b" * 32, preferences={"enabled": False}))
+    assert len(h.results) == 1 and h.stores[0].query_node_activity()["preferences"]["enabled"] is True
+    h.deliver(h.request(request_id="c" * 32, preferences={"enabled": False}))
+    assert len(h.results) == 2 and h.results[-1]["applied"] is True
+    assert h.stores[0].query_node_activity()["preferences"]["enabled"] is False
+
+
+def test_real_store_lost_publication_cannot_be_replaced_by_duplicate(real_relay, monkeypatch):
+    h = real_relay
+    body = h.request(preferences={"enabled": False})
+    with monkeypatch.context() as patch:
+        def lose_result(*args, **kwargs):
+            raise RuntimeError("isolated publication failure")
+        patch.setattr(h.sync, "_post_process_control_result", lose_result)
+        with pytest.raises(RuntimeError, match="isolated publication failure"):
+            h.deliver(body)
+    h.deliver(body)
+    assert h.results == []
+    assert h.stores[0].query_node_activity()["preferences"]["enabled"] is False
+
+
+def test_real_store_concurrent_duplicate_claims_apply_and_ack_once(real_relay):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    h = real_relay
+    body = h.request(preferences={"enabled": False})
+    start = threading.Barrier(2)
+    def deliver():
+        start.wait(timeout=5)
+        h.deliver(body)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(deliver) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=10)
+    assert len(h.results) == 1 and h.results[0]["applied"] is True
+    assert len(h.stores[0].query_node_activity()["events"]) == 1
+
+
+def test_real_store_review_duplicate_keeps_one_persisted_review(real_relay):
+    h = real_relay
+    h.stores[0].set_node_activity_preferences({"enabled": False})
+    event_id = h.stores[0].query_node_activity()["events"][0]["id"]
+    body = h.request(operation="review", event_id=event_id, decision="expected", reason="Isolated review")
+    body.pop("preferences")
+    h.deliver(body)
+    original = h.stores[0].query_node_activity()["events"][0]["review"]
+    h.deliver(body)
+    assert len(h.results) == 1 and h.results[0]["applied"] is True
+    assert h.stores[0].query_node_activity()["events"][0]["review"] == original
+    assert h.stores[0]._fetch("SELECT COUNT(*) FROM node_activity_reviews", [])[0][0] == 1
+
+
+def test_real_store_claim_retention_does_not_weaken_unclaimed_expiry(real_relay):
+    h = real_relay
+    body = h.request(preferences={"enabled": False})
+    h.deliver(body)
+    # The guarantee is bounded by retained claims, not perpetual nonce storage.
+    h.clock[0] += 601
+    h.deliver(body)
+    assert len(h.results) == 2 and h.results[-1]["applied"] is False
+    assert h.stores[0].query_node_activity()["preferences"]["enabled"] is False
+    h.deliver(h.request(request_id="b" * 32, preferences={"enabled": True}))
+    assert len(h.results) == 3 and h.results[-1]["applied"] is True
+    assert set(json.loads(h.stores[0].get_node_setting("node_activity.request_ids"))) == {"b" * 32}

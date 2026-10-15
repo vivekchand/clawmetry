@@ -11186,19 +11186,6 @@ def _action_node_activity(config: dict, action: dict) -> None:
                 not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id)):
             raise ValueError("request binding invalid")
         result.update(node_id=node_id, request_id=request_id)
-        sent_at = body.get("sent_at")
-        if isinstance(sent_at, bool) or not isinstance(sent_at, (float, int)) or not 0 <= time.time() - sent_at <= 300:
-            raise ValueError("expired request")
-        operation = body.get("operation")
-        binding = {"node_id", "request_id", "sent_at", "operation"}
-        if operation == "preferences":
-            if set(body) != binding | {"preferences"}:
-                raise ValueError("unsupported request fields")
-        elif operation == "review":
-            if not binding | {"event_id", "decision"} <= set(body) or not set(body) <= binding | {"event_id", "decision", "reason"}:
-                raise ValueError("unsupported request fields")
-        else:
-            raise ValueError("unsupported operation")
         store = local_store.get_store()
         with _NODE_ACTIVITY_ACTION_LOCK:
             # Claim before applying: a crash requires a fresh request, never
@@ -11207,7 +11194,23 @@ def _action_node_activity(config: dict, action: dict) -> None:
             ledger = json.loads(ledger_rows[0][0]) if ledger_rows else {}
             ledger = {k: v for k, v in ledger.items() if isinstance(v, (int, float)) and v >= time.time() - 600}
             if request_id in ledger:
-                raise ValueError("request already handled")
+                # Only the original claimant owns the acknowledgement. Both
+                # relay paths may deliver it; never replace its result, even
+                # when a retained duplicate's envelope has since expired.
+                return
+            sent_at = body.get("sent_at")
+            if isinstance(sent_at, bool) or not isinstance(sent_at, (float, int)) or not 0 <= time.time() - sent_at <= 300:
+                raise ValueError("expired request")
+            operation = body.get("operation")
+            binding = {"node_id", "request_id", "sent_at", "operation"}
+            if operation == "preferences":
+                if set(body) != binding | {"preferences"}:
+                    raise ValueError("unsupported request fields")
+            elif operation == "review":
+                if not binding | {"event_id", "decision"} <= set(body) or not set(body) <= binding | {"event_id", "decision", "reason"}:
+                    raise ValueError("unsupported request fields")
+            else:
+                raise ValueError("unsupported operation")
             if len(ledger) >= 512:
                 raise ValueError("too many monitoring updates; retry later")
             ledger[request_id] = time.time()
