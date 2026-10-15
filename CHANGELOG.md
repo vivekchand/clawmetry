@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: keep Asimov source alerts visible on small screens (#6452)
+
+- Long source alert text now wraps inside its panel, so the full evidence remains readable on mobile. The measured-joint table keeps its horizontal scroll.
+- Verified before and after in the actual served dashboard using the same persisted official SDK-generated recording, daemon-owned DuckDB and private query service. Inspected mobile and desktop captures; the alert text remains unchanged and fully visible.
+- This is experimental SDK and recording support. Physical Asimov hardware qualification remains pending.
+
 ### Added: free experimental Asimov 1 observation (#6442)
 
 - Import official Menlo SDK recordings, explicitly trace application commands, or receive state through an Observe-only collector. Inspect 25 measured joints, battery, orientation, alerts and separate source/receipt clocks in a free local view without Pro.
