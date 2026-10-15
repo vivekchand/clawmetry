@@ -2,6 +2,34 @@
 
 This correctness addendum implements [@Node activity current rows and partial positive sightings](https://factory.8090.ai/project/b415065f-ab2f-4f53-8864-0c009fd098cb/requirements/d33e1d0b-43c1-4d3f-8d0d-8de6628d0583). It fixes permanently capped inventories without treating incomplete observations as complete comparisons. It adds no OT integration, native execution sensor or process control.
 
+## Hosted Action Acknowledgement Ownership Addendum
+
+**Status: approved minimal design; implementation, release and hosted verification pending.** This section addresses REQ-GOV-NODE-ACK-001 in the linked correctness requirement. The prior merged-main references above describe the partial-observation correction; they are not evidence that this acknowledgement correction has shipped.
+
+### Observed failure and required ownership
+
+A single hosted Govern save arrived through both durable PostgreSQL delivery and the fast relay approximately 0.66 seconds apart. The original delivery claimed the nonce and applied the requested state. A later duplicate returned a failure and posted it under the same action acknowledgement key, replacing the original result. The browser correctly required confirmation and reported the save as unconfirmed; this design changes the duplicate execution/result path, not that browser standard.
+
+Only the execution that originally claims a nonce owns its action result. An already-claimed delivery must stop without mutation and without publishing a replacement acknowledgement, including a duplicate-failure or expiry-failure acknowledgement. Duplicate recognition must take precedence over an expired-envelope failure while the existing retained nonce claim still provides valid duplicate evidence. The original claimant's success or failure result remains stable against later duplicate delivery.
+
+### Minimal integration and failure boundaries
+
+Reuse the current bounded nonce claim tracking, existing action-result cache and encrypted acknowledgement transport. Preserve the 512-nonce bound and existing TTL/cache retention; add no receipt table, service or unbounded history. Perform duplicate classification within the existing claim ownership boundary before any duplicate path can manufacture a posted error result. Retain ordinary validation and expiry rejection for a genuinely unclaimed action. No secrets, decrypted action payloads or new plaintext cloud metadata are introduced.
+
+An original claimant that crashes, fails application or cannot publish a confirmed persisted result leaves the browser unconfirmed. A duplicate is not an automatic recovery executor and cannot publish a substitute result. The operator must refresh/check the node and issue a fresh request when needed; the system must not silently retry the claimed action or claim that aborting confirmation undid it. This is bounded within-retention duplicate suppression and result ownership, not perpetual exactly-once execution or a new durable receipt guarantee.
+
+### Focused validation
+
+Exercise one nonce delivered through both relay paths and prove one mutation plus one original-owner result. Deliver further duplicates after a confirmed original success and after an original failure; prove no mutation and no replacement acknowledgement in either case. Deliver an expired duplicate while its nonce claim is valid and prove the cached original result is unchanged. Simulate an original crash/apply failure/result-publication failure and prove that duplicate delivery cannot retry, manufacture confirmation or replace the original result. Keep the existing nonce bound and retention tests. Harmless integration verification must distinguish a confirmed persisted result from pending/unconfirmed delivery; no live completion is claimed by this design record.
+
+### ADR-NODE-PART-003: Original nonce claimant owns acknowledgement
+
+Context: Two legitimate transport paths can deliver the same hosted action. Suppressing a second mutation is insufficient if the duplicate can overwrite the action's cached result and turn an applied save into an unconfirmed one.
+
+Decision: Keep the original nonce claimant as the sole result owner. Suppress already-claimed duplicates before expiry/error publication, within the existing bounded nonce-claim retention. Do not introduce durable receipts or automatic replay.
+
+Consequences: Duplicate delivery cannot replace a valid original result. A failed or crashed original attempt can remain unconfirmed and needs a fresh operator request; the existing UI must continue to report that uncertainty honestly. The original process-observation contracts and both earlier architecture decisions are unchanged.
+
 ## Component Blueprint Composition
 
 This addendum extends the existing [@Node activity composition](https://factory.8090.ai/project/b415065f-ab2f-4f53-8864-0c009fd098cb/blueprints/72d9ec38-2671-4258-a5ad-ffe36c84b27c) and [@feature blueprint](https://factory.8090.ai/project/b415065f-ab2f-4f53-8864-0c009fd098cb/blueprints/30fa3bd8-d322-4b39-8674-6a86d73fb229). Their contracts for process identity, unknown attribution, private persistence, encrypted synchronization and complete-comparison gap handling remain in force. In particular, the existing ban on inferred removals or recovery from incomplete scans is unchanged.
@@ -93,31 +121,3 @@ Implementation merged through [PR 6419](https://github.com/vivekchand/clawmetry/
 | Visible row time and incomplete history | [Inventory row ages](https://github.com/vivekchand/clawmetry/blob/main/clawmetry/static/js/node-activity.js#L131); [Independent coverage-limit presentation](https://github.com/vivekchand/clawmetry/blob/main/clawmetry/static/js/node-activity.js#L139); [Observed inventory headings](https://github.com/vivekchand/clawmetry/blob/main/clawmetry/templates/tabs/node-activity.html#L16) |
 | Actor map correction | [Actor slot without a connection and qualified map caption](https://github.com/vivekchand/clawmetry/blob/main/clawmetry/templates/tabs/node-activity.html#L14); [Invisible actor gap](https://github.com/vivekchand/clawmetry/blob/main/clawmetry/static/css/node-activity.css#L42) |
 | Executed UI evidence | [Fresh, stale, legacy and limited-history render assertions](https://github.com/vivekchand/clawmetry/blob/main/tests/test_node_activity_js.js#L185); [Rendered unknown, Human and Agent map guard](https://github.com/vivekchand/clawmetry/blob/main/tests/test_node_activity_browser.py#L78) |
-
-## Hosted Action Acknowledgement Ownership Addendum
-
-**Status: approved minimal design; implementation, release and hosted verification pending.** This section addresses REQ-GOV-NODE-ACK-001 in the linked correctness requirement. The prior merged-main references above describe the partial-observation correction; they are not evidence that this acknowledgement correction has shipped.
-
-### Observed failure and required ownership
-
-A single hosted Govern save arrived through both durable PostgreSQL delivery and the fast relay approximately 0.66 seconds apart. The original delivery claimed the nonce and applied the requested state. A later duplicate returned a failure and posted it under the same action acknowledgement key, replacing the original result. The browser correctly required confirmation and reported the save as unconfirmed; this design changes the duplicate execution/result path, not that browser standard.
-
-Only the execution that originally claims a nonce owns its action result. An already-claimed delivery must stop without mutation and without publishing a replacement acknowledgement, including a duplicate-failure or expiry-failure acknowledgement. Duplicate recognition must take precedence over an expired-envelope failure while the existing retained claim/cache still provides valid duplicate evidence. The original claimant's success or failure result remains stable against later duplicate delivery.
-
-### Minimal integration and failure boundaries
-
-Reuse the current bounded nonce claim tracking, existing action-result cache and encrypted acknowledgement transport. Preserve the 512-nonce bound and existing TTL/cache retention; add no receipt table, service or unbounded history. Perform duplicate classification within the existing claim ownership boundary before any duplicate path can manufacture a posted error result. Retain ordinary validation and expiry rejection for a genuinely unclaimed action. No secrets, decrypted action payloads or new plaintext cloud metadata are introduced.
-
-An original claimant that crashes, fails application or cannot publish a confirmed persisted result leaves the browser unconfirmed. A duplicate is not an automatic recovery executor and cannot publish a substitute result. The operator must refresh/check the node and issue a fresh request when needed; the system must not silently retry the claimed action or claim that aborting confirmation undid it. This is bounded within-retention duplicate suppression and result ownership, not perpetual exactly-once execution or a new durable receipt guarantee.
-
-### Focused validation
-
-Exercise one nonce delivered through both relay paths and prove one mutation plus one original-owner result. Deliver further duplicates after a confirmed original success and after an original failure; prove no mutation and no replacement acknowledgement in either case. Deliver an expired duplicate while its claim/cache is valid and prove the cached original result is unchanged. Simulate an original crash/apply failure/result-publication failure and prove that duplicate delivery cannot retry, manufacture confirmation or replace the original result. Keep the existing nonce bound and retention tests. Harmless integration verification must distinguish a confirmed persisted result from pending/unconfirmed delivery; no live completion is claimed by this design record.
-
-### ADR-NODE-PART-003: Original nonce claimant owns acknowledgement
-
-Context: Two legitimate transport paths can deliver the same hosted action. Suppressing a second mutation is insufficient if the duplicate can overwrite the action's cached result and turn an applied save into an unconfirmed one.
-
-Decision: Keep the original nonce claimant as the sole result owner. Suppress already-claimed duplicates before expiry/error publication, within the existing bounded claim/cache retention. Do not introduce durable receipts or automatic replay.
-
-Consequences: Duplicate delivery cannot replace a valid original result. A failed or crashed original attempt can remain unconfirmed and needs a fresh operator request; the existing UI must continue to report that uncertainty honestly. The original process-observation contracts and both earlier architecture decisions are unchanged.

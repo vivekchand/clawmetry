@@ -50,7 +50,7 @@ As an operator saving Node activity preferences or reviews, I want duplicate del
 
 * AC-GOV-NODE-ACK-001.1: When the same hosted action nonce is delivered more than once, including delivery through both durable and fast relay paths, the system shall allow only the original successful nonce claimant to execute the mutation.
 * AC-GOV-NODE-ACK-001.2: When a delivery finds its action nonce already claimed, the system shall leave the original execution's acknowledgement result unchanged and shall not post a replacement result for that duplicate delivery.
-* AC-GOV-NODE-ACK-001.3: When a duplicate delivery's action envelope is expired but its prior nonce claim or acknowledgement remains within the existing valid retention boundary, the system shall treat it as a duplicate without re-executing the action or replacing the original result with an expiry failure.
+* AC-GOV-NODE-ACK-001.3: When a duplicate delivery's action envelope is expired but its prior nonce claim remains within the existing valid retention boundary, the system shall treat it as a duplicate without re-executing the action or replacing the original result with an expiry failure.
 * AC-GOV-NODE-ACK-001.4: When the original claimant crashes or fails during apply or result publication and successful persistence is not confirmed, the system shall leave the save unconfirmed and require a fresh operator request rather than automatically replaying that claimed action.
 
 The existing bounded 512-nonce tracking and declared TTL/cache-retention boundaries remain in force. This is a within-retention ownership guarantee, not an unlimited exactly-once promise. No new receipt store, automatic retry or process/OT control is introduced. All earlier acceptance criteria remain unchanged.

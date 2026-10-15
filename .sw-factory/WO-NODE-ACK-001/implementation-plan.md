@@ -42,3 +42,9 @@ The test module now installs a scratch HOME/audit path and NullHandler before sy
 Syntax, Python 3.9 compatibility, daemon allowlist, module-map drift, CI test-file coverage, English and whitespace checks pass. The changed wiring test file lints clean. Default Ruff on the large existing sync module reports 26 pre-existing findings; its code/message multiset matches HEAD exactly, with no new finding.
 
 Cloud delegate independently reviewed the complete product/test/manifest bucket, read both transport paths and result cache semantics, and ran 63 backend/wiring source tests successfully. Root independently reviewed the minimal product diff and ran all 27 wiring tests. Review approval is for implementation only: inspected release wheel, daemon upgrade, hosted preference save/review and final user-facing completion remain PENDING under root ownership.
+
+## Retention-boundary precision review
+
+Root and the independent cloud reviewer identified that the initial AC3 phrase “nonce claim or acknowledgement” was broader than the approved implementation: acknowledgement TTL begins after the original claim, so it can briefly outlive that claim. The record-owning delegate corrected the Factory criterion and the three corresponding blueprint boundary phrases, then read them back. This checkout mirrors that exact verified correction. Duplicate suppression is guaranteed while its retained nonce claim is valid; the daemon does not promise cache-only duplicate recognition after that claim expires.
+
+No product code, retention constant, receipt state or validation behaviour changed for this clarification. The existing after-601-second real-store regression demonstrates ordinary unclaimed expiry rejection outside the claim window. Actual hosted confirmation succeeded during root's reviewed-source pre-release verification, including two same-action deliveries; official wheel installation and post-release acceptance remain PENDING.

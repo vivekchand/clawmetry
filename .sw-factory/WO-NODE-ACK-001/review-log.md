@@ -59,6 +59,16 @@ Reviewer: `/root/node_cloud`. Reviewed the final test-only delta adding `logging
 
 Independently ran the wiring file through ordinary `python -m pytest --noconftest` without the external NullHandler launcher: **27 passed in 0.88 seconds**. `git diff --check` passed. **APPROVED**, with no blocking or advisory findings. The release and actual hosted confirmation boundary from Round 2 remains unchanged.
 
+## Round 4: Retained-nonce contract precision and blocker resolution
+
+Reviewer: `/root/node_cloud`. Requirements/blueprint alignment finding, **blocking before correction**: AC-GOV-NODE-ACK-001.3 originally promised duplicate protection while a prior nonce claim **or acknowledgement** remained valid. The acknowledgement cache lifetime starts after claim creation, so a cache entry can briefly outlive the retained nonce. The approved minimal implementation does not recognize duplicates using cache state and does not promise a durable receipt.
+
+Reviewed the corrected requirement snapshot and manifest, the three matching blueprint boundary phrases, the placement-only move of the acknowledgement addendum, and the transparent plan/checklist explanation. AC3 now requires protection while the prior nonce claim remains within its existing valid retention boundary. These records precisely match the approved implementation; no receipt store, TTL change or cache-only protection is implied by the corrected boundary. The existing after-601-second regression already demonstrates the intended expiry behavior.
+
+Independently checked that `clawmetry/sync.py` and `tests/test_node_activity_wiring.py` have no changes from the already reviewed head. `check_ac_coverage.py --check` passes at **386/454** with the existing ratchet intact; `git diff --check` passes. The prior 64-test rebased-source verification remains applicable and was not repeated for this documentation-only correction. Factory persistence and exact readback were supplied by the record-owning delegate and root; this reviewer inspected the mirrored files and source boundary directly.
+
+**Finding resolved. APPROVED.** Remaining blocking: 0. Advisory: 0. This approves the precise retained-nonce contract and unchanged implementation. Official wheel inspection, cloud pin/deployment and released hosted acceptance remain pending under root ownership.
+
 ## Parent verification note
 
 Root independently inspected the minimal ordering/return diff and confirmed it matches the approved contract. Root also independently ran the isolated wiring suite: 27 passed. The complete implementation review is the independent cloud delegate's verdict above, rather than author self-review.

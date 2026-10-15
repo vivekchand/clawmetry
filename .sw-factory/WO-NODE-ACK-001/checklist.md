@@ -65,3 +65,5 @@
 Approved requirement/design and plan preceded product edits. Six real-store red-before guards, 64 green focused tests, four exact AC mirror entries and tightened ratchet are recorded. Independent implementation review is APPROVED.
 
 This execution remains **in_review**, not delivered or complete. Release publication, inspected wheel, daemon upgrade and actual hosted preference/review confirmation are **PENDING** under root ownership. Local test success does not check off those delivery gates.
+
+Precision review clarified AC3 to retained nonce-claim ownership only. Factory readback, manifest and local requirement/design now agree. No cache-only guarantee, product change or longer TTL was introduced; official delivery remains pending.
