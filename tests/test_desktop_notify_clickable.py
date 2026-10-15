@@ -42,6 +42,10 @@ _EVIL = 'x" & do shell script "rm -rf ~" & "; $(rm -rf /); <img src=x>'
 def on(monkeypatch):
     monkeypatch.setenv("CLAWMETRY_DESKTOP_ALERTS", "1")
     monkeypatch.setattr(dn, "_notify_send_actions", None)
+    # Module-level state: a refusal observed by one test must not leak into
+    # the next one's capability report.
+    monkeypatch.setattr(dn, "_tn_refusal", {"reason": ""})
+    monkeypatch.setattr(dn, "_tn_versions", {})
 
 
 @pytest.fixture
@@ -62,6 +66,7 @@ def run_spy(monkeypatch):
 def test_macos_attaches_the_url_with_terminal_notifier(on, run_spy, monkeypatch):
     monkeypatch.setattr(dn.sys, "platform", "darwin")
     monkeypatch.setattr(dn, "_macos_notifier", lambda: "/opt/homebrew/bin/terminal-notifier")
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
     assert dn.notify("t", "m", url=_URL, group="codex:abc") is True
     argv = run_spy[0]
     assert argv[0].endswith("terminal-notifier")
@@ -85,6 +90,7 @@ def test_macos_incident_text_is_argv_on_both_backends(on, run_spy, monkeypatch):
     for notifier in ("/opt/homebrew/bin/terminal-notifier", ""):
         run_spy.clear()
         monkeypatch.setattr(dn, "_macos_notifier", lambda n=notifier: n)
+        monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
         monkeypatch.setattr(dn.shutil, "which", lambda n: "/usr/bin/osascript")
         dn.notify(_EVIL, "body", url=_URL)
         argv = run_spy[0]
@@ -238,6 +244,7 @@ def test_only_http_urls_are_ever_handed_to_the_shell(on, run_spy, monkeypatch, b
     """A click is a launch. An incident does not get to choose the scheme."""
     monkeypatch.setattr(dn.sys, "platform", "darwin")
     monkeypatch.setattr(dn, "_macos_notifier", lambda: "/bin/terminal-notifier")
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
     dn.notify("t", "m", url=bad)
     assert "-open" not in run_spy[0], f"{bad} must never reach -open"
 
@@ -251,6 +258,8 @@ def test_the_env_kill_switch_still_silences_everything(monkeypatch, run_spy):
 def test_a_notifier_that_fails_never_raises(on, monkeypatch):
     monkeypatch.setattr(dn.sys, "platform", "darwin")
     monkeypatch.setattr(dn, "_macos_notifier", lambda: "/bin/terminal-notifier")
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
+    monkeypatch.setattr(dn.shutil, "which", lambda n: None)
 
     def boom(*a, **kw):
         raise OSError("notifier exploded")
@@ -278,6 +287,7 @@ def test_capability_admits_when_a_click_cannot_work(on, monkeypatch):
     assert "terminal-notifier" in cap["reason"]
 
     monkeypatch.setattr(dn, "_macos_notifier", lambda: "/bin/terminal-notifier")
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
     cap = dn.capability()
     assert cap["clickable"] is True and cap["reason"] == ""
 
@@ -310,3 +320,115 @@ def test_an_unclickable_mac_says_so_in_the_log(on, run_spy, monkeypatch, caplog)
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1, "said once per process, not once per incident"
     assert "terminal-notifier" in warnings[0].getMessage()
+
+
+# ── What the live macOS run actually exposed (2026-10-15) ───────────────────
+#
+# The first cut of this feature shipped two defects that only a real machine
+# showed. Both are pinned here.
+
+def test_a_terminal_notifier_too_old_to_click_is_not_called_clickable(on, run_spy,
+                                                                      monkeypatch):
+    """terminal-notifier 2.0.0 posts the banner and silently swallows the
+    click: its activation rides the NSUserNotification relaunch path, which
+    macOS 26 does not deliver. Measured on 26.3.1, where `-execute` never
+    ran. Claiming `clickable` for it is the dead control the repo forbids.
+    """
+    monkeypatch.setattr(dn.sys, "platform", "darwin")
+    monkeypatch.setattr(dn, "_macos_notifier", lambda: "/opt/homebrew/bin/terminal-notifier")
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (2, 0, 0))
+    monkeypatch.setattr(dn.shutil, "which", lambda n: "/usr/bin/osascript")
+
+    cap = dn.capability()
+    assert cap["can_notify"] is True
+    assert cap["clickable"] is False
+    assert "upgrade" in cap["reason"]
+
+    # And it must not be handed a -open it cannot honour: the banner goes out
+    # through osascript instead, so the person still learns about the agent.
+    assert dn.notify("t", "m", url=_URL) is True
+    assert run_spy[-1][0].endswith("osascript")
+    assert not any("-open" in a for a in run_spy[-1])
+
+
+def test_a_refused_terminal_notifier_still_gets_a_banner_out(on, monkeypatch, caplog):
+    """terminal-notifier 3 exits non-zero when the user has not allowed it to
+    post notifications ("Notifications are not allowed for this application").
+    Returning that failure meant NO alert at all, which is worse than the
+    unclickable banner this feature replaced. It must fall through.
+    """
+    monkeypatch.setattr(dn, "_warned_unclickable", False)
+    monkeypatch.setattr(dn.sys, "platform", "darwin")
+    monkeypatch.setattr(dn, "_macos_notifier", lambda: "/opt/homebrew/bin/terminal-notifier")
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
+    monkeypatch.setattr(dn.shutil, "which", lambda n: "/usr/bin/osascript")
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(list(argv))
+        if argv[0].endswith("terminal-notifier"):
+            return subprocess.CompletedProcess(
+                argv, 3, stdout=b"",
+                stderr=b"Could not request notification permission: "
+                       b"Notifications are not allowed for this application\n")
+        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(dn.subprocess, "run", fake_run)
+    with caplog.at_level("WARNING", logger="clawmetry.desktop_notify"):
+        assert dn.notify("t", "m", url=_URL) is True, \
+            "an unauthorised helper must never silence the alert"
+    assert seen[0][0].endswith("terminal-notifier")
+    assert seen[-1][0].endswith("osascript")
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "Notifications are not allowed" in said
+    assert "System Settings" in said
+
+
+def test_the_version_probe_reads_what_the_binary_reports(monkeypatch):
+    dn._tn_versions.clear()
+    monkeypatch.setattr(
+        dn.subprocess, "run",
+        lambda a, **kw: subprocess.CompletedProcess(
+            a, 0, stdout=b"terminal-notifier (3.1.0) is a command-line tool\n", stderr=b""))
+    assert dn._macos_notifier_version("/x/tn") == (3, 1, 0)
+    # Cached: a second call must not shell out again.
+    monkeypatch.setattr(dn.subprocess, "run",
+                        lambda a, **kw: (_ for _ in ()).throw(AssertionError("re-probed")))
+    assert dn._macos_notifier_version("/x/tn") == (3, 1, 0)
+
+    dn._tn_versions.clear()
+    monkeypatch.setattr(
+        dn.subprocess, "run",
+        lambda a, **kw: subprocess.CompletedProcess(
+            a, 0, stdout=b"terminal-notifier (2.0.0) is a command-line tool\n", stderr=b""))
+    assert dn._macos_notifier_version("/x/tn") == (2, 0, 0)
+    assert dn._macos_notifier_version("/x/tn") < dn._MIN_CLICKABLE_TN
+
+
+def test_an_unreadable_version_does_not_cost_the_notification(on, run_spy, monkeypatch):
+    dn._tn_versions.clear()
+    monkeypatch.setattr(dn.sys, "platform", "darwin")
+    monkeypatch.setattr(dn, "_macos_notifier", lambda: "/x/tn")
+    monkeypatch.setattr(dn.shutil, "which", lambda n: "/usr/bin/osascript")
+    monkeypatch.setattr(dn.subprocess, "run",
+                        lambda a, **kw: subprocess.CompletedProcess(a, 0, stdout=b"??", stderr=b""))
+    assert dn._macos_notifier_version("/x/tn") == ()
+    assert dn.notify("t", "m", url=_URL) is True
+
+
+def test_capability_stops_advertising_a_click_the_machine_refused(on, monkeypatch):
+    """Once terminal-notifier has actually refused, the capability report has
+    to say so. Version alone is not enough: a current build with no
+    notification permission still cannot deliver a click."""
+    monkeypatch.setattr(dn.sys, "platform", "darwin")
+    monkeypatch.setattr(dn, "_macos_notifier", lambda: "/x/tn")
+    monkeypatch.setattr(dn, "_macos_notifier_version", lambda p: (3, 1, 0))
+    monkeypatch.setattr(dn, "_tn_refusal", {"reason": ""})
+    assert dn.capability()["clickable"] is True
+
+    monkeypatch.setattr(
+        dn, "_tn_refusal",
+        {"reason": "Notifications are not allowed for this application"})
+    cap = dn.capability()
+    assert cap["clickable"] is False
+    assert "System Settings" in cap["reason"]

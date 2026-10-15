@@ -122,6 +122,45 @@ def dashboard_url(session_id: str = "", tab: str = "") -> str:
 
 # ── macOS ───────────────────────────────────────────────────────────────────
 
+#: terminal-notifier 3 rebuilt on Apple's UserNotifications framework. Version
+#: 2 still posts a banner, but its click callback depends on the old
+#: NSUserNotification activation path, which modern macOS does not deliver:
+#: measured dead on macOS 26.3.1 against 2.0.0, where `-execute` never ran.
+#: Below this version we do not pretend a click will land.
+_MIN_CLICKABLE_TN = (3, 0, 0)
+
+_tn_versions: dict = {}
+
+#: Set when terminal-notifier actually refused a notification on this machine
+#: (version 3 exits non-zero when the user has not allowed it to post). A
+#: capability report that ignores this advertises a click the machine has
+#: already proven it will not deliver.
+_tn_refusal: dict = {"reason": ""}
+
+
+def _macos_notifier_version(path: str) -> tuple:
+    """``(3, 1, 0)`` for terminal-notifier 3.1.0, or ``()`` when unreadable.
+
+    Cached per path: this runs inside the detector pass and the answer only
+    changes when the operator installs a different build.
+    """
+    if path in _tn_versions:
+        return _tn_versions[path]
+    version: tuple = ()
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv
+            [path, "-help"], capture_output=True, timeout=5)
+        blob = ((done.stdout or b"") + (done.stderr or b"")).decode("utf-8", "replace")
+        import re
+        match = re.search(r"\((\d+)\.(\d+)(?:\.(\d+))?\)", blob)
+        if match:
+            version = tuple(int(g) for g in match.groups() if g is not None)
+    except Exception:  # noqa: BLE001 - an unreadable version is not fatal
+        version = ()
+    _tn_versions[path] = version
+    return version
+
+
 def _macos_notifier() -> str:
     """Path to ``terminal-notifier``, or "" when this Mac has none."""
     env = os.environ.get("CLAWMETRY_TERMINAL_NOTIFIER", "").strip()
@@ -144,19 +183,53 @@ def _macos_notifier() -> str:
 
 
 def _send_macos(title: str, message: str, url: str, group: str) -> bool:
+    """terminal-notifier when it can really carry a click, osascript always.
+
+    The fallback is not a nicety. terminal-notifier 3 refuses outright when
+    the user has not allowed it to post notifications, and an alert that
+    silently vanishes because a helper was unauthorised is worse than the
+    unclickable banner we shipped for years. So every path that cannot
+    deliver falls through to osascript rather than returning failure.
+    """
     notifier = _macos_notifier()
     if notifier:
-        argv = [notifier, "-title", title, "-message", message, "-sound", "Basso"]
-        if url:
-            argv += ["-open", url]
-        if group:
-            # One live banner per session: a second alert for the same
-            # session replaces the first instead of stacking up.
-            argv += ["-group", group]
-        return _run(argv)
+        version = _macos_notifier_version(notifier)
+        if version >= _MIN_CLICKABLE_TN:
+            argv = [notifier, "-title", title, "-message", message, "-sound", "Basso"]
+            if url:
+                argv += ["-open", url]
+            if group:
+                # One live banner per session: a second alert for the same
+                # session replaces the first instead of stacking up.
+                argv += ["-group", group]
+            ok, err = _run_capturing(argv)
+            if ok:
+                _tn_refusal["reason"] = ""
+                return True
+            # Remember it, so capability() stops advertising a click that
+            # this machine has already demonstrated it will not deliver.
+            _tn_refusal["reason"] = (err.strip().splitlines() or ["refused"])[-1]
+            _warn_unclickable_once(
+                "terminal-notifier would not post this notification (%s). "
+                "Allow it under System Settings > Notifications, then alerts "
+                "will open the session on click. Falling back to a banner "
+                "that cannot be clicked."
+                % (err.strip().splitlines()[-1] if err.strip() else "no reason given"))
+        else:
+            # 2.x shows a banner, but its click callback rides the
+            # NSUserNotification relaunch path that modern macOS no longer
+            # delivers: the banner appears and clicking it does nothing.
+            # Verified dead on macOS 26.3.1 with terminal-notifier 2.0.0.
+            seen = ".".join(str(n) for n in version) if version else "below 3"
+            _warn_unclickable_once(
+                "terminal-notifier %s is too old to carry a click: its "
+                "notification activation rides an API modern macOS no longer "
+                "delivers, so the banner appears and clicking it does "
+                "nothing. Run `brew upgrade terminal-notifier` for version 3 "
+                "or newer and the next alert will open the session." % seen)
     if not shutil.which("osascript"):
         return False
-    if url:
+    if url and not notifier:
         _warn_unclickable_once(
             "This notification cannot be clicked through to the session: "
             "macOS notifications sent through AppleScript carry no click "
@@ -305,6 +378,19 @@ def _send_linux(title: str, message: str, url: str) -> bool:
 
 # ── Entry point ─────────────────────────────────────────────────────────────
 
+def _run_capturing(argv: list, **kwargs) -> tuple:
+    """``(ok, stderr_text)``. The reason matters here: terminal-notifier 3
+    refuses with a readable sentence when it has no notification permission,
+    and that sentence is what the operator needs to see."""
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv, never shell=True
+            argv, timeout=_SEND_TIMEOUT, capture_output=True, **kwargs)
+        err = ((done.stderr or b"") + (done.stdout or b"")).decode("utf-8", "replace")
+        return done.returncode == 0, err
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
 def _run(argv: list, **kwargs) -> bool:
     try:
         done = subprocess.run(  # noqa: S603 - fixed argv, never shell=True
@@ -357,9 +443,27 @@ def capability() -> dict:
            "mechanism": "", "can_notify": False, "clickable": False, "reason": ""}
     if sys.platform == "darwin":
         notifier = _macos_notifier()
-        if notifier:
+        version = _macos_notifier_version(notifier) if notifier else ()
+        if notifier and version >= _MIN_CLICKABLE_TN and _tn_refusal["reason"]:
+            out.update(
+                mechanism="terminal-notifier (not permitted)", can_notify=True,
+                clickable=False,
+                reason="terminal-notifier is installed but macOS has not "
+                       "allowed it to post notifications (%s). Allow it under "
+                       "System Settings > Notifications; alerts fall back to "
+                       "an unclickable banner until then."
+                       % _tn_refusal["reason"])
+        elif notifier and version >= _MIN_CLICKABLE_TN:
             out.update(mechanism="terminal-notifier", can_notify=True,
                        clickable=True, reason="")
+        elif notifier:
+            # It will post a banner, but the click is dead on modern macOS.
+            out.update(
+                mechanism="terminal-notifier (too old)", can_notify=True,
+                clickable=False,
+                reason="terminal-notifier %s cannot carry a click on this "
+                       "macOS. `brew upgrade terminal-notifier` for 3 or newer."
+                       % (".".join(str(n) for n in version) if version else "below 3"))
         elif shutil.which("osascript"):
             out.update(
                 mechanism="osascript", can_notify=True, clickable=False,
