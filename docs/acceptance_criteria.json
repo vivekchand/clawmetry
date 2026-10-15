@@ -34,7 +34,8 @@
     "AC-STE-002.",
     "AC-STE-003.",
     "AC-STE-005.",
-    "AC-ASSIST-"
+    "AC-ASSIST-",
+    "AC-ASIMOV-"
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -2766,6 +2767,132 @@
       "doc": "Node activity hosted action acknowledgement ownership",
       "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
       "text": "When the original claimant crashes or fails during apply or result publication and successful persistence is not confirmed, the system shall leave the save unconfirmed and require a fresh operator request rather than automatically replaying that claimed action."
+    },
+    {
+      "id": "AC-ASIMOV-001.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When Pro is absent and license enforcement is enabled, the connector shall still import supported recordings and display persisted telemetry locally."
+    },
+    {
+      "id": "AC-ASIMOV-001.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When the developer starts the connector without optional Menlo dependencies, the system shall explain the required installation without breaking ordinary ClawMetry commands."
+    },
+    {
+      "id": "AC-ASIMOV-001.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When live credentials are absent, the system shall offer the recording path and shall not invent a robot connection."
+    },
+    {
+      "id": "AC-ASIMOV-002.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When connected with the documented Observe credential, the collector shall receive state without calling a robot command or changing connection authority."
+    },
+    {
+      "id": "AC-ASIMOV-002.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When state is received, the system shall preserve available positions, velocities, currents and temperatures for all 25 actuators, orientation, battery and alerts with explicit units."
+    },
+    {
+      "id": "AC-ASIMOV-002.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When measurements are missing or null, the system shall preserve that uncertainty instead of showing zero."
+    },
+    {
+      "id": "AC-ASIMOV-002.4",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When a connection fails or telemetry stops advancing, the system shall show stale/disconnected evidence and record a bounded diagnostic without claiming current robot state."
+    },
+    {
+      "id": "AC-ASIMOV-003.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When tracing is explicitly installed, the system shall record the original application command requests, returns and exceptions without changing their result or control flow."
+    },
+    {
+      "id": "AC-ASIMOV-003.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When the SDK returns without an authoritative outcome, the system shall retain an unknown outcome and shall not claim command acceptance or successful movement."
+    },
+    {
+      "id": "AC-ASIMOV-003.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When tracing is not installed, the system shall not patch SDK methods automatically."
+    },
+    {
+      "id": "AC-ASIMOV-004.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When a valid official recording is imported, the system shall retain robot/run identity, source timing, telemetry and command distinctions."
+    },
+    {
+      "id": "AC-ASIMOV-004.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When records are malformed, truncated or outside supported bounds, the system shall continue safely where possible and report incomplete evidence."
+    },
+    {
+      "id": "AC-ASIMOV-004.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When the same imported evidence is replayed, persisted events shall not silently duplicate or overwrite conflicting identities."
+    },
+    {
+      "id": "AC-ASIMOV-005.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When a producer records evidence, its callback shall use a bounded nonblocking queue and shall not perform database or network work."
+    },
+    {
+      "id": "AC-ASIMOV-005.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When queue or disk bounds are reached, the system shall surface dropped/incomplete evidence and shall not falsely report a complete recording."
+    },
+    {
+      "id": "AC-ASIMOV-005.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When evidence is queried, the system shall read persisted DuckDB state through the daemon writer service rather than raw robot files in a request handler."
+    },
+    {
+      "id": "AC-ASIMOV-005.4",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When evidence is serialized for the existing robotics pipeline, the system shall preserve the robotics.v1 contract, nanosecond precision, source/receipt clocks and explicit environment."
+    },
+    {
+      "id": "AC-ASIMOV-006.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When hardware has not been exercised, documentation and UI shall explicitly avoid claiming hardware-qualified support."
+    },
+    {
+      "id": "AC-ASIMOV-006.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When Pro is installed, Asimov integration shall coexist with existing SO101/RoboSim/RP1 evidence and shall not replace unrelated plugin handlers."
+    },
+    {
+      "id": "AC-ASIMOV-006.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When the hosted Asimov view is opened, it shall render the emitted encrypted asimov snapshot slice after client-side decryption or explain unavailable evidence; server-side raw robot reads are forbidden."
+    },
+    {
+      "id": "AC-ASIMOV-006.4",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When packaging the connector, the system shall not raise the declared Python minimum or require numerical/media libraries for users who do not run Asimov collection."
     }
   ]
 }

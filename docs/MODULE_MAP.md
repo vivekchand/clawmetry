@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-336 modules, 95 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+337 modules, 96 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -33,6 +33,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/alerts.py` | large | `bp_alerts`, `bp_budget` | `/api/_harness`, `/api/agents`, `/api/alert-channels`, `/api/alerts`, `/api/budget`, `/api/emergency-stop` | Budget + Alerts endpoints. |
 | `routes/apikeys_admin.py` | small | `bp_apikeys_admin` | `/api/apikeys` | create, list and revoke the node's API keys. |
 | `routes/approval_routing.py` | small | `bp_approval_routing` | `/a`, `/a/decide`, `/api/approvals` | OSS stub after the impl moved to clawmetry-pro. |
+| `routes/asimov.py` | small | `bp_asimov` | `/api/asimov`, `/asimov` | Free, persisted Asimov evidence. |
 | `routes/assets.py` | small | `bp_assets` | `/api/assets` | OSS asset registry API. |
 | `routes/assistant.py` | small | `bp_assistant` | `/api/assistant` | Local Assistant JSON/SSE interface backed by the single daemon executor. |
 | `routes/attention.py` | medium | `bp_attention` | `/api/attention`, `/api/hooks` | "which of my agents needs me right now". |

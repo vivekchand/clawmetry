@@ -143,6 +143,7 @@ from routes.assets import bp_assets
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
 from routes.local_query import bp_local_query
+from routes.asimov import bp_asimov
 from routes.public_api import bp_public_api
 from routes.apikeys_admin import bp_apikeys_admin
 from routes.update_check import bp_update_check, start_update_check_thread
@@ -6512,6 +6513,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_attribution)
     app.register_blueprint(bp_autonomy)
     app.register_blueprint(bp_auth)
+    app.register_blueprint(bp_asimov)
     app.register_blueprint(bp_brain)
     app.register_blueprint(bp_budget)
     app.register_blueprint(bp_channels)

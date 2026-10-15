@@ -56,6 +56,11 @@ switcher re-scopes every tab to one of them.
 Built your own agent on an SDK instead? The interceptor tracks its LLM calls
 too. See [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 
+Building with a humanoid robot? The free, open-source
+[Asimov 1 connector](docs/ASIMOV.md) imports Menlo SDK recordings and provides
+an optional observation collector and application tracing. This support is
+experimental. Physical hardware qualification is pending.
+
 ## What you get
 
 - **Sessions & transcripts**: what each agent did, turn by turn, with replay

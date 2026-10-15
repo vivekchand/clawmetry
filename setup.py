@@ -71,6 +71,8 @@ setup(
         "clawmetry": [
             "resources/*.sh",
             "py.typed",
+            "asimov/NOTICE",
+            "asimov/LICENSE-MENLO",
             # Curated third-party benchmark pairs for the Harness Engineering
             # tab (clawmetry/published_benchmarks.py). No runtime fetch.
             "data/*.json",

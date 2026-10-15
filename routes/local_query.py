@@ -763,6 +763,8 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    "query_asimov_runs",
+    "query_asimov_events",
     "robotics_query",
     "robotics_runs",
     "robotics_events",
@@ -1368,10 +1370,11 @@ def http_local_method(method: str):
     operation = kwargs.get("operation")
     if method == "robotics_query" and not isinstance(operation, str):
         return jsonify({"error": "operation must be a string"}), 400
-    if method in {"query_node_activity", "set_node_activity_preferences", "review_node_activity_event"} or (
+    if method in {"query_node_activity", "set_node_activity_preferences", "review_node_activity_event",
+                  "query_asimov_runs", "query_asimov_events"} or (
             method == "robotics_query" and operation in {"guard_ack", "set_observation_only"}):
         # This Blueprint also exists on the dashboard. Its internal RPC route
-        # must not bypass the Pro route's local-origin and CSRF checks. Only
+        # must not bypass route authentication or local-origin/CSRF checks. Only
         # the actual daemon owns this private token; the dashboard has none.
         import hmac
         from clawmetry.local_server import get_token

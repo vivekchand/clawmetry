@@ -598,6 +598,10 @@ def _graceful_shutdown(reason: str, *, force_exit: bool) -> None:
     from clawmetry.assistant_relay import stop_delivery
     stop_delivery()
 
+    # Finish the journal tail before tearing down its shared writer connection.
+    from clawmetry.asimov.daemon import stop as _stop_asimov
+    _stop_asimov()
+
     # Run the flush on a background thread so we can enforce a wall-clock
     # timeout. A blocked DuckDB write must not hang launchctl/systemctl
     # for >5s — the orchestrator will SIGKILL us anyway after its own
@@ -25259,6 +25263,17 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     if _spend_flow_slice is not None:
         payload["spendFlow"] = _spend_flow_slice
 
+    # Project Asimov DuckDB evidence directly on this daemon's writer handle.
+    # No view, journal scan, SDK or robot connection mediates the encrypted slice.
+    try:
+        from clawmetry.asimov.daemon import snapshot as _asimov_snapshot
+        from clawmetry.local_store import get_store as _asimov_store
+        _asimov_slice = _asimov_snapshot(_asimov_store())
+        if _asimov_slice.get("runs"):
+            payload["asimov"] = _asimov_slice
+    except Exception:
+        log.warning("Asimov snapshot could not be read")
+
     # Paid robotics summary shares the normal encrypted envelope.
     try:
         from clawmetry.extensions import call as _robotics_snapshot
@@ -26047,6 +26062,14 @@ def run_daemon() -> None:
             log.info("local query server: listening on 127.0.0.1:%d", _ls_port)
     except Exception as _e:
         log.warning("local query server: failed to start: %s", _e)
+
+    # Tail existing local Asimov journals without a license or private package.
+    # SDK tracing and live Observe connections require separate explicit setup.
+    try:
+        from clawmetry.asimov.daemon import start as _start_asimov
+        _start_asimov(_startup_store)
+    except Exception:
+        log.warning("Asimov collection could not start. Other collectors will continue.")
 
     # Local collectors must not wait for cloud I/O or historical backfill.
     # The daemon already owns its store and has published the query service.

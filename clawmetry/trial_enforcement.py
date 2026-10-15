@@ -132,6 +132,9 @@ _ALLOWED_PATH_PREFIXES = (
     "/favicon",                 # tab icon
 )
 _ALLOWED_PATH_EXACT = frozenset({
+    # Asimov basic observation is free without the private robotics package.
+    "/asimov",
+    "/api/asimov/runs",
     "/",                        # dashboard shell renders overlay on top
     "/robots.txt",
     "/api/entitlement",         # exact, also matched by prefix — belt & braces
@@ -406,6 +409,13 @@ def allowlisted_path(path: str) -> bool:
             return False
         p = str(path)
         if p in _ALLOWED_PATH_EXACT:
+            return True
+        # Only the declared free, read-only event route is exempt. Similar
+        # names, new controls, and all other robotics routes remain gated.
+        parts = p.split("/")
+        if (len(parts) == 6 and parts[:4] == ["", "api", "asimov", "runs"]
+                and len(parts[4]) == 32 and all(c in "0123456789abcdef" for c in parts[4])
+                and parts[5] == "events"):
             return True
         for prefix in _ALLOWED_PATH_PREFIXES:
             if p.startswith(prefix):

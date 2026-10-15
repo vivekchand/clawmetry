@@ -4312,6 +4312,14 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
     process owns the writer lock.
     """
 
+    def query_asimov_runs(self, *, limit=20, robot_id=None, before_ns=None, before_run_id=None) -> dict:
+        from clawmetry.asimov.store import runs
+        return runs(self, limit=limit, robot_id=robot_id, before_ns=before_ns, before_run_id=before_run_id)
+
+    def query_asimov_events(self, *, run_id, after=0, limit=200) -> dict:
+        from clawmetry.asimov.store import events
+        return events(self, run_id=run_id, after=after, limit=limit)
+
     def robotics_runs(self, *, limit=50, before_ns=None, before_run_id=None) -> dict:
         return self.robotics_query("runs", {"limit": limit, "before_ns": before_ns,
                                             "before_run_id": before_run_id})

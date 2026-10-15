@@ -1,0 +1,79 @@
+name: Asimov observation contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asimov-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  asimov-contract:
+    name: Asimov SDK and free evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Install locked core test dependencies
+        run: pip install --require-hashes -r .github/requirements/ci-tests.txt
+      - name: Verify free commands without optional robot dependencies
+        run: >-
+          python3 -m pytest tests/test_asimov_journal.py tests/test_asimov_recording.py
+          tests/test_asimov_observer.py tests/test_asimov_store.py tests/test_asimov_routes.py
+          tests/test_asimov_daemon.py -q
+      - name: Check out official Menlo SDK 0.1.0 source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: menloresearch/menlo-sdk
+          ref: 568385a5a03212303b876ff7e4d77833ab55c7d8
+          path: .sdk-test/menlo-sdk
+          persist-credentials: false
+      - name: Verify against real SDK classes without connecting to hardware
+        env:
+          PYTHONPATH: .sdk-test/menlo-sdk/src:.
+        run: >-
+          python3 -m pytest tests/test_asimov_journal.py tests/test_asimov_recording.py
+          tests/test_asimov_sdk.py tests/test_asimov_observer.py tests/test_asimov_store.py
+          tests/test_asimov_routes.py tests/test_asimov_daemon.py -q
+      - name: Verify browser rendering and polling behavior
+        run: node tests/test_asimov_ui.js
+
+  asimov-served-browser:
+    name: Asimov actual served empty view
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install locked browser and runtime dependencies
+        run: pip install --require-hashes -r .github/requirements/playwright-e2e.txt
+      - name: Install Chromium and its system dependencies
+        run: python -m playwright install --with-deps chromium
+      - name: Verify actual routes assets auth and empty-store behavior
+        # Headed Chromium under Xvfb provides real document.hidden changes.
+        # No robot telemetry is inserted, and no physical support is claimed.
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1200x24" python scripts/verify_asimov_browser.py --headed
+      - name: Retain actual served browser evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: asimov-served-browser
+          path: artifacts/asimov-browser/
+          if-no-files-found: error
