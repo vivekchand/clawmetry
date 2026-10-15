@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Fixed
+
+- Hosted Node activity settings and event reviews retain the original node confirmation when a request is delivered more than once. Duplicate requests neither repeat the change nor replace its reply, including delayed delivery while its nonce remains retained. An interrupted request stays unconfirmed and needs a fresh request.
+
 ### Fixed: evidence is the work, and a cut-short name is not a repository (#6424)
 
 - **Why:** two cases left open by #6417 on the grounds that one was cosmetic and the other could not be told apart from a real value. Both were wrong. Four rows showed the reference buried in markup, `&middot; <a href="https://github.com/own/repo/pull/6420">Correction release</a>`, which a person reading a table cell to check a claim cannot use. And `vivekchand/c` and `vivekchand/clawm` were listed as repositories your agents worked on; no such repositories exist.
