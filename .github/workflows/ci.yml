@@ -946,6 +946,18 @@ jobs:
           pip install --require-hashes
           -r .github/requirements/ci-api-tests.txt
 
+      # The desktop-notification backends are per-OS by definition, and the
+      # suite that covers them runs only on ubuntu in moat-tests, where every
+      # platform branch is reached through a monkeypatched sys.platform. That
+      # proves the argv we build and nothing about the host: notably
+      # _windows_powershell() resolving a real powershell.exe, which is the
+      # one thing standing between a Windows user and no alert at all.
+      # Running the same file on all three runners costs a second and is the
+      # only place this code ever executes natively on Windows or macOS.
+      - name: Desktop notification backends (native, all three OS)
+        timeout-minutes: 3
+        run: python3 -m pytest tests/test_desktop_notify_clickable.py -q --tb=short
+
       - name: Assistant Windows process-tree cancellation
         if: runner.os == 'Windows'
         timeout-minutes: 3
