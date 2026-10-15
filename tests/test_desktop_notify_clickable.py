@@ -505,3 +505,80 @@ def test_a_refused_notifier_asks_macos_for_permission_once(on, monkeypatch, capl
     seen.clear()
     dn.notify("t", "m", url=_URL)
     assert [a for a in seen if a[0] == "/usr/bin/open"] == []
+
+
+# ── The two backends nobody here can click by hand ──────────────────────────
+#
+# Every test above drives its platform through a fake ``subprocess.run``,
+# which proves the argv we build and nothing about what the real tools do
+# with it. These two close that gap as far as a mac can: one parses the toast
+# we would hand Windows, the other runs the Linux round trip through real
+# processes.
+
+
+def test_the_windows_toast_is_well_formed_xml_even_for_hostile_text(
+    on, run_spy, monkeypatch
+):
+    """A malformed toast is not an error on Windows - it simply never shows.
+
+    The sibling tests assert on substrings, which stay happy for XML no
+    parser would accept. Parse it instead, with an incident title that is
+    itself a closing-tag soup plus a ``]]>`` and a second ``<toast>`` that
+    tries to supply its own ``launch``.
+    """
+    monkeypatch.setattr(dn.sys, "platform", "win32")
+    monkeypatch.setattr(dn, "_windows_powershell", lambda: r"C:\ps\powershell.exe")
+
+    import xml.etree.ElementTree as ET
+
+    hostile = (
+        '38 files <&> "quoted" ]]> </text></binding></visual></toast>'
+        '<toast launch="evil://x">'
+    )
+    assert dn.notify(hostile, hostile, url=_URL) is True
+
+    argv = run_spy[0]
+    script = base64.b64decode(
+        argv[argv.index("-EncodedCommand") + 1]).decode("utf-16-le")
+    xml = base64.b64decode(
+        script.split("FromBase64String('")[1].split("'")[0]).decode("utf-8")
+
+    root = ET.fromstring(xml)  # the assertion: Windows can parse this at all
+    assert root.tag == "toast"
+    # The click target is ours, in full, and the forged one never lands.
+    assert root.get("launch") == _URL
+    assert root.get("activationType") == "protocol"
+    assert "evil://x" not in [el.get("launch") for el in root.iter()]
+    # The incident survives as text content, never as structure.
+    texts = [t.text for t in root.iter("text")]
+    assert texts and all(t == hostile for t in texts)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_linux_click_opens_the_url_through_real_processes(on, monkeypatch, tmp_path):
+    """The Linux half end to end with no mock in the path.
+
+    ``_wait_for_click`` has to spawn a real ``notify-send``, read the action
+    key off its stdout and hand the URL to a real ``xdg-open``. A stubbed
+    ``subprocess.run`` cannot show that the output parsing matches what
+    libnotify prints, nor that the deep link survives the trip - and the
+    session id lives in the URL *fragment*, which is the part a sloppy
+    hand-off drops.
+    """
+    opened = tmp_path / "opened.txt"
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "notify-send").write_text("#!/bin/sh\necho default\n")
+    (bindir / "xdg-open").write_text(
+        '#!/bin/sh\nprintf %%s "$1" > "%s"\n' % opened)
+    for tool in ("notify-send", "xdg-open"):
+        (bindir / tool).chmod(0o755)
+
+    monkeypatch.setattr(dn.sys, "platform", "linux")
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+
+    dn._wait_for_click(
+        [str(bindir / "notify-send"), "-A", "default=Open", "t", "m"], _URL)
+
+    assert opened.read_text() == _URL
+    assert "#session=" in opened.read_text()
