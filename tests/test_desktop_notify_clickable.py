@@ -437,10 +437,18 @@ def test_capability_stops_advertising_a_click_the_machine_refused(on, monkeypatc
 
 # ── The first-run permission prompt a plain CLI cannot raise ───────────────
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX path semantics")
 def test_the_app_bundle_is_found_behind_a_homebrew_wrapper(tmp_path):
     """A notification is attributed to an application, so terminal-notifier
     lives in a bundle, but Homebrew puts a shell wrapper on PATH. Opening the
-    wrapper would register nothing."""
+    wrapper would register nothing.
+
+    Skipped on Windows rather than made portable: the resolver matches an
+    absolute POSIX path inside a shell wrapper, and a fake bundle built from
+    a Windows tmp_path has backslashes no real Homebrew wrapper ever
+    contains. The function it covers only ever runs on darwin, so a Windows
+    run would be testing the fixture, not the product.
+    """
     app = tmp_path / "Cellar" / "terminal-notifier" / "3.1.0" / "terminal-notifier.app"
     (app / "Contents" / "MacOS").mkdir(parents=True)
     binary = app / "Contents" / "MacOS" / "terminal-notifier"
@@ -656,3 +664,26 @@ def test_the_authorization_probe_never_costs_a_notification(
     monkeypatch.setattr(dn.subprocess, "run", boom)
     assert dn._macos_notifier_authorization("/x/terminal-notifier") == ""
     assert dn.capability()["clickable"] is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs a real Windows host")
+def test_windows_finds_a_real_powershell_on_a_real_windows_host():
+    """The one claim only a Windows runner can settle.
+
+    Everything else about the Windows path is checked with a monkeypatched
+    sys.platform, which proves the argv we build and nothing about whether
+    the host can run it. If this resolver comes back empty on an ordinary
+    Windows install, every Windows user is back to the silence this module
+    was written to end, and no mocked test would ever say so.
+    """
+    shell = dn._windows_powershell()
+    assert shell, "no Windows PowerShell found on a Windows host"
+    assert os.path.isfile(shell)
+    assert shell.lower().endswith("powershell.exe")
+    # pwsh (PowerShell 7) is present on GitHub's runners and must never win:
+    # it does not project the WinRT namespaces the toast script needs.
+    assert "powershell\\7" not in shell.lower()
+
+    cap = dn.capability()
+    assert cap["mechanism"] == "windows-toast"
+    assert cap["can_notify"] is True and cap["clickable"] is True
