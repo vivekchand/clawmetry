@@ -98,3 +98,13 @@ CI run 38806018012 passed both Asimov jobs on 9d2692b6ca83372d20496ce9c15e442acd
 Independent reviewer `asimov_local_view` inspected those actual artifacts and the final harness. **Verdict: APPROVED** for the experimental software and actual served empty-view scope. Desktop at 1440 pixels and mobile at 390 pixels were readable without page overflow, had actionable commands, and clearly labeled observation-only operation and pending hardware qualification. No blocking findings were found. This verdict does not establish populated hardware telemetry, live Observe credentials, hosted account unlock, PyPI publication or cloud rollout.
 
 Main subsequently advanced through release PR #6443, changing only FLYWHEEL.md. The main-first queue canceled remaining broader CI. The feature was rebased cleanly onto that fresh main; implementation artifacts remain byte-identical to the reviewed commit. Full CI on the current head, merge, release, published-wheel inspection and cloud deployment remain delivery gates. No canceled check is treated as passing.
+
+## OSS merge and release handoff
+
+All checks on fe0290a4bb396ec74bfa2354d6f65d0f1426cd25 completed successfully, including native drift-bot, both Asimov jobs, product record, visual diff, cross-platform API/install/sync, real gateway, store invariants, entitlement suite and the required aggregate gate. The scheduled-only OpenSSF Scorecard check was skipped by its existing workflow condition. No failure, cancellation or pending check was treated as passing.
+
+The rebased Asimov workflow 38806903046 passed. Root downloaded its exact-head browser artifact: screenshots are byte-identical to the independently inspected captures, and native same-window, hidden zero-request and resume assertions all passed again. The entitlement suite passed after about 14 minutes, consistent with the separately observed green-main baseline; no bypass or test change was needed.
+
+PR #6442 merged at 2026-10-15T21:26:23Z as b763676bd858b37af005335525abc0a6e08ef5fc. This is the OSS source merge, not completion of PyPI publication, cloud deployment or physical qualification. A separate release PR carries the changelog and this handoff; the workflow owns versioning and publication.
+
+Release PR #6447 initially parked queued checks behind main under the existing queue policy. Main then advanced through #6440, adding public runtime compatibility dispatch and a blob-filtered product-record checkout. The release was rebased cleanly onto that merged CI baseline. The packaged Asimov implementation remains byte-identical to the inspected candidate and reviewed feature; canceled checks remain pending delivery work until restored and passed on the current head.

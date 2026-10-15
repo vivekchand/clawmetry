@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: free experimental Asimov 1 observation (#6442)
+
+- Import official Menlo SDK recordings, explicitly trace application commands, or receive state through an Observe-only collector. Inspect 25 measured joints, battery, orientation, alerts and separate source/receipt clocks in a free local view without Pro.
+- Persist bounded compatible journals through the existing daemon-owned DuckDB and project recent evidence into the existing encrypted cloud snapshot. Missing values and command outcomes remain unknown; no robot control or media subscription path is added.
+- Verified with 83 focused tests against official SDK source and the published Pro parser, isolated wheel commands without optional robot dependencies, and actual authenticated desktop/mobile browser captures. Native tab checks confirm polling stops while hidden and resumes when visible. Full repository CI and native Drift review passed before merge.
+- Physical hardware qualification remains pending. This release is experimental SDK and recording support; SDK fixtures do not establish physical robot validation. Hosted rendering ships through the separately verified cloud companion.
+
 ### Fixed: a specimen is not a repository, and a config key is not a name (#6441)
 
 - **Why:** `openai/openai` reached the live Delivered tab in two sessions. The sighting is a documentation line listing the URL shapes a tool accepts: `URL. Examples: https://github.com/openai/openai/pulls/123, https://api.github.com/repos/openai/openai, https://github.example.com/api/v3/repos/octo/repo.` There is no `openai/openai` account, and a repository nobody has is the failure that matters on this tab, because it reads as an answer. The phantom row was not the only damage. In one of the two sessions it became a second repository, so the fold could no longer tell which repository pull request #6351 belonged to, and a real $10.89 row was shown with a blank name. Found by auditing the live node after 0.12.923 shipped, which is the fifth time in this effort that reading the live tab after a fix found the next defect, and the fifth time that reading the diff would not have.
