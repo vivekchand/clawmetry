@@ -89,6 +89,11 @@ response. Failed deliveries retry at five-minute intervals, then report failure.
 Newer requests supersede old markers without an old result overwriting them.
 The Mac must be awake and the owner logged in; offline requests stay pending.
 
+Request and claimed markers bind the producer workflow run ID and attempt.
+A different run on the same commit cannot adopt a newer request. The local
+cursor tracks each run attempt separately, including producer reruns; legacy
+run-only cursors migrate to attempt one.
+
 Verify a real dispatch and exact-SHA callback before setting private
 `OSS_RUNTIME_CI_ENABLED=true`. A dedicated `OSS_CI_DISPATCH_TOKEN` with public
 Contents write remains an optional direct route, using the public-side private

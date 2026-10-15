@@ -10,9 +10,9 @@ bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 SHA, BASE = 'a' * 40, 'b' * 40
 RUN = {'id': 7, 'head_sha': SHA, 'head_repository': {'full_name': bridge.SOURCE},
-       'event': 'pull_request', 'status': 'completed', 'conclusion': 'success'}
+       'head_branch': 'feature', 'event': 'pull_request', 'status': 'completed', 'conclusion': 'success'}
 STATUS = {'id': 42, 'context': bridge.CONTEXT, 'creator': {'login': 'github-actions[bot]'},
-          'state': 'pending', 'description': f'CM_OSS_REQUEST:{BASE}:9'}
+          'state': 'pending', 'description': f'CM_OSS_REQUEST:{BASE}:9:7-1'}
 
 
 class BridgeTests(unittest.TestCase):
@@ -22,8 +22,8 @@ class BridgeTests(unittest.TestCase):
     def test_rejects_untrusted_fork_and_malformed_markers(self):
         for change in ({'state': 'success'}, {'creator': {'login': 'someone'}},
                        {'description': 'CM_OSS_REQUEST:../../../private:9'},
-                       {'description': f'CM_OSS_REQUEST:1234567890abcdef:{BASE}:9'},
-                       {'description': f'CM_OSS_QUEUED:{BASE}:9'}):
+                       {'description': f'CM_OSS_REQUEST:1234567890abcdef:{BASE}:9:7-1'},
+                       {'description': f'CM_OSS_QUEUED:{BASE}:9:7-1'}):
             with self.subTest(change=change):
                 self.assertIsNone(bridge.request_from(RUN, dict(STATUS, **change)))
         self.assertIsNone(bridge.request_from(dict(RUN, head_repository={'full_name': 'someone/fork'}), STATUS))
@@ -42,6 +42,28 @@ class BridgeTests(unittest.TestCase):
             self.assertTrue(body['local_bridge'])
             self.assertEqual(body['request_id'], record['nonce'])
             self.assertEqual(saves[-1]['attempts'], 1)
+
+    def test_marker_belongs_to_exact_producer_run_and_attempt(self):
+        for run in (dict(RUN, id=8), dict(RUN, run_attempt=2)):
+            self.assertIsNone(bridge.request_from(run, STATUS))
+        self.assertIsNotNone(bridge.request_from(dict(RUN, run_attempt=2),
+            dict(STATUS, description=f'CM_OSS_REQUEST:{BASE}:9:7-2')))
+
+    def test_rerun_is_discovered_after_legacy_seen_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.json'
+            bridge.save(path, {'requests': {}, 'seen': [7]})
+            run = dict(RUN, run_attempt=2)
+            status = dict(STATUS, description=f'CM_OSS_REQUEST:{BASE}:9:7-2')
+            with patch.object(bridge, 'current_heads', return_value={'feature': SHA}), \
+                    patch.object(bridge, 'runs', side_effect=[[run], []]), \
+                    patch.object(bridge, 'latest_status', return_value=status), \
+                    patch.object(bridge, 'api') as api:
+                bridge.once(path)
+                self.assertEqual(api.call_args.args[0], f'repos/{bridge.DESTINATION}/dispatches')
+            state = __import__('json').loads(path.read_text())
+            self.assertEqual(state['seen'], ['7:1', '7:2'])
+            self.assertEqual(next(iter(state['requests'].values()))['producer_attempt'], 2)
 
     def test_uncertain_dispatch_does_not_duplicate_and_receipt_is_reused(self):
         record = self.request()

@@ -21,7 +21,7 @@ OSS_WORKFLOW = 'runtime-compatibility.yml'
 ROOT = Path.home() / 'Library/Application Support/ClawMetryCI'
 LABEL = 'com.clawmetry.runtime-dispatch'
 TRUSTED = {'github-actions[bot]', 'vivekchand'}
-MARKER = re.compile(r'CM_OSS_(REQUEST|QUEUED):(?:(?P<nonce>[a-f0-9]{16}):)?(?P<base>[a-f0-9]{40}|full):(?P<pr>[0-9]{1,10})\Z')
+MARKER = re.compile(r'CM_OSS_(REQUEST|QUEUED):(?:(?P<nonce>[a-f0-9]{16}):)?(?P<base>[a-f0-9]{40}|full):(?P<pr>[0-9]{1,10}):(?P<producer>[1-9][0-9]{0,19})-(?P<attempt>[1-9][0-9]{0,5})\Z')
 
 
 def api(path, body=None, query=None):
@@ -86,9 +86,13 @@ def request_from(run, status):
     match = MARKER.fullmatch(status.get('description') or '')
     if not match or (match[1] == 'QUEUED') != bool(match['nonce']):
         return None
+    if (str(run['id']) != match['producer']
+            or str(run.get('run_attempt', 1)) != match['attempt']):
+        return None
     nonce = match['nonce'] or hashlib.sha256(str(status['id']).encode()).hexdigest()[:16]
     return {'sha': run['head_sha'], 'base': match['base'], 'pr': int(match['pr']),
             'branch': run.get('head_branch', ''), 'manual': run['event'] == 'workflow_dispatch',
+            'producer_run': run['id'], 'producer_attempt': run.get('run_attempt', 1),
             'nonce': nonce, 'request_description': status['description'], 'request_status_id': status['id'],
             'attempts': 0, 'last_dispatch': 0, 'claimed': match[1] == 'QUEUED'}
 
@@ -98,7 +102,8 @@ def title(record):
 
 
 def queued_marker(record):
-    return f"CM_OSS_QUEUED:{record['nonce']}:{record['base']}:{record['pr']}"
+    return (f"CM_OSS_QUEUED:{record['nonce']}:{record['base']}:{record['pr']}:"
+            f"{record['producer_run']}-{record['producer_attempt']}")
 
 
 def post_status(record, state, description, run=None):
@@ -207,22 +212,23 @@ def once(path):
     heads = current_heads()
     since = datetime.fromtimestamp(state.get('last_poll', now - 30 * 86400), timezone.utc)
     since = (since - timedelta(days=1)).strftime('%Y-%m-%d')
-    seen = set(state['seen'])
+    seen = {str(value) if ':' in str(value) else f'{value}:1' for value in state['seen']}
     for run in runs(SOURCE, PRO_WORKFLOW, since):
-        if run['id'] in seen or run['status'] != 'completed':
+        run_key = f"{run['id']}:{run.get('run_attempt', 1)}"
+        if run_key in seen or run['status'] != 'completed':
             continue
         candidate = run.get('head_sha', '')
         if (run.get('head_repository', {}).get('full_name') != SOURCE
                 or run.get('conclusion') != 'success'
                 or run.get('event') not in {'push', 'pull_request', 'workflow_dispatch'}
                 or not re.fullmatch('[a-f0-9]{40}', candidate)):
-            seen.add(run['id'])
+            seen.add(run_key)
             continue
         request = request_from(run, latest_status(candidate))
         if request:
             state['requests'].setdefault(request['nonce'], request)
-        seen.add(run['id'])
-    state['seen'] = sorted(seen)[-10000:]
+        seen.add(run_key)
+    state['seen'] = sorted(seen, key=lambda key: tuple(map(int, key.split(':'))))[-10000:]
     state['last_poll'] = now
     persist()
     receipts = watch_reruns(state, heads, persist)
