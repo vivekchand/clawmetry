@@ -19,8 +19,10 @@ NODE_ACTIVITY_DDL = [
 ]
 MAX_REVIEWS = 2000
 MAX_REVIEWS_PER_EVENT = 20
+MAX_PROCESS_SIGHTINGS = 16384
 
 SOURCE_NAMES = ("processes", "listeners", "sensitive_files", "logins")
+SOURCE_CAPS = {"processes": 512, "listeners": 256, "sensitive_files": 5, "logins": 64}
 
 
 def _encoded(value):
@@ -29,6 +31,78 @@ def _encoded(value):
 
 def _public_row(row):
     return {k: copy.deepcopy(v) for k, v in row.items() if not k.startswith("_")}
+
+
+def _inventory_rows(source, rows, previous_rows, observed_at, partial):
+    """Current positive evidence wins the cap; absence never refreshes old evidence."""
+    merged = {}
+    for row in rows:
+        merged.setdefault(row["id"], dict(_public_row(row), observed_at=observed_at, stale=False))
+    if partial:
+        for row in previous_rows:
+            merged.setdefault(row["id"], dict(_public_row(row), observed_at=row.get("observed_at"), stale=True))
+    return list(merged.values())[:SOURCE_CAPS[source]]
+
+
+def _observed_process(row, now):
+    """A positive sighting is deliberately distinct from a complete-scan addition."""
+    safe = _public_row(row)
+    return {"id": "node_evt_" + identity("processes", row["id"], now, "observed"),
+            "observed_at": now, "kind": "process_observed", "title": "A process was first observed",
+            "detail": "First observed within retained history under partial collection. This does not prove an actual start, a complete inventory or malicious intent.",
+            "actor": dict(UNKNOWN_ACTOR), "target": {"kind": "processes", "id": row["id"],
+                                                       "label": row.get("name") or "Process"},
+            "process": safe, "before": None, "after": safe,
+            "evidence": ["Positive process observation during a partial scan.",
+                         "Earlier absence from a partial scan is not evidence that this process did not exist.",
+                         "A process name does not identify an agent or a person. Activity between scans may be missed."],
+            "changed_fields": [], "finding": False, "severity": "info"}
+
+
+def _readable_source(coverage, source_identity, rows):
+    return source_identity is not None and (coverage.get("state") == "complete" or
+                                            (coverage.get("state") == "partial" and bool(rows)))
+
+
+def _process_sightings(previous, source_identity, rows, coverage, now, hours):
+    """Bounded positive knowledge, independent of the complete-comparison baseline."""
+    state = copy.deepcopy(previous or {})
+    readable = _readable_source(coverage, source_identity, rows)
+    if readable and state.get("identity") != source_identity:
+        state = {"identity": source_identity, "initialized": False, "history_limited": False, "seen": {}}
+    seen = {key: stamp for key, stamp in state.get("seen", {}).items()
+            if stamp >= now - hours * 3600 * 1000}
+    state["seen"] = seen
+    current = {row["id"]: row for row in rows}
+    limited = bool(state.get("history_limited"))
+    quiet = not state.get("initialized", False)
+    # A fitting complete scan can safely establish a quiet comparison and
+    # dedup baseline. Ordinary pruning or a partial gap cannot clear overflow.
+    if readable and coverage.get("state") == "complete" and limited and len(set(seen) | set(current)) <= MAX_PROCESS_SIGHTINGS:
+        limited, quiet = False, True
+    events = []
+    if readable and (current or coverage.get("state") == "complete"):
+        for key, row in current.items():
+            if key in seen:
+                seen[key] = now
+            elif len(seen) < MAX_PROCESS_SIGHTINGS:
+                seen[key] = now
+                if not quiet and not limited and coverage.get("state") == "partial":
+                    events.append(_observed_process(row, now))
+            else:
+                limited = True
+        if current:
+            state["initialized"] = True
+    else:
+        # Preserve retained same-source keys across gaps and restart, while
+        # making the next readable data-bearing scan quiet.
+        state["initialized"] = False
+    state["history_limited"] = limited
+    coverage["sighting_history_limited"] = limited
+    if limited:
+        reason = "The identity budget was exhausted; positive-sighting history is incomplete until a safe quiet rebaseline."
+        coverage["reason"] = " ".join(filter(None, (coverage.get("reason"), reason)))
+    return state, events
 
 
 def _comparison(source, row):
@@ -134,16 +208,39 @@ class NodeActivityStoreMixin:
             body["preferences"] = prefs
             old_public = self._node_meta_locked("public", {})
             old_sources = self._node_meta_locked("source_state", {})
+            inventory_sources = self._node_meta_locked("inventory_sources", {
+                source: value.get("identity") for source, value in old_sources.items()})
             next_sources = copy.deepcopy(old_sources)
             events = []
+            sightings = self._node_meta_locked("process_sightings", {})
             for source in SOURCE_NAMES:
-                cov = body.get("coverage", {}).get(source, {})
+                cov = body.setdefault("coverage", {}).setdefault(source, {})
                 incoming = observation.get("sources", {}).get(source, {})
                 rows = incoming.get("rows", [])
                 old = old_sources.get(source)
                 comparable = old and old.get("identity") == incoming.get("identity")
+                source_identity = incoming.get("identity")
+                previous_rows = old_public.get(source, [])
+                if _readable_source(cov, source_identity, rows):
+                    if inventory_sources.get(source, source_identity) != source_identity:
+                        previous_rows = []
+                    inventory_sources[source] = source_identity
+                observed_at = cov.get("observed_at")
+                if type(observed_at) is not int or observed_at <= 0:
+                    observed_at = now
+                body[source] = _inventory_rows(source, rows, previous_rows, observed_at,
+                                               cov.get("state") != "complete")
+                quiet_reset = False
+                if source == "processes":
+                    previous_limited = sightings.get("history_limited", False)
+                    sightings, positive_events = _process_sightings(
+                        sightings, source_identity,
+                        [dict(_public_row(row), observed_at=observed_at, stale=False) for row in rows],
+                        cov, now, hours)
+                    events.extend(positive_events)
+                    quiet_reset = previous_limited and not sightings["history_limited"]
                 if cov.get("state") == "complete":
-                    if comparable:
+                    if comparable and not quiet_reset:
                         before = {r["id"]: r for r in old["rows"]}
                         after = {r["id"]: r for r in rows}
                         for key in sorted(set(before) | set(after)):
@@ -153,11 +250,6 @@ class NodeActivityStoreMixin:
                     next_sources[source] = {"identity": incoming.get("identity"), "rows": rows, "observed_at": now}
                 else:
                     # Preserve last evidence, but never compare across an incomplete gap.
-                    previous_rows = old_public.get(source, [])
-                    existing = {r["id"]: dict(r, stale=True) for r in previous_rows}
-                    if comparable or old is None:
-                        existing.update({r["id"]: _public_row(r) for r in rows})
-                    body[source] = list(existing.values())[:512]
                     if previous_rows:
                         cov["last_successful_at"] = (old or {}).get("observed_at")
                     if old:
@@ -165,7 +257,8 @@ class NodeActivityStoreMixin:
                         # cannot retrospectively prove a removal or recovery.
                         next_sources.pop(source, None)
             body["retention"] = {"hours": hours, "event_limit": limit, "sample_limit": 120,
-                                 "review_limit": MAX_REVIEWS, "reviews_per_event_limit": MAX_REVIEWS_PER_EVENT}
+                                 "review_limit": MAX_REVIEWS, "reviews_per_event_limit": MAX_REVIEWS_PER_EVENT,
+                                 "process_sighting_limit": MAX_PROCESS_SIGHTINGS}
             body["capabilities"] = {"preferences_writable": True, "reviews_writable": True}
             # Collector source caps already bound a full pass. Persist every
             # change, with findings first, before advancing comparison state.
@@ -180,6 +273,8 @@ class NodeActivityStoreMixin:
                                    [now, _encoded(sample)])
             self._node_put_locked("public", body)
             self._node_put_locked("source_state", next_sources)
+            self._node_put_locked("inventory_sources", inventory_sources)
+            self._node_put_locked("process_sightings", sightings)
             self._prune_node_activity_locked(now, hours, limit)
         return self.query_node_activity()
 
@@ -215,6 +310,10 @@ class NodeActivityStoreMixin:
             # Each collection boundary starts a quiet baseline on re-enable.
             if any(previous[k] != updated[k] for k in ("enabled", "processes", "listeners", "sensitive_files")):
                 self._node_put_locked("source_state", {})
+            if any(previous[k] != updated[k] for k in ("enabled", "processes")):
+                sightings = self._node_meta_locked("process_sightings", {})
+                sightings["initialized"] = False
+                self._node_put_locked("process_sightings", sightings)
             if previous != updated:
                 event = {"id": "node_pref_" + uuid.uuid4().hex, "observed_at": now,
                          "kind": "monitoring_preferences_changed", "title": "Monitoring options changed",

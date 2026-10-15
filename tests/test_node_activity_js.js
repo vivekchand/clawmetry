@@ -177,6 +177,27 @@ async function run() {
   assert.match(freshness.textContent,/stale/,'ordinary connection errors also age retained evidence');
   assert.equal(freshness.parentNode.dataset.fresh,'false');
   assert.match(readStatus.textContent,/connection is unavailable/);
+  h=harness();c=h.context;
+  const processTable={innerHTML:''},listenerTable={innerHTML:''},coverage={innerHTML:''};
+  const processAge={textContent:''},listenerAge={textContent:''},mixedStatus={textContent:'',dataset:{}};
+  h.nodes.set('na-processes',processTable);h.nodes.set('na-listeners',listenerTable);h.nodes.set('na-coverage',coverage);
+  h.nodes.set('na-process-observation-note',processAge);h.nodes.set('na-listener-observation-note',listenerAge);h.nodes.set('na-status',mixedStatus);
+  const mixed=h.payload('mixed-observations');
+  mixed.processes=[{pid:31,name:'current-worker',observed_at:mixed.collected_at,stale:false},
+    {pid:32,name:'previous-worker',observed_at:mixed.collected_at-300000,stale:true},
+    {pid:33,name:'legacy-worker',observed_at:null,stale:true}];
+  mixed.listeners=[{pid:32,address:'127.0.0.1',port:8123,observed_at:mixed.collected_at-300000,stale:true}];
+  mixed.coverage={processes:{state:'partial',reason:'Collection limit reached.',scope:'account',sighting_history_limited:true}};
+  const mixedRead=c.loadNodeActivity();h.answer(h.requests[0],mixed);await mixedRead;
+  assert.match(processTable.innerHTML,/Observed [^<]+/,'fresh rows show their own positive observation time');
+  assert.match(processTable.innerHTML,/Stale observation; last observed /,'retained evidence preserves its own last observation time');
+  assert.match(processTable.innerHTML,/Observation time unknown/,'legacy missing times are not replaced with the latest scan time');
+  assert.match(listenerTable.innerHTML,/Stale observation; last observed /);
+  assert.match(processAge.textContent,/Includes stale observations/,'mixed inventory headings do not claim every row is current');
+  assert.match(listenerAge.textContent,/Includes stale observations/);
+  assert.match(coverage.innerHTML,/Process sighting history is limited/,'the explicit history limit is visible independently of the collection reason');
+  assert.match(mixedStatus.textContent,/Process sighting history is incomplete/);
+  assert.equal(mixed.processes[1].observed_at,mixed.collected_at-300000,'rendering does not refresh stale evidence timestamps');
   console.log('Node activity JS contracts and lifecycle passed.');
 }
 run().catch(error => {console.error(error); process.exit(1);});

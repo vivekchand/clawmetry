@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-10-05",
+    "synced_at": "2026-10-15",
     "synced_by": "codex"
   },
   "_scope": [
@@ -2694,6 +2694,54 @@
       "doc": "Node activity: observe changes, review risk and show coverage",
       "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
       "text": "When the view is used on a narrow screen, its controls and evidence shall remain accessible without page-level horizontal overflow."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-001.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a source scan is partial, the system shall place unique incoming rows before retained stale rows and apply that source's public cap after the merge."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-001.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a row is positively observed, the system shall mark it current with that observation time; retained stale rows shall keep their prior observation time or an explicit unknown time for legacy evidence."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-002.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a source first supplies readable process rows, including initialization after installation, migration, a source change or a collection gap, the system shall establish a quiet positive-sighting baseline."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-002.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a later partial scan observes a retainable process identity not known in the current retained-history context, the system shall record an informational first-observed sighting that explicitly does not prove an actual start, a complete inventory or malicious intent."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-002.3",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When an unexpired process identity is observed again after cap rotation, daemon restart, a same-source gap, disable/re-enable or transition between partial and complete coverage, the system shall suppress duplicate first-observed sightings while preserving the quiet-initialization rule."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-003.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When the identity budget cannot retain an unknown process identity, the system shall preserve unexpired known identities, suppress the untrackable positive event and expose limited sighting history until a safe quiet rebaseline."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-003.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When retained sighting history expires, the system shall apply its declared retention window and identity bound without representing a later retained-window observation as the process's lifetime first appearance."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-004.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When the view contains current and stale rows or limited sighting history, the system shall show per-row observation age or unknown time, describe the mixed-age inventory honestly and display the reported sighting-history limit."
     }
   ]
 }

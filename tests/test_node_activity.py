@@ -356,3 +356,265 @@ def test_process_iterator_cache_is_cleared_before_each_identity_scan(store, tmp_
     assert reused["processes"][0]["started_at"] == 200000
     assert {event["kind"] for event in reused["events"]} == {"process_added", "process_removed"}
     assert sensor.process_iter.clears == 2
+
+
+def partial_batch(source, ids, now, *, state="partial", source_id="same-source"):
+    """A daemon batch, with no live host dependency."""
+    rows = [{"id": str(key), "pid": key, "started_at": key * 1000,
+             "name": "ordinary-process", "actor": {"kind": "unknown", "label": "Unattributed"}}
+            for key in ids]
+    body = collector.unavailable()
+    body.update(available=True, collected_at=now)
+    body["coverage"] = {key: {"state": "disabled"} for key in
+                        ("resources", "processes", "listeners", "sensitive_files", "logins")}
+    body["coverage"][source] = {"state": state, "observed_at": now, "reason": "Partial scan."}
+    body[source] = copy.deepcopy(rows)
+    return {"public": body, "sources": {source: {"identity": source_id, "rows": rows}}}
+
+
+@pytest.mark.parametrize("source,cap", [("processes", 512), ("listeners", 256),
+                                         ("sensitive_files", 5), ("logins", 64)])
+def test_partial_incoming_rows_win_each_source_cap(store, source, cap):
+    """
+    AC-OBS-NODE-PART-001.1: a full stale cap cannot hide fresh rows.
+    """
+    store.record_node_activity(partial_batch(source, range(cap), 1000))
+    body = store.record_node_activity(partial_batch(source, [cap], 2000))
+    assert len(body[source]) == cap
+    assert body[source][0]["id"] == str(cap)
+    assert body[source][0]["stale"] is False
+    assert {row["id"] for row in body[source]} == {str(key) for key in range(cap - 1)} | {str(cap)}
+
+
+def test_row_times_distinguish_current_stale_and_legacy_unknown(store):
+    """
+    AC-OBS-NODE-PART-001.2: stale evidence never receives the new scan time.
+    """
+    first = store.record_node_activity(partial_batch("processes", [1, 2], 1000))
+    assert all(row["observed_at"] == 1000 and row["stale"] is False for row in first["processes"])
+    legacy = store._node_meta_locked("public")
+    del legacy["processes"][1]["observed_at"]
+    store._node_put_locked("public", legacy)
+    second = store.record_node_activity(partial_batch("processes", [3], 2000))
+    assert [(r["id"], r["observed_at"], r["stale"]) for r in second["processes"]] == [
+        ("3", 2000, False), ("1", 1000, True), ("2", None, True)]
+
+
+def test_partial_process_positive_sighting_is_qualified_and_private(store):
+    """
+    AC-OBS-NODE-PART-002.1: first readable partial batch is quiet.
+
+    AC-OBS-NODE-PART-002.2: later positive evidence does not prove a start.
+    """
+    assert not store.record_node_activity(partial_batch("processes", [1, 2], 1000))["events"]
+    body = store.record_node_activity(partial_batch("processes", [2, 3], 2000))
+    assert len(body["events"]) == 1
+    event = body["events"][0]
+    assert event["kind"] == "process_observed" and event["target"]["id"] == "3"
+    assert event["title"] == "A process was first observed"
+    assert not event["finding"] and event["severity"] == "info"
+    assert event["actor"]["kind"] == "unknown" and event["before"] is None
+    assert event["after"]["observed_at"] == 2000
+    evidence = " ".join([event["detail"], *event["evidence"]]).lower()
+    for qualification in ("retained history", "partial", "actual start", "complete inventory", "malicious"):
+        assert qualification in evidence
+    assert "process_sightings" not in json.dumps(body)
+    assert store._node_meta_locked("process_sightings")["seen"]["3"] == 2000
+
+
+def test_partial_sighting_dedup_survives_restart_gaps_and_reenable(tmp_path, monkeypatch):
+    """
+    AC-OBS-NODE-PART-002.3: durable identity knowledge is separate from quiet epochs.
+    """
+    monkeypatch.setattr("clawmetry.node_activity_store.time.time", lambda: 1)
+    path = str(tmp_path / "sightings.duckdb")
+    first = Store(path)
+    first.record_node_activity(partial_batch("processes", [1], 1000))
+    first.record_node_activity(partial_batch("processes", [2], 2000))
+    first._conn.close()
+    second = Store(path)
+    try:
+        def sightings(body): return [e for e in body["events"] if e["kind"] == "process_observed"]
+        assert len(sightings(second.record_node_activity(partial_batch("processes", [1, 2], 3000)))) == 1
+        second.record_node_activity(partial_batch("processes", [], 4000, state="unavailable"))
+        assert len(sightings(second.record_node_activity(partial_batch("processes", [3], 5000)))) == 1
+        assert len(sightings(second.record_node_activity(partial_batch("processes", [1, 2, 3, 4], 6000)))) == 2
+        second.set_node_activity_preferences({"enabled": False})
+        second.set_node_activity_preferences({"enabled": True})
+        assert len(sightings(second.record_node_activity(partial_batch("processes", [5], 7000)))) == 2
+        assert len(sightings(second.record_node_activity(partial_batch("processes", [1, 5, 6], 8000)))) == 3
+        # Re-establish a complete comparison quietly, then cap again with no repeated positives.
+        assert len(sightings(second.record_node_activity(partial_batch("processes", [1, 2, 3, 4, 5, 6], 9000, state="complete")))) == 3
+        body = second.record_node_activity(partial_batch("processes", [2, 6], 10000))
+        assert len(sightings(body)) == 3
+        assert not any(e["kind"] == "process_removed" for e in body["events"])
+        assert len(sightings(second.record_node_activity(partial_batch("processes", [7], 11000, source_id="new-source")))) == 3
+    finally:
+        second._conn.close()
+
+
+def test_sighting_saturation_is_sticky_and_complete_reset_quiet(store, monkeypatch):
+    """
+    AC-OBS-NODE-PART-003.1: forgotten overflow identities never manufacture novelty.
+    """
+    from clawmetry import node_activity_store as module
+    monkeypatch.setattr(module, "MAX_PROCESS_SIGHTINGS", 2)
+    store.record_node_activity(partial_batch("processes", [1, 2], 1000), retention_hours=1)
+    overflow = store.record_node_activity(partial_batch("processes", [3], 2000), retention_hours=1)
+    assert overflow["coverage"]["processes"]["sighting_history_limited"] is True
+    assert "positive-sighting history is incomplete" in overflow["coverage"]["processes"]["reason"]
+    assert overflow["processes"][0]["id"] == "3" and not overflow["processes"][0]["stale"]
+    assert not overflow["events"]
+    assert set(store._node_meta_locked("process_sightings")["seen"]) == {"1", "2"}
+    # Expiry and a gap free capacity, but neither can erase knowledge of missing history.
+    store.record_node_activity(partial_batch("processes", [], 3602001), retention_hours=1)
+    resumed = store.record_node_activity(partial_batch("processes", [3], 3603000), retention_hours=1)
+    again = store.record_node_activity(partial_batch("processes", [4], 3604000), retention_hours=1)
+    assert resumed["coverage"]["processes"]["sighting_history_limited"]
+    assert again["coverage"]["processes"]["sighting_history_limited"] and not again["events"]
+    reset = store.record_node_activity(partial_batch("processes", [3, 4], 3605000, state="complete"), retention_hours=1)
+    assert not reset["coverage"]["processes"]["sighting_history_limited"] and not reset["events"]
+    assert not store.record_node_activity(partial_batch("processes", [3], 3606000), retention_hours=1)["events"]
+
+
+def test_sighting_expiry_is_retained_window_not_lifetime_novelty(store):
+    """
+    AC-OBS-NODE-PART-003.2: old unobserved keys expire under the declared window.
+    """
+    store.record_node_activity(partial_batch("processes", [1], 1000), retention_hours=1)
+    store.record_node_activity(partial_batch("processes", [2], 2000), retention_hours=1)
+    body = store.record_node_activity(partial_batch("processes", [1], 3602001), retention_hours=1)
+    assert len(body["events"]) == 1 and body["events"][0]["target"]["id"] == "1"
+    assert "retained history" in body["events"][0]["detail"]
+    assert store._node_meta_locked("process_sightings")["seen"] == {"1": 3602001}
+    assert body["retention"]["process_sighting_limit"] == 16384
+
+
+def test_capped_real_collector_pid_start_observations_and_quiet_rebaseline(store, tmp_path, monkeypatch):
+    """Partial process observations use the collector's measured PID/start identity."""
+    monkeypatch.setattr(collector, "MAX_PROCESSES", 1)
+    sensor = Sensor()
+    sensor.processes.append(Obj(info={"pid": 20, "ppid": 1, "name": "worker", "create_time": 50,
+                                      "memory_info": Obj(rss=40)}))
+    assert not store.record_node_activity(observe(sensor, tmp_path))["events"]
+    # Reused PID, new measured start: distinct positive identity, never a partial removal.
+    sensor.processes[0].info["create_time"] = 200
+    body = store.record_node_activity(observe(sensor, tmp_path, now=2000))
+    assert [e["kind"] for e in body["events"]] == ["process_observed"]
+    assert body["events"][0]["process"]["started_at"] == 200000
+    monkeypatch.setattr(collector, "MAX_PROCESSES", 512)
+    full = store.record_node_activity(observe(sensor, tmp_path, now=3000))
+    assert [e["kind"] for e in full["events"]] == ["process_observed"]
+
+
+def test_full_cap_rotation_and_duplicate_batch_do_not_repeat_positives(store):
+    store.record_node_activity(partial_batch("processes", range(512), 1000))
+    rotated = store.record_node_activity(partial_batch("processes", range(1, 513), 2000))
+    assert len(rotated["processes"]) == 512 and rotated["processes"][-1]["id"] == "512"
+    assert [e["target"]["id"] for e in rotated["events"]] == ["512"]
+    repeat = partial_batch("processes", range(512), 3000)
+    repeat["sources"]["processes"]["rows"] *= 2
+    body = store.record_node_activity(repeat)
+    assert len(body["processes"]) == 512 and len(body["events"]) == 1
+    assert len(store._node_meta_locked("process_sightings")["seen"]) == 513
+
+
+def test_migration_and_empty_partial_gap_initialize_quietly(store):
+    first = store.record_node_activity(partial_batch("processes", [1], 1000, state="complete"))
+    store._conn.execute("DELETE FROM node_activity_meta WHERE key IN ('process_sightings','inventory_sources')")
+    migrated = store.record_node_activity(partial_batch("processes", [2], 2000))
+    assert migrated["events"] == first["events"] == []
+    assert migrated["processes"][0]["id"] == "2"
+    store.record_node_activity(partial_batch("processes", [], 3000))
+    assert not store.record_node_activity(partial_batch("processes", [3], 4000))["events"]
+    assert len(store.record_node_activity(partial_batch("processes", [4], 5000))["events"]) == 1
+    changed = store.record_node_activity(partial_batch("processes", [5], 6000, source_id="different-source"))
+    assert [r["id"] for r in changed["processes"]] == ["5"]
+    assert len(changed["events"]) == 1  # New source starts quietly, previous history remains.
+
+
+def test_positive_dedup_and_event_are_atomic(store, monkeypatch):
+    store.record_node_activity(partial_batch("processes", [1], 1000))
+    original = store._node_put_locked
+    def fail_ledger(key, value):
+        if key == "process_sightings":
+            raise RuntimeError("simulated writer failure")
+        original(key, value)
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "_node_put_locked", fail_ledger)
+        with pytest.raises(RuntimeError, match="simulated writer failure"):
+            store.record_node_activity(partial_batch("processes", [2], 2000))
+    assert not store.query_node_activity()["events"]
+    assert store._node_meta_locked("process_sightings")["seen"] == {"1": 1000}
+    assert len(store.record_node_activity(partial_batch("processes", [2], 2000))["events"]) == 1
+
+
+def test_saturated_history_survives_restart_reenable_and_new_source_reset(tmp_path, monkeypatch):
+    from clawmetry import node_activity_store as module
+    monkeypatch.setattr(module, "MAX_PROCESS_SIGHTINGS", 1)
+    monkeypatch.setattr(module.time, "time", lambda: 1)
+    path = str(tmp_path / "overflow.duckdb")
+    first = Store(path)
+    first.record_node_activity(partial_batch("processes", [1], 1000))
+    first.record_node_activity(partial_batch("processes", [2], 2000))
+    first._conn.close()
+    second = Store(path)
+    try:
+        second.set_node_activity_preferences({"processes": False})
+        second.set_node_activity_preferences({"processes": True})
+        body = second.record_node_activity(partial_batch("processes", [2], 3000))
+        assert body["coverage"]["processes"]["sighting_history_limited"]
+        assert not any(e["kind"] == "process_observed" for e in body["events"])
+        assert second._node_meta_locked("process_sightings")["seen"] == {"1": 1000}
+        changed = second.record_node_activity(partial_batch("processes", [2], 4000, source_id="new"))
+        assert not changed["coverage"]["processes"]["sighting_history_limited"]
+        assert not any(e["kind"] == "process_observed" for e in changed["events"])
+    finally:
+        second._conn.close()
+
+
+@pytest.mark.parametrize("saturated", [False, True])
+def test_real_disabled_batch_preserves_same_source_sightings_and_stale_inventory(store, tmp_path, monkeypatch, saturated):
+    """Real disabled collector sentinel identities are gaps, never new namespaces."""
+    from clawmetry import node_activity_store as module
+    monkeypatch.setattr(module.time, "time", lambda: 1)
+    monkeypatch.setattr(collector, "MAX_PROCESSES", 1)
+    monkeypatch.setattr(module, "MAX_PROCESS_SIGHTINGS", 1 if saturated else 16384)
+    sensor = Sensor()
+    sensor.processes.append(Obj(info={"pid": 20, "ppid": 1, "name": "worker", "create_time": 50,
+                                      "memory_info": Obj(rss=40)}))
+    first = store.record_node_activity(observe(sensor, tmp_path))
+    known_id = first["processes"][0]["id"]
+    if saturated:
+        sensor.processes[0].info["create_time"] = 200
+        assert store.record_node_activity(observe(sensor, tmp_path, now=2000))["coverage"]["processes"]["sighting_history_limited"]
+    before = store._node_meta_locked("process_sightings")
+    store.set_node_activity_preferences({"enabled": False})
+    disabled = store.record_node_activity(observe(sensor, tmp_path, now=3000,
+                                                 preferences=store.get_node_activity_state()["preferences"]))
+    assert disabled["coverage"]["processes"]["state"] == "disabled"
+    assert disabled["processes"] and all(row["stale"] for row in disabled["processes"])
+    state = store._node_meta_locked("process_sightings")
+    assert state["identity"] == before["identity"] and state["seen"] == before["seen"]
+    assert state["history_limited"] is saturated
+    store.set_node_activity_preferences({"enabled": True})
+    sensor.processes[0].info["create_time"] = 100
+    resumed = store.record_node_activity(observe(sensor, tmp_path, now=4000))
+    assert resumed["processes"][0]["id"] == known_id
+    assert not any(e["kind"] == "process_observed" for e in resumed["events"])
+    sensor.processes[0].info["create_time"] = 300
+    later = store.record_node_activity(observe(sensor, tmp_path, now=5000))
+    assert later["coverage"]["processes"]["sighting_history_limited"] is saturated
+    assert len([e for e in later["events"] if e["kind"] == "process_observed"]) == (0 if saturated else 1)
+
+
+@pytest.mark.parametrize("state", ["unavailable", "unsupported", "disabled", "partial"])
+def test_unreadable_source_identity_is_not_a_new_namespace(store, state):
+    store.record_node_activity(partial_batch("processes", [1], 1000))
+    gap = store.record_node_activity(partial_batch("processes", [], 2000, state=state, source_id=state))
+    ledger = store._node_meta_locked("process_sightings")
+    assert ledger["identity"] == "same-source" and ledger["seen"] == {"1": 1000}
+    assert gap["processes"][0]["id"] == "1" and gap["processes"][0]["stale"]
+    assert not store.record_node_activity(partial_batch("processes", [2], 3000))["events"]
+    # A cap rotation back to the old known identity must stay deduplicated.
+    assert not store.record_node_activity(partial_batch("processes", [1, 2], 4000))["events"]

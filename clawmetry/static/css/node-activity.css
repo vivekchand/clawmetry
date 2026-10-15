@@ -38,6 +38,8 @@
 #page-node-activity .na-map-node.na-selected{border-color:color-mix(in srgb,var(--na-accent) 50%,var(--border-primary));background:var(--na-soft)}
 #page-node-activity .na-map-host{text-align:center;padding:18px 8px}
 #page-node-activity .na-map-host svg{width:32px;height:32px;margin:0 auto 10px;color:var(--text-muted)}
+/* Preserve column spacing without implying an actor-to-node relationship. */
+#page-node-activity .na-map-actor-gap{visibility:hidden}
 #page-node-activity .na-map-connection{height:2px;position:relative;background:var(--border-primary)}
 #page-node-activity .na-map[data-event=true] .na-map-connection{background:var(--na-accent);opacity:.6}
 #page-node-activity .na-map.na-animate .na-map-connection span{position:absolute;width:5px;height:5px;border-radius:50%;background:var(--na-accent);top:-2px;animation:na-travel .7s ease-out both}

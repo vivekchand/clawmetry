@@ -4,6 +4,7 @@ AC-OBS-NODE-006.3: obsolete requests cannot paint or restart stopped pollers.
 AC-OBS-NODE-007.1: selection uses chronological events and preceding measurements.
 AC-OBS-NODE-007.2: reduced motion disables travel and hidden pages stop replay.
 AC-OBS-NODE-007.3: unknown values and identities remain unknown.
+AC-OBS-NODE-PART-004.1: rendered rows show their own observation age and limited history.
 """
 from pathlib import Path
 import shutil

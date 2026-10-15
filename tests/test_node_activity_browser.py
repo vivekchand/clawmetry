@@ -75,6 +75,15 @@ def test_node_activity_real_payload_at_narrow_width(_shared_chromium, tmp_path):
         assert selected == reviewed_id
         assert page.locator("#na-map").get_attribute("data-event-id") == selected
         assert page.locator("#na-evidence").get_attribute("data-event-id") == selected
+        assert page.locator("#na-map .na-map-actor-gap").evaluate("node => getComputedStyle(node).visibility") == "hidden", "Unknown attribution must not draw a connector from the Agent row"
+        assert page.locator('[data-na-actor="unattributed"]').evaluate("node => node.classList.contains('na-selected')")
+        # Exercise the actor contract independently of this collector's unknown identity.
+        # A human or agent highlight must not inherit the same centered actor edge.
+        for kind in ("human", "agent"):
+            page.evaluate("([id, kind]) => { const event = cmNodeActivity.getState().data.events.find(event => event.id === id); event.actor = {kind, evidence: ['Contract-test attribution evidence']}; cmNodeActivity.select(id, true); }", [selected, kind])
+            assert page.locator(f'[data-na-actor="{kind}"]').evaluate("node => node.classList.contains('na-selected')")
+            assert page.locator("#na-map .na-map-actor-gap").evaluate("node => getComputedStyle(node).visibility") == "hidden", kind
+            assert page.locator("#na-map .na-map-connection:not(.na-map-actor-gap)").evaluate("node => getComputedStyle(node).visibility") == "visible"
         assert int(page.locator("#na-scrub").input_value()) < len(payload["events"]) - 100
         assert "Last retained measurement before this event" in page.locator(".na-resource-history").inner_text()
         assert "Values between collections are unknown" in page.locator(".na-resource-history").inner_text()
@@ -90,6 +99,6 @@ def test_node_activity_real_payload_at_narrow_width(_shared_chromium, tmp_path):
         assert page.locator("#na-cpu").inner_text() == "Unknown"
         assert "Open Govern" in page.locator("#na-status").inner_text()
         assert page.locator(".na-event").count() == 0
-        assert "No changes were recorded" in page.locator("#na-events").inner_text()
+        assert "No events were recorded" in page.locator("#na-events").inner_text()
     finally:
         context.close()

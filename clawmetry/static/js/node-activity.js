@@ -67,6 +67,7 @@
     if(data.available===false)status(data.detail||data.message||data.reason||'Node observations are not available. Check that this node has an updated collector.','warning');
     else if((data.preferences||{}).enabled===false)status('Node monitoring is off. Historical observations remain available. Turn monitoring on in Govern to collect again.','warning');
     else if(stale)status('The latest observation is stale. Current activity cannot be verified. Open Govern to check collection coverage.','warning');
+    else if((cov.processes||{}).sighting_history_limited)status('Process sighting history is incomplete. Some observations are not included in event history. Open Govern for coverage details.','warning');
     else if(incomplete.length)status('Some activity is outside our view. Open Govern for coverage and collection limits.','warning');
     else status('Reading recorded node activity. Periodic observations can miss changes between collections.');
     if(state.unconfirmed&&state.unconfirmed.scope===scope())status(state.unconfirmed.message,'warning');
@@ -95,11 +96,11 @@
     if(!rows.some(function(e){return String(e.id)===String(state.selected);}))state.selected=rows.length?rows[rows.length-1].id:null;
     var idx=rows.findIndex(function(e){return String(e.id)===String(state.selected);});
     var preview=rows.slice(-100);if(idx>=0&&idx<rows.length-100)preview.unshift(rows[idx]);
-    if(list)list.innerHTML=rows.length?preview.map(function(e){return '<button type="button" class="na-event" data-na-event="'+esc(e.id)+'" aria-current="'+(String(e.id)===String(state.selected)?'step':'false')+'"><small>'+esc(when(e.observed_at))+'</small><strong>'+esc(e.title||'Recorded change')+'</strong><small>'+esc(actor(e.actor).label)+'</small></button>';}).join(''):'<p class="na-empty">No changes were recorded in this history window. This does not establish that no activity occurred.</p>';
-    if(scrub){scrub.max=Math.max(0,rows.length-1);scrub.value=Math.max(0,idx);scrub.disabled=!rows.length;scrub.setAttribute('aria-valuetext',rows[idx]?when(rows[idx].observed_at)+': '+(rows[idx].title||'Recorded change'):'No recorded events');}
+    if(list)list.innerHTML=rows.length?preview.map(function(e){return '<button type="button" class="na-event" data-na-event="'+esc(e.id)+'" aria-current="'+(String(e.id)===String(state.selected)?'step':'false')+'"><small>'+esc(when(e.observed_at))+'</small><strong>'+esc(e.title||'Recorded event')+'</strong><small>'+esc(actor(e.actor).label)+'</small></button>';}).join(''):'<p class="na-empty">No events were recorded in this history window. This does not establish that no activity occurred.</p>';
+    if(scrub){scrub.max=Math.max(0,rows.length-1);scrub.value=Math.max(0,idx);scrub.disabled=!rows.length;scrub.setAttribute('aria-valuetext',rows[idx]?when(rows[idx].observed_at)+': '+(rows[idx].title||'Recorded event'):'No recorded events');}
     if(play)play.disabled=rows.length<2;
     text('na-step',rows.length?(idx+1)+' / '+rows.length: '0 events');
-    text('na-history-note',(rows.length>100?'Latest 100 of '+rows.length+' changes. Use the slider for earlier events.':rows.length+' recorded changes.')+' Resource totals above show the latest collection.');
+    text('na-history-note',(rows.length>100?'Latest 100 of '+rows.length+' events. Use the slider for earlier events.':rows.length+' recorded events.')+' Resource totals above show the latest collection.');
     renderEvidence(false);
   }
   function pretty(value) { if(value==null)return 'Not recorded';if(typeof value==='string')return value;try{return JSON.stringify(value,null,2);}catch(e){return 'Not available';} }
@@ -129,13 +130,16 @@
   }
   function renderInventory(data) {
     var processes=Array.isArray(data.processes)?data.processes:[], listeners=Array.isArray(data.listeners)?data.listeners:[];
-    if(el('na-processes'))el('na-processes').innerHTML=table(processes,[['Process',function(p){return esc(p.name||'Unnamed process')+'<small>PID '+esc(p.pid)+' / '+esc(actor(p.actor).label)+(p.stale?' / Stale observation':'')+'</small>';}],['CPU',function(p){return esc(number(p.cpu_percent,'%'));}],['Memory',function(p){return esc(bytes(p.memory_bytes));}]],'No process rows are available. Check collection coverage in Govern.');
-    if(el('na-listeners'))el('na-listeners').innerHTML=table(listeners,[['Listener',function(l){return esc(l.address||'Unknown address')+':'+esc(l.port)+'<small>'+esc(l.protocol||'Protocol unknown')+(l.stale?' / Stale observation':'')+'</small>';}],['Process',function(l){return l.pid!=null?'PID '+esc(l.pid):'Unattributed';}],['Scope',function(l){return esc(l.exposure==='loopback'?'Local only':l.exposure==='nonloopback'?'Nonlocal bind':'Unknown');}]],'No listener rows are available. Check collection coverage in Govern.');
+    function observed(row){var at=epoch(row.observed_at);return row.stale?'Stale observation; '+(at==null?'Observation time unknown':'last observed '+when(row.observed_at)):(at==null?'Observation time unknown':'Observed '+when(row.observed_at));}
+    function note(rows){return rows.some(function(r){return r.stale;})?'Includes stale observations':rows.some(function(r){return epoch(r.observed_at)==null;})?'Some observation times are unknown':'From the latest collection';}
+    text('na-process-observation-note',note(processes));text('na-listener-observation-note',note(listeners));
+    if(el('na-processes'))el('na-processes').innerHTML=table(processes,[['Process',function(p){return esc(p.name||'Unnamed process')+'<small>PID '+esc(p.pid)+' / '+esc(actor(p.actor).label)+'</small><small class="na-row-age">'+esc(observed(p))+'</small>';}],['CPU',function(p){return esc(number(p.cpu_percent,'%'));}],['Memory',function(p){return esc(bytes(p.memory_bytes));}]],'No process rows are available. Check collection coverage in Govern.');
+    if(el('na-listeners'))el('na-listeners').innerHTML=table(listeners,[['Listener',function(l){return esc(l.address||'Unknown address')+':'+esc(l.port)+'<small>'+esc(l.protocol||'Protocol unknown')+'</small><small class="na-row-age">'+esc(observed(l))+'</small>';}],['Process',function(l){return l.pid!=null?'PID '+esc(l.pid):'Unattributed';}],['Scope',function(l){return esc(l.exposure==='loopback'?'Local only':l.exposure==='nonloopback'?'Nonlocal bind':'Unknown');}]],'No listener rows are available. Check collection coverage in Govern.');
   }
   function coverageHtml(data) {
     var coverage=data.coverage||{}, rows=Array.isArray(coverage)?coverage.map(function(r){return [r.id,r];}):Object.keys(coverage).map(function(k){return [k,coverage[k]];});
     if(!rows.length)return '<p class="na-empty">The collector did not report coverage. Activity cannot be verified.</p>';
-    return rows.map(function(entry){var key=entry[0], c=entry[1]||{}, complete=['complete','available','collecting','ok'].includes(c.state);return '<div class="na-coverage-row"><div>'+esc(c.label||COVERAGE_LABELS[key]||key)+'<small>'+esc(c.reason||c.detail||'No collection detail reported')+'<br>Visible scope: '+esc(c.scope||'unknown')+(c.method?' / '+esc(c.method):'')+(c.observed_at?'<br>'+esc(when(c.observed_at)):'')+(c.truncated?'<br>Collection limit reached. More activity may exist.':'')+'</small></div><span class="na-coverage-state" data-complete="'+complete+'">'+esc(c.state||'Unknown')+'</span></div>';}).join('');
+    return rows.map(function(entry){var key=entry[0], c=entry[1]||{}, complete=['complete','available','collecting','ok'].includes(c.state)&&!c.sighting_history_limited;return '<div class="na-coverage-row"><div>'+esc(c.label||COVERAGE_LABELS[key]||key)+'<small>'+esc(c.reason||c.detail||'No collection detail reported')+'<br>Visible scope: '+esc(c.scope||'unknown')+(c.method?' / '+esc(c.method):'')+(c.observed_at?'<br>'+esc(when(c.observed_at)):'')+(c.truncated?'<br>Collection limit reached. More activity may exist.':'')+(c.sighting_history_limited?'<br>Process sighting history is limited. Some observations are not included in event history.':'')+'</small></div><span class="na-coverage-state" data-complete="'+complete+'">'+esc(c.state||'Unknown')+(c.sighting_history_limited?' / history limited':'')+'</span></div>';}).join('');
   }
   function renderGovern(data) {
     var fields=el('na-preference-fields'), prefs=data.preferences||{};
