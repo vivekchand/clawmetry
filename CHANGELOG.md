@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: a repository row read as a pull request on the Delivered tab (#6459)
+
+- **Why:** found by looking at the rendered tab in a browser rather than at the rows behind it. The Repositories view showed `vivekchand/clawmetry #vivekchand/clawmetry` on every line, and the summary above it read "100 pull requests" over a table of repositories. Both come from one cause: `query_delivery` carries `kind` on the envelope rather than on each row, so the renderer's `!r.kind` test was true for every row and every row was drawn in pull-request form, where the label is the repository followed by `#` and the reference. A repository row's reference IS its name, so the name was printed twice with a `#` wedged between. Six rounds of fixes to this tab were measured against the data; this one was invisible there, because the rows were right and only their rendering was wrong.
+- **What:** the row label follows the kind of the view when the row does not carry one of its own. A pull request still reads `owner/name #number`. A repository reads its name. A branch, commit or path reads its reference, under its repository when the row knows one and it is not the same string. The count chip names what the table actually lists, so a Repositories view says repositories, and a branch view says branches.
+- **Verified:** 3 browser tests against the shipped template and `app.js` with synthetic fixtures, no live store. Two are red against the released 0.12.927, where the repository label renders `vivekchand/clawmetry #vivekchand/clawmetry` and the branch view says "pull requests"; the third pins that a pull-request row still reads `vivekchand/clawmetry #6450`, which is the half a kind-aware label could quietly break. Confirmed in a real browser against the live node: 100 rows, 0 console errors, 0 page errors, and no `undefined`, `NaN` or unescaped markup in any rendered cell.
+- **Limits:** the renderer still has no per-row kind to trust, so a response that mixes kinds in one list would label them all by the view. Nothing produces such a response today, because the store is asked for one kind at a time.
+
 ### Fixed: keep Asimov source alerts visible on small screens (#6452)
 
 - Long source alert text now wraps inside its panel, so the full evidence remains readable on mobile. The measured-joint table keeps its horizontal scroll.
