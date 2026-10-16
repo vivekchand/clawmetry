@@ -363,8 +363,12 @@ def test_process_iterator_cache_is_cleared_before_each_identity_scan(store, tmp_
 
 def partial_batch(source, ids, now, *, state="partial", source_id="same-source"):
     """A daemon batch, with no live host dependency."""
+    # Each synthetic row is its own program. A first sighting is announced per
+    # program, so a batch that shared one name would collapse to one event and
+    # these counts would be measuring the dedup instead of the case at hand.
     rows = [{"id": str(key), "pid": key, "started_at": key * 1000,
-             "name": "ordinary-process", "actor": {"kind": "unknown", "label": "Unattributed"}}
+             "name": "ordinary-process-" + str(key),
+             "actor": {"kind": "unknown", "label": "Unattributed"}}
             for key in ids]
     body = collector.unavailable()
     body.update(available=True, collected_at=now)
@@ -480,6 +484,37 @@ def test_sighting_saturation_is_sticky_and_complete_reset_quiet(store, monkeypat
     assert not store.record_node_activity(partial_batch("processes", [3], 3606000), retention_hours=1)["events"]
 
 
+def test_a_program_that_respawns_all_day_is_one_sighting(store):
+    """A respawn is not a first sighting, however many times it happens.
+
+    AC-OBS-NODE-PART-002.2: the identity a sighting announces is the program,
+    not the run, so a retained-history context holds programs.
+
+    Measured on a live node 2026-10-16: 1,999 of the 2,000 retained events were
+    "A process was first observed", 556 of them contactsd and 462
+    mdworker_shared, because every respawn is a new PID and the sighting ledger
+    was keyed by run. Real changes aged out of a 24 hour window in 3.1 hours.
+    """
+    def run(name, key, now):
+        batch = partial_batch("processes", [key], now)
+        for row in (batch["public"]["processes"] + batch["sources"]["processes"]["rows"]):
+            row["name"] = name
+        return store.record_node_activity(batch)
+
+    def sightings(body):
+        return [e for e in body["events"] if e["kind"] == "process_observed"]
+
+    run("contactsd", 1, 1000)                       # quiet baseline
+    assert len(sightings(run("mdworker_shared", 2, 2000))) == 1
+    for index, now in enumerate(range(3000, 9000, 1000)):
+        body = run("mdworker_shared", 10 + index, now)
+    assert len(sightings(body)) == 1, "one program, many runs, one sentence"
+    assert len(sightings(run("ssh-agent", 90, 9000))) == 2
+    assert len(store._node_meta_locked("process_sightings")["programs"]) == 3
+    # A program absent for the whole retained window is news again on return.
+    assert len(sightings(run("mdworker_shared", 91, 1000 + 25 * 3600 * 1000))) == 1
+
+
 def test_sighting_expiry_is_retained_window_not_lifetime_novelty(store):
     """
     AC-OBS-NODE-PART-003.2: old unobserved keys expire under the declared window.
@@ -500,11 +535,17 @@ def test_capped_real_collector_pid_start_observations_and_quiet_rebaseline(store
     sensor.processes.append(Obj(info={"pid": 20, "ppid": 1, "name": "worker", "create_time": 50,
                                       "memory_info": Obj(rss=40)}))
     assert not store.record_node_activity(observe(sensor, tmp_path))["events"]
-    # Reused PID, new measured start: distinct positive identity, never a partial removal.
-    sensor.processes[0].info["create_time"] = 200
+    # Reused PID, new measured start, different program: a distinct positive
+    # identity, never a partial removal.
+    sensor.processes[0].info.update(create_time=200, name="successor")
     body = store.record_node_activity(observe(sensor, tmp_path, now=2000))
     assert [e["kind"] for e in body["events"]] == ["process_observed"]
     assert body["events"][0]["process"]["started_at"] == 200000
+    # The same program restarting again is inventory, not a second announcement.
+    sensor.processes[0].info["create_time"] = 250
+    again = store.record_node_activity(observe(sensor, tmp_path, now=2500))
+    assert [e["kind"] for e in again["events"]] == ["process_observed"]
+    assert again["processes"][0]["started_at"] == 250000
     monkeypatch.setattr(collector, "MAX_PROCESSES", 512)
     full = store.record_node_activity(observe(sensor, tmp_path, now=3000))
     assert [e["kind"] for e in full["events"]] == ["process_observed"]
@@ -608,7 +649,12 @@ def test_real_disabled_batch_preserves_same_source_sightings_and_stale_inventory
     sensor.processes[0].info["create_time"] = 300
     later = store.record_node_activity(observe(sensor, tmp_path, now=5000))
     assert later["coverage"]["processes"]["sighting_history_limited"] is saturated
-    assert len([e for e in later["events"] if e["kind"] == "process_observed"]) == (0 if saturated else 1)
+    # A new run of a program already in this window is inventory, not news.
+    assert not any(e["kind"] == "process_observed" for e in later["events"])
+    # A program this window has never seen still gets announced after the cycle.
+    sensor.processes[0].info.update(create_time=400, name="second-worker")
+    fresh = store.record_node_activity(observe(sensor, tmp_path, now=6000))
+    assert len([e for e in fresh["events"] if e["kind"] == "process_observed"]) == (0 if saturated else 1)
 
 
 @pytest.mark.parametrize("state", ["unavailable", "unsupported", "disabled", "partial"])
