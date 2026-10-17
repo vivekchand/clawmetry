@@ -3,7 +3,7 @@
 Actual official Jumper native35-second replay through the built-in main package, with an unmodified pinned upstream and official imported tabletop scene. The host supplies22 named measured hinge positions/velocities; torque is unavailable. No reset or per-frame pose teleport.
 
 - Shared run: `535dbf83af5849969f3e3d34d266d72d`
-- 7,000 physics steps, all finite, zero resets; measured minimum full-body margin0.3102791896m; maximum tilt10.253523883degrees.
+- 7,000 control steps, all finite, zero resets; measured minimum full-body margin0.3102791896m; maximum tilt10.253523883degrees.
 - All366 events arrived:351 observations,3 requests,3 taskdecisions,6 nativecontrollerreceipts,1 declined-task incident, start/end. Zero journal drops/errors, fully flushed.
 - Actual daemon journal worker in a separate process discovered the source, persisted the complete run to its owned scratch DuckDB. Dashboard was forced into normal `_ProxyStore` and read via authenticated localhost RPC; no handler file reads or second writer.
 - Actual desktop and390px browser rendered22 joints, clearance, decisions and receipts with zero JavaScript errors and no horizontal overflow. Local screenshot/report paths are in context.md, no raw user data or credentials are committed.
