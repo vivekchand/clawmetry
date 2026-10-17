@@ -47,6 +47,8 @@ Known sources are asimov_sdk, asimov_recording, jumper_native, jumper_app and ju
 ### Integration Contracts
 Observation fields are explicit joints/base, source time, optional collision/table bounds and clearance. Command requests, guard decisions, controller receipts and guard incidents are separate records. Finding notifications accept fixed known kinds and never include raw observation or source content. Source clock is distinct from receipt clock.
 
+The `/api/extensions` response always includes the built-in `navigation` entry `{label: "Physical AI", href: "/physical-ai", view_group: "physical_ai"}` exactly once, even without plugins. Installed advanced physical workbenches are removed from that primary navigation slot and, when present, returned in the optional `physical_ai_advanced` array of `{label, href}` links. Absence of advanced links omits that optional field. Only validated local paths enter that array; paid entitlement enforcement remains on the destination. The free page independently composes those links from the same navigation helper.
+
 ### Integration Boundaries
 Robot host owns physics and command transport. Observer is read-only; generic task gate defaults no qualified actions. Only an explicitly enabled simulator host forwards an allowed request. Hardware actuation stays unavailable. Shared daemon owns DuckDB, encryption, notifications and query proxy. Browser never gains motor control.
 
