@@ -32,6 +32,8 @@ DDL = (
     """CREATE TABLE IF NOT EXISTS asimov_cursors (
         source VARCHAR PRIMARY KEY, identity VARCHAR, byte_offset BIGINT,
         discarding BOOLEAN, invalid_count BIGINT)""",
+    """CREATE TABLE IF NOT EXISTS asimov_source_support (
+        source VARCHAR PRIMARY KEY, registry VARCHAR, ignored BOOLEAN)""",
     "CREATE INDEX IF NOT EXISTS asimov_runs_updated ON asimov_runs(updated_ns, run_id)",
 )
 
@@ -71,6 +73,7 @@ class AsimovLocalStore:
         self.store = store
         self._scan_cursor = 0
         self._health_seen = {}
+        self._source_registry = json.dumps(sorted(SOURCES), separators=(",", ":"))
         if initialize:
             if getattr(store, "_read_only", True):
                 raise RuntimeError("Asimov ingestion requires the daemon writer")
@@ -124,10 +127,27 @@ class AsimovLocalStore:
             conn = self.store._conn
             row = conn.execute("SELECT identity,byte_offset,discarding,invalid_count "
                                "FROM asimov_cursors WHERE source=?", [str(path)]).fetchone()
+            support = conn.execute("SELECT registry,ignored FROM asimov_source_support WHERE source=?",
+                                   [str(path)]).fetchone()
+            reclassify = row is None or support is None or support[0] != self._source_registry
             offset, discarding, invalid = (row[1], row[2], row[3]) if row else (0, False, 0)
+            ignored = bool(support[1]) if support and not reclassify else False
             if row and (row[0] != identity or stat.st_size < offset):
                 offset, discarding = 0, False
-            if offset == stat.st_size:
+                ignored = False
+            if reclassify:
+                # Older collectors consumed unsupported headers to EOF. A
+                # durable registry marker makes a support change replay once,
+                # across bounded passes and restarts, without losing evidence.
+                offset, discarding, invalid = 0, False, 0
+            if offset == stat.st_size and not reclassify:
+                return 0, 0, 0
+            if ignored:
+                # Already classified for this inode and support registry.
+                # Appending to an unrelated source must not parse its body.
+                with _txn(conn):
+                    conn.execute("UPDATE asimov_cursors SET byte_offset=? WHERE source=?",
+                                 [stat.st_size, str(path)])
                 return 0, 0, 0
             count, used, lines = 0, 0, 0
             with path.open("rb") as source, _txn(conn):
@@ -164,6 +184,7 @@ class AsimovLocalStore:
                             # A run cannot switch platforms later. Do not parse an
                             # unrelated SO-101 or simulator history on every pass.
                             offset = stat.st_size
+                            ignored = True
                             break
                         inserted = self._insert(conn, event)
                         count += inserted
@@ -173,6 +194,8 @@ class AsimovLocalStore:
                         invalid += 1
                 conn.execute("INSERT OR REPLACE INTO asimov_cursors VALUES (?,?,?,?,?)",
                              [str(path), identity, offset, discarding, invalid])
+                conn.execute("INSERT OR REPLACE INTO asimov_source_support VALUES (?,?,?)",
+                             [str(path), self._source_registry, ignored])
             if invalid > (row[3] if row else 0):
                 log.warning("Skipped invalid Asimov journal records")
         # Network notification work must not hold the DuckDB transaction/lock.

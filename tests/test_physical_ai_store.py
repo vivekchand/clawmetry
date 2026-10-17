@@ -1,5 +1,6 @@
 """Built-in free physical evidence on the existing daemon-owned DuckDB store."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -208,3 +209,122 @@ def test_shared_notification_latch_persists_and_honors_cooldown(db, tmp_path, mo
     assert receipts[0]["session_id"] == sid
     assert receipts[0]["delivered_via"] == ["banner"]
     assert len(banners) == 1
+
+
+def test_legacy_unsupported_eof_replays_once_in_bounded_batches_after_reopen(db, tmp_path, monkeypatch):
+    from clawmetry import local_store, incident_alerts
+    from clawmetry.asimov import store as module
+    directory = tmp_path / "journal"
+    writer = capture(directory, incident={"kind": "boundary_crossed"})
+    with monkeypatch.context() as legacy:
+        legacy.setattr(module, "SOURCES", module.ASIMOV_SOURCES)
+        old = AsimovLocalStore(db, initialize=True)
+        assert old.ingest(directory) == 0
+    assert db._fetch("SELECT byte_offset FROM asimov_cursors WHERE source=?", [str(writer.path)])[0][0] == writer.path.stat().st_size
+    # Model the actual old database schema, which has no support ledger.
+    db._conn.execute("DROP TABLE asimov_source_support")
+    db.stop()
+    reopened = local_store.LocalStore()
+    calls = []
+    monkeypatch.setattr(incident_alerts, "deliver_incident", lambda *_a, **_k: calls.append(True))
+    try:
+        upgraded = AsimovLocalStore(reopened, initialize=True)
+        assert upgraded.ingest(directory, max_lines=1) == 1
+        assert reopened.query_physical_ai_runs()["runs"][0]["event_count"] == 1
+        # Restart halfway through replay: the persisted registry marker must
+        # retain progress rather than resetting to the first event again.
+        upgraded = AsimovLocalStore(reopened, initialize=True)
+        assert [upgraded.ingest(directory, max_lines=1) for _ in range(3)] == [1, 1, 1]
+        assert [e["sequence"] for e in reopened.query_physical_ai_events(run_id=writer.run_id)["events"]] == [1, 2, 3, 4]
+        assert calls == [True]
+        original = Path.open
+        def no_replay(path, *args, **kwargs):
+            if path == writer.path:
+                pytest.fail("Unchanged registry reopened a consumed journal")
+            return original(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "open", no_replay)
+        for _ in range(3):
+            assert AsimovLocalStore(reopened, initialize=True).ingest(directory) == 0
+        assert calls == [True]
+    finally:
+        reopened.stop()
+
+
+def test_registry_change_deduplicates_known_runs_and_keeps_unknown_sources_cheap(db, tmp_path, monkeypatch):
+    from clawmetry import incident_alerts
+    from clawmetry.asimov import store as module
+    directory = tmp_path / "journal"
+    calls = []
+    monkeypatch.setattr(incident_alerts, "deliver_incident", lambda *_a, **_k: calls.append(True))
+    jumper = capture(directory, incident={"kind": "boundary_crossed"})
+    asimov = capture(directory, source="asimov_sdk", robot_type="asimov_1", run_id="b" * 32)
+    future = capture(directory, source="future_supported", run_id="c" * 32)
+    unknown = capture(directory, source="still_unknown", run_id="d" * 32)
+    projection = AsimovLocalStore(db, initialize=True)
+    assert projection.ingest(directory) == 7
+    assert calls == [True]
+    with monkeypatch.context() as changed:
+        changed.setattr(module, "SOURCES", module.SOURCES | {"future_supported"})
+        projection = AsimovLocalStore(db, initialize=True)
+        assert projection.ingest(directory) == 3
+        assert calls == [True], "Registry replay re-notified an existing incident"
+        assert db._fetch("SELECT event_count FROM asimov_runs WHERE run_id=?", [jumper.run_id]) == [(4,)]
+        assert db._fetch("SELECT event_count FROM asimov_runs WHERE run_id=?", [asimov.run_id]) == [(3,)]
+        assert db._fetch("SELECT event_count FROM asimov_runs WHERE run_id=?", [future.run_id]) == [(3,)]
+        # Growth of an already rejected source should not read any body bytes.
+        with unknown.path.open("ab") as stream:
+            stream.write(b"not-json but never parsed\n")
+        original = Path.open
+        def no_unknown_read(path, *args, **kwargs):
+            if path == unknown.path:
+                pytest.fail("Known unsupported source was reopened")
+            return original(path, *args, **kwargs)
+        changed.setattr(Path, "open", no_unknown_read)
+        assert projection.ingest(directory) == 0
+        assert AsimovLocalStore(db, initialize=True).ingest(directory) == 0
+        assert db._fetch("SELECT byte_offset,invalid_count FROM asimov_cursors WHERE source=?", [str(unknown.path)]) == [(unknown.path.stat().st_size, 0)]
+        assert calls == [True]
+
+
+def test_registry_reclassification_rolls_back_cursor_marker_and_events_together(db, tmp_path, monkeypatch):
+    from clawmetry.asimov import store as module
+    directory = tmp_path / "journal"
+    writer = capture(directory)
+    with monkeypatch.context() as legacy:
+        legacy.setattr(module, "SOURCES", module.ASIMOV_SOURCES)
+        old = AsimovLocalStore(db, initialize=True)
+        assert old.ingest(directory) == 0
+    prior = db._fetch("SELECT registry FROM asimov_source_support WHERE source=?", [str(writer.path)])
+    upgraded = AsimovLocalStore(db, initialize=True)
+    original = upgraded._insert
+    def fail_batch(conn, event):
+        if event["sequence"] == 2:
+            raise RuntimeError("Injected interrupted upgrade")
+        return original(conn, event)
+    monkeypatch.setattr(upgraded, "_insert", fail_batch)
+    with pytest.raises(RuntimeError, match="interrupted upgrade"):
+        upgraded.ingest(directory)
+    assert db.query_physical_ai_runs()["runs"] == []
+    assert db._fetch("SELECT registry FROM asimov_source_support WHERE source=?", [str(writer.path)]) == prior
+    assert db._fetch("SELECT byte_offset FROM asimov_cursors WHERE source=?", [str(writer.path)]) == [(writer.path.stat().st_size,)]
+    monkeypatch.setattr(upgraded, "_insert", original)
+    assert upgraded.ingest(directory) == 3
+    assert db._fetch("SELECT registry FROM asimov_source_support WHERE source=?", [str(writer.path)]) == [(upgraded._source_registry,)]
+
+
+@pytest.mark.parametrize("replacement", ["inode", "truncate"])
+def test_ignored_classification_does_not_survive_file_replacement(db, tmp_path, replacement):
+    directory = tmp_path / "journal"
+    unknown = capture(directory, source="still_unknown")
+    with unknown.path.open("ab") as stream:
+        stream.write(b"ignored-body" * 1000)
+    projection = AsimovLocalStore(db, initialize=True)
+    assert projection.ingest(directory) == 0
+    supported = capture(tmp_path / "replacement")
+    assert supported.path.stat().st_size < unknown.path.stat().st_size
+    if replacement == "inode":
+        supported.path.replace(unknown.path)
+    else:
+        unknown.path.write_bytes(supported.path.read_bytes())
+    assert projection.ingest(directory) == 3
+    assert db.query_physical_ai_runs()["runs"][0]["source_kind"] == "jumper_native"

@@ -23,3 +23,7 @@ Fresh isolated OSS worktree on f7a4428abc20e895af95187a17f69a6267a3e357. Preserv
 4. Qualify malformed/stale/duplicate inputs, no Pro imports or MuJoCo/ONNX required, free and paid coexistence, CPU bounded discovery/polling, existing Asimov regressions and shared query contracts.
 5. Ship OSS PR/green required CI, separate [RELEASE] PR, inspect public wheel for adapter, deliver cloud snapshot/freeview parity and verify served artifact. Update Mizu demo source imports and docs, video links and public playground from the real released integration.
 6. Independent reviews with fixes recorded, useful local/hosted screenshots, actual version/provenance and limitations. Do not claim hardware qualification, arbitrary attacks prevented, hard containment or delivered phone alerts without direct evidence.
+
+## Pre-merge upgrade correction
+
+An earlier daemon can consume an unsupported Jumper header to EOF before the adapter is installed. Add a durable canonical source-support token and ignored-source classification ledger without changing the legacy cursor columns. Replay once on a missing or changed registry token, preserving bounded batches, restart progress and transaction rollback. Verify an actual legacy cursor/database reopen, multi-pass replay, source-registry expansion, unchanged unsupported no-open scans, Asimov/event/notification deduplication and interrupted upgrade retry. Independent store review is required before the next push.

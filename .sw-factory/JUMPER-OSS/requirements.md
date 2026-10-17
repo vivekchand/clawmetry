@@ -15,6 +15,7 @@ As a robot owner, I want the ordinary ClawMetry installation to observe supporte
 - AC-JUMPER-001.1: When a normal wheel is installed without Pro or simulator libraries, the system shall include the Jumper observer and generic Physical AI view.
 - AC-JUMPER-001.2: When an application publishes named telemetry, the system shall discover and persist its journal through the existing daemon and expose the same evidence to the view.
 - AC-JUMPER-001.3: When no hardware bridge is connected, the system shall explain the missing connection without claiming automatic access to unpublished robot state.
+- AC-JUMPER-001.4: When an upgrade adds a supported source, the system shall reconsider journals skipped by an earlier collector in bounded, persistent replay passes. An unchanged support registry shall not repeat the replay or duplicate evidence and notifications.
 
 ### REQ-JUMPER-002: Scope and state honesty
 As a robot operator, I want decisions and measurements distinguished from execution outcomes, so I can understand what actually happened.

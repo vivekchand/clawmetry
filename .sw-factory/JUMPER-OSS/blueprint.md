@@ -44,6 +44,8 @@ responsibilities:
 ### Key Contracts
 Known sources are asimov_sdk, asimov_recording, jumper_native, jumper_app and jumper_recording. Legacy Asimov methods filter the first two. Canonical physical_ai_runs/events queries are E2E trace scoped; malformed cursors reject before store access. Journals are bounded, queue loss is explicit, repeated ingestion does not repeat alerts. Named joints never assume DDS/policy array ordering. No MuJoCo, NumPy, ONNX or Pro dependency enters the observer package.
 
+The daemon persists a source-support ledger beside journal cursors. A missing or changed canonical source-registry token resets each affected cursor once, under the existing per-file and per-pass limits. Evidence, cursor and support marker commit together; immutable event identities suppress duplicate observations and notifications during replay. The ledger remembers rejected source classification so unchanged unsupported files, including appended bodies, remain cheap to skip. Inode replacement or truncation requires classification again. Existing five-column cursor rows and Asimov projections remain compatible.
+
 ### Integration Contracts
 Observation fields are explicit joints/base, source time, optional collision/table bounds and clearance. Command requests, guard decisions, controller receipts and guard incidents are separate records. Finding notifications accept fixed known kinds and never include raw observation or source content. Source clock is distinct from receipt clock.
 
