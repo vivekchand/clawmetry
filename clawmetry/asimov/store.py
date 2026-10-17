@@ -315,8 +315,8 @@ class AsimovLocalStore:
             return {"events": [], "has_more": False, "next_after": after}
         selected = sorted(sources & SOURCES)
         if not selected or not self.store._fetch(
-                "SELECT 1 FROM asimov_runs WHERE run_id=? AND source_kind IN (" +
-                ",".join("?" for _ in selected) + ")", [run_id, *selected]):
+                "SELECT 1 FROM asimov_runs WHERE run_id=? AND source_kind=ANY(?)",
+                [run_id, selected]):
             return {"events": [], "has_more": False, "next_after": after}
         rows = self.store._fetch("SELECT sequence,event_json FROM asimov_events "
                                  "WHERE run_id=? AND sequence>? ORDER BY sequence LIMIT ?",
