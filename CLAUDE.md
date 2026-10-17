@@ -103,6 +103,7 @@ All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, l
 | `clawmetry/extensions.py` | Plugin/hook system — the `clawmetry.extensions` entry point `clawmetry-pro` registers through |
 | `clawmetry/track.py` | Zero-config interceptor shorthand |
 | `clawmetry/adapters/` | The FREE runtime adapters (OpenClaw, NemoClaw, Goose, Qwen Code) plus the adapter base SDK the paid ones build on |
+| `clawmetry/physical_ai/` | Built-in OSS Jumper observer and shared physical task checks. Uses the public robotics journal and existing daemon store; demo scenes/skills live separately. Robot adapters are not LLM transcript runtimes. |
 | `clawmetry/providers/` | Pluggable data provider layer (LocalDataProvider, TursoDataProvider) |
 
 ### Config & Build

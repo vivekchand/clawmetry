@@ -164,6 +164,14 @@ ClawMetry is open-core. There are **four repos**, each with a clear remit; agent
 
 ### Hard rules that fall out of the split
 
+- **Physical robot evidence is a separate adapter seam.** The free Asimov
+  connector and built-in Jumper adapter (`clawmetry/physical_ai/`) share the
+  public robotics journal, daemon-owned DuckDB and Physical AI view. Jumper is
+  explicitly OSS by the founder's direction. Its scene/skills/simulator demo may
+  be separate, but its observer must ship in ordinary `pip install clawmetry`.
+  Do not count robot adapters as LLM transcript runtimes or move their shared
+  core into a demo plugin. Other paid adapter entitlements remain unchanged.
+
 - **OSS routes for gated features must call `entitlements.allows_feature(...)`** and return HTTP 402 (`upgrade_required`) when blocked. Never silently disable — the upgrade prompt is the conversion moment.
 - **Plugin override seam.** `dashboard.py` family-adapter loop must skip when `registry.get(name) is not None` (clawmetry-pro registered it first). Tested by `tests/test_adapter_registry_override.py`. Don't reintroduce a clobber.
 - **`load_plugins()` is already wired at `dashboard.py:162`** (import time) and works on Python 3.9+ via `_select_entry_points` — don't roll your own.

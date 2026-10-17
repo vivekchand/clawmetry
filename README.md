@@ -61,6 +61,11 @@ Building with a humanoid robot? The free, open-source
 an optional observation collector and application tracing. This support is
 experimental. Physical hardware qualification is pending.
 
+[Jumper observation](docs/JUMPER.md) is also built into the same open-source
+package. Its application telemetry, task decisions and incidents appear in the
+shared Physical AI view. Mizu's separate scene and skills demo imports this
+built-in adapter; it is not another observer plugin to install.
+
 ## What you get
 
 - **Sessions & transcripts**: what each agent did, turn by turn, with replay
