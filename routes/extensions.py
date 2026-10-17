@@ -29,9 +29,10 @@ Blueprint: ``bp_extensions``. The decision above is recorded under
 from __future__ import annotations
 
 import logging
-import re
 
 from flask import Blueprint, jsonify, current_app
+
+from clawmetry.physical_ai.catalog import hardware_navigation, workbench_navigation
 
 logger = logging.getLogger("clawmetry.routes.extensions")
 
@@ -39,23 +40,11 @@ bp_extensions = Blueprint("extensions", __name__)
 
 
 def physical_ai_navigation(entries):
-    """Give the free view one home and retain installed advanced workbenches."""
+    """Preserve a declared installed workbench, with a built-in fallback."""
     navigation = entries if isinstance(entries, list) else []
     if "physical_ai.physical_ai_page" not in current_app.view_functions:
         return navigation, []
-    advanced = []
-    other = []
-    for entry in navigation[:8]:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("view_group") != "physical_ai":
-            other.append(entry)
-            continue
-        href = entry.get("href")
-        if isinstance(href, str) and re.fullmatch(r"/[a-zA-Z0-9][a-zA-Z0-9/_-]*", href) and href != "/physical-ai":
-            if not any(link["href"] == href for link in advanced):
-                advanced.append({"href": href, "label": str(entry.get("label") or "Advanced workbench")[:40]})
-    return [{"label": "Physical AI", "href": "/physical-ai", "view_group": "physical_ai"}] + other, advanced
+    return workbench_navigation(navigation)
 
 
 @bp_extensions.route("/api/extensions", methods=["GET"])
@@ -142,6 +131,7 @@ def api_extensions():
         navigation, advanced = physical_ai_navigation(navigation)
         return jsonify({
             "navigation": navigation,
+            "physical_ai_hardware": hardware_navigation(),
             **({"physical_ai_advanced": advanced} if advanced else {}),
             "plugins": plugins,
             "plugin_count": len(plugins),
@@ -157,6 +147,7 @@ def api_extensions():
         return jsonify({
             "plugins": [],
             "navigation": physical_ai_navigation([])[0],
+            "physical_ai_hardware": hardware_navigation(),
             "plugin_count": 0,
             "failed_plugins": [],
             "failed_plugin_count": 0,

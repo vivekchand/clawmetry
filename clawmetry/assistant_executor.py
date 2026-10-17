@@ -324,6 +324,10 @@ class Executor:
             if renew and not job.terminal:
                 try:
                     job.renew()
+                except TimeoutError:
+                    # The consumer may still be persisting the timeout receipt.
+                    # Keep reads available until it publishes the terminal result.
+                    job.abort(timeout=True)
                 except Cancelled:
                     job.abort()
             return job.snapshot()

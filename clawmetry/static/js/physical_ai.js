@@ -11,6 +11,17 @@
     } catch (error) { return null; }
   }
   state.requestedRun = requestedRun();
+  function hardwareAllowed(value) {
+    var picker = node('hardware');
+    return value === 'all' || !!picker && Array.from(picker.options || []).some(function (option) { return option.value === value; });
+  }
+  function requestedHardware() {
+    try {
+      var value = new URLSearchParams(window.location.search).get('hardware') || 'all';
+      return hardwareAllowed(value) ? value : 'all';
+    } catch (error) { return 'all'; }
+  }
+  state.hardware = requestedHardware();
   function node(id) { return document.getElementById('physical-ai-' + id); }
   function text(id, value) { var el = node(id); if (el) el.textContent = value; }
   function hidden(id, value) { var el = node(id); if (el) el.hidden = value; }
@@ -66,11 +77,17 @@
   function visible() { return !state.stopped && !document.hidden && !!node('app'); }
   function setMessage(message) { text('message', message); }
   function selectedRun() { return state.runs.find(function (r) { return r.run_id === state.selected; }); }
+  function hardwareRuns() {
+    return state.runs.filter(function (run) { return state.hardware === 'all' || run.start && run.start.robot_type === state.hardware; });
+  }
   function renderRuns() {
     var list = node('runs');
     if (!list) return;
     list.replaceChildren();
-    state.runs.forEach(function (run) {
+    var runs = hardwareRuns();
+    if (node('hardware')) node('hardware').value = state.hardware;
+    hidden('filter-empty', runs.length > 0);
+    runs.forEach(function (run) {
       var button = element('button', undefined, 'physical-ai-run');
       button.type = 'button';
       button.setAttribute('aria-pressed', String(run.run_id === state.selected));
@@ -303,12 +320,15 @@
         state.runs = result.runs.concat(state.runs.filter(function (r) { return !freshIds.has(r.run_id); }));
       }
       if (older || !state.cursor) { state.cursor = result.next_cursor || null; state.moreRuns = result.has_more === true; }
-      if (!state.selected && state.runs.length) {
+      var matching = hardwareRuns();
+      if (!matching.some(function (run) { return run.run_id === state.selected; })) {
+        var previous = state.selected;
         state.selected = state.requestedRun
-          ? (state.runs.some(function (run) { return run.run_id === state.requestedRun; }) ? state.requestedRun : null)
-          : state.runs[0].run_id;
+          ? (matching.some(function (run) { return run.run_id === state.requestedRun; }) ? state.requestedRun : null)
+          : matching.length ? matching[0].run_id : null;
+        if (state.selected !== previous) { state.events = []; state.after = 0; state.moreEvents = false; state.traceWindow = null; }
       }
-      if (state.requestedRun && !state.selected) setMessage('The requested run is not in this evidence window. Choose a stored run or open older runs.');
+      if (state.requestedRun && !state.selected) setMessage('The requested run is not in this evidence window for the selected hardware. Choose a stored run or open older runs.');
       else setMessage(result.snapshot_limited ? 'This snapshot contains recent runs. Earlier runs remain on the node.' : ''); renderRuns(); renderRun();
       await loadEvents(generation, signal);
     });
@@ -316,6 +336,19 @@
   function select(runId) {
     if (runId === state.selected) return state.loading || Promise.resolve();
     cancel(); state.stopped = false; state.requestedRun = null; state.selected = runId; state.events = []; state.after = 0; state.moreEvents = false; state.traceWindow = null;
+    setMessage(''); renderRuns(); renderRun();
+    return begin(loadEvents);
+  }
+  function setHardware(value) {
+    if (!hardwareAllowed(value)) return Promise.resolve();
+    cancel(); state.stopped = false; state.hardware = value; state.requestedRun = null;
+    var matching = hardwareRuns(); state.selected = matching.length ? matching[0].run_id : null;
+    state.events = []; state.after = 0; state.moreEvents = false; state.traceWindow = null;
+    try {
+      var url = new URL(window.location.href);
+      url.searchParams.set('hardware', value); url.searchParams.delete('run');
+      window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+    } catch (error) { /* Filtering still works without writable browser history. */ }
     setMessage(''); renderRuns(); renderRun();
     return begin(loadEvents);
   }
@@ -335,13 +368,14 @@
     if (arguments.length) window.__CM_PHYSICAL_AI_SNAPSHOT__ = data;
     renderRuns(); renderRun(); return start();
   }
-  window.cmPhysicalAi = {reset: reset, start: start, stop: stop, refresh: refresh, select: select,
+  window.cmPhysicalAi = {reset: reset, start: start, stop: stop, refresh: refresh, select: select, setHardware: setHardware,
     number: number, source: source, status: status, timestamp: timestamp, getState: function () { return state; }};
   document.addEventListener('visibilitychange', function () { if (document.hidden) cancel(); else if (!state.stopped) refresh(); });
   window.addEventListener('pagehide', stop);
   window.addEventListener('pageshow', function (event) { if (event.persisted) start(); });
   function init() {
     if (!node('app')) return;
+    if (node('hardware')) node('hardware').addEventListener('change', function (event) { setHardware(event.target.value); });
     if (node('more-runs')) node('more-runs').addEventListener('click', function () { refresh(true); });
     if (node('more-events')) node('more-events').addEventListener('click', function () { begin(loadEvents); });
     start();

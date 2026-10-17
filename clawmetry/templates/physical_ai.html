@@ -1,8 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>Physical AI | ClawMetry</title>
   <link rel="icon" href="{{ url_for('static', filename='img/logo.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
@@ -13,11 +14,12 @@
   <header class="physical-ai-nav">
     <a class="physical-ai-brand" href="/" aria-label="ClawMetry dashboard"><img src="{{ url_for('static', filename='img/logo.svg') }}" width="26" height="26" alt="">Claw<span>Metry</span></a>
     <nav class="physical-ai-switch" aria-label="AI view"><a id="physical-ai-digital" href="/">Digital AI</a><a href="/physical-ai" aria-current="page">Physical AI</a></nav>
+    <label class="physical-ai-hardware">Hardware <select id="physical-ai-hardware" aria-label="Hardware"><option value="all">All hardware</option>{% for hardware in hardware_choices %}<option value="{{ hardware.id }}"{% if selected_hardware == hardware.id %} selected{% endif %}>{{ hardware.label }}</option>{% endfor %}</select></label>
   </header>
   <main id="physical-ai-app">
     <header class="physical-ai-heading"><div><h1>Physical AI</h1><p>See what your robot is doing, what it was allowed to do, and where evidence is missing.</p></div><span class="physical-ai-observe">Observation only</span></header>
     <p class="physical-ai-qualification">This view reads stored telemetry. It cannot move or stop a robot. Simulation evidence does not establish hardware performance.</p>
-    {% if advanced_links %}<div id="physical-ai-advanced"><p>More installed tools: {% for link in advanced_links %}<a href="{{ link.href }}">{{ link.label }}</a>{% endfor %}</p></div>{% endif %}
+    {% if advanced_links %}<div id="physical-ai-advanced">{% for link in advanced_links %}<a href="{{ link.href }}">Open robot workbench</a>{% endfor %}</div>{% endif %}
     <p id="physical-ai-message" class="physical-ai-message" role="status" aria-live="polite">Reading stored robot evidence.</p>
     <section id="physical-ai-empty" class="physical-ai-empty" hidden>
       <h2>Bring your first physical agent into view</h2>
@@ -27,7 +29,7 @@
       <p>ClawMetry cannot observe state that the source has not published.</p>
     </section>
     <div id="physical-ai-workbench" class="physical-ai-workbench" hidden>
-      <aside class="physical-ai-rail" aria-label="Robot runs"><h2>Robot runs</h2><p>Choose a source to inspect.</p><div id="physical-ai-runs"></div><button id="physical-ai-more-runs" class="physical-ai-button" hidden>Load older runs</button></aside>
+      <aside class="physical-ai-rail" aria-label="Robot runs"><h2>Robot runs</h2><p>Choose a source to inspect.</p><div id="physical-ai-runs"></div><p id="physical-ai-filter-empty" hidden>No matching runs in this history window. Load older runs or choose another hardware type.</p><button id="physical-ai-more-runs" class="physical-ai-button" hidden>Load older runs</button></aside>
       <article id="physical-ai-detail" class="physical-ai-detail">
         <header class="physical-ai-run-heading"><div><h2 id="physical-ai-robot">Robot</h2><p id="physical-ai-source"></p></div><span id="physical-ai-status" class="physical-ai-status"></span></header>
         <p id="physical-ai-freshness" class="physical-ai-muted"></p>

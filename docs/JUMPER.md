@@ -8,9 +8,16 @@ pip install clawmetry
 clawmetry
 ```
 
-Choose **Physical AI** to see connected robot runs, recent measurements, task
-decisions and incidents. The daemon automatically discovers the shared local
-robotics journal. No separate Jumper observer plugin or Pro license is needed.
+Choose **Physical AI** to open the installed robot workbench when available.
+Use its **Hardware** menu to choose Jumper on workbench versions that support
+it. The built-in recorded history is also available at
+`/physical-ai?hardware=jumper` on your ClawMetry server, including installations
+without Pro. Its Hardware menu filters the loaded history; older matching runs
+can be opened with **Load older runs**.
+
+Both views use the existing dark dashboard style. The daemon automatically
+discovers the shared local robotics journal. No separate Jumper observer plugin
+or Pro license is needed for built-in observation and recorded history.
 
 ## Connect a robot application
 

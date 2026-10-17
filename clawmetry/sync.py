@@ -25290,6 +25290,13 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception:
         log.warning("Physical AI snapshot could not be read")
 
+    # UI capability declarations are node-scoped and share the encrypted payload.
+    try:
+        from clawmetry.physical_ai.catalog import snapshot_metadata as _physical_ai_ui
+        payload["ui"] = _physical_ai_ui()
+    except Exception:
+        log.warning("Physical AI navigation metadata could not be read")
+
     # Paid robotics summary shares the normal encrypted envelope.
     try:
         from clawmetry.extensions import call as _robotics_snapshot

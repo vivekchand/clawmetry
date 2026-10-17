@@ -2,7 +2,7 @@
 import logging
 import re
 
-from flask import Blueprint, jsonify, render_template, request, current_app
+from flask import Blueprint, jsonify, render_template, request, current_app, redirect, Response
 
 log = logging.getLogger("clawmetry.routes.physical_ai")
 bp_physical_ai = Blueprint("physical_ai", __name__)
@@ -32,6 +32,11 @@ def _unavailable():
 
 @bp_physical_ai.get("/physical-ai")
 def physical_ai_page():
+    from clawmetry.physical_ai.catalog import hardware_navigation
+    hardware = hardware_navigation()
+    selected_hardware = request.args.get("hardware", "all")
+    if selected_hardware not in {"all", *(item["id"] for item in hardware)}:
+        return Response("Choose a supported hardware type from the Hardware menu.", status=400, mimetype="text/plain")
     advanced = []
     try:
         from clawmetry import extensions
@@ -40,7 +45,10 @@ def physical_ai_page():
         _, advanced = physical_ai_navigation(entries)
     except Exception:
         log.warning("Installed physical workbenches are unavailable")
-    return render_template("physical_ai.html", advanced_links=advanced)
+    if not request.args and advanced:
+        return redirect(advanced[0]["href"])
+    return render_template("physical_ai.html", advanced_links=advanced,
+                           hardware_choices=hardware, selected_hardware=selected_hardware)
 
 
 @bp_physical_ai.get("/api/physical-ai/runs")

@@ -20,8 +20,9 @@ class Element {
 }
 function harness(snapshot, search='') {
   const listeners={}, timers=new Map(), requests=[], nodes=new Map(); let timerId=0;
-  const ids=['app','detail','runs','more-runs','empty','workbench','robot','source','status','freshness','mode','battery','battery-detail','event-count','dropped','joints','orientation','angular','gravity','alerts','health','run-id','clock','events','trace-empty','trace-loaded','more-events','message','task','margin','tilt','position','linear','footprint','workspace','guard'];
+  const ids=['app','detail','runs','more-runs','empty','workbench','robot','source','status','freshness','mode','battery','battery-detail','event-count','dropped','joints','orientation','angular','gravity','alerts','health','run-id','clock','events','trace-empty','trace-loaded','more-events','message','task','margin','tilt','position','linear','footprint','workspace','guard','hardware','filter-empty'];
   ids.forEach(id=>nodes.set('physical-ai-'+id,new Element()));
+  const picker=nodes.get('physical-ai-hardware'); picker.options=['all','jumper','asimov_1'].map(value=>({value})); picker.value='all';
   let now=Date.now(); class ClockDate extends Date { static now(){return now;} }
   const c={location:{search},document:{readyState:'loading',hidden:false,getElementById:id=>nodes.get(id),createElement:tag=>new Element(tag),addEventListener:(name,fn)=>{listeners[name]=fn;}},
     addEventListener:(name,fn)=>{listeners[name]=fn;},setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId;},clearTimeout:id=>timers.delete(id),
@@ -177,6 +178,28 @@ async function run(){
   assert.equal(h.node('robot').textContent,'my-jumper');
   h=harness({runs:[runData()],events:{}},'?run=invalid');await h.c.cmPhysicalAi.start();
   assert.equal(h.c.cmPhysicalAi.getState().selected,id,'invalid run query is ignored');
-  console.log('Physical AI UI evidence and polling checks passed');
+  const jumper=runData({start:{robot_type:'jumper'}});
+  const asimov=runData({run_id:id2,robot_id:'my-asimov',start:{robot_type:'asimov_1'}});
+  h=harness({runs:[jumper,asimov],events:{[id]:events,[id2]:[]}},'?hardware=jumper');
+  await h.c.cmPhysicalAi.start();
+  assert.equal(h.node('runs').children.length,1,'Hardware filters recorded runs');
+  assert.equal(h.node('robot').textContent,'my-jumper');
+  assert.equal(h.node('hardware').value,'jumper');
+  await h.c.cmPhysicalAi.setHardware('asimov_1');
+  assert.equal(h.node('runs').children.length,1);
+  assert.equal(h.node('robot').textContent,'my-asimov');
+  assert.equal(h.c.cmPhysicalAi.getState().events.length,0,'changing Hardware clears previous robot events');
+  assert.equal(h.requests.length,0,'filtering decrypted data does not fetch a local API');
+  await h.c.cmPhysicalAi.setHardware('all');
+  assert.equal(h.node('runs').children.length,2);
+  h=harness({runs:[asimov],events:{}},'?hardware=jumper');
+  await h.c.cmPhysicalAi.start();
+  assert.equal(h.c.cmPhysicalAi.getState().selected,null,'a hardware filter never silently opens another robot');
+  assert.equal(h.node('filter-empty').hidden,false);
+  assert.equal(h.node('detail').hidden,true);
+  h=harness({runs:[jumper,asimov],events:{}},'?hardware=jumper&run='+id2);
+  await h.c.cmPhysicalAi.start();
+  assert.equal(h.c.cmPhysicalAi.getState().selected,null,'a deep link cannot bypass its hardware filter');
+  console.log('Physical AI UI evidence, hardware selection and polling checks passed');
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});

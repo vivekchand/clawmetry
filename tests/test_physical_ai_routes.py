@@ -119,7 +119,7 @@ def test_builtin_navigation_survives_plugin_failure(client, monkeypatch):
     assert "SECRET" not in response.text
 
 
-def test_builtin_navigation_deduplicates_paid_workbench_and_preserves_advanced_link(client, monkeypatch):
+def test_builtin_navigation_preserves_installed_workbench_and_explicit_history(client, monkeypatch):
     from routes.extensions import bp_extensions
     from clawmetry import extensions
     http, _ = client
@@ -131,8 +131,67 @@ def test_builtin_navigation_deduplicates_paid_workbench_and_preserves_advanced_l
         {"label": "Other", "href": "/workbench"},
     ])
     body = http.get("/api/extensions").json
-    assert [e["href"] for e in body["navigation"]] == ["/physical-ai", "/workbench"]
+    assert [e["href"] for e in body["navigation"]] == ["/robotics", "/workbench"]
     assert body["physical_ai_advanced"] == [{"label": "Physical AI", "href": "/robotics"}]
-    page = http.get("/physical-ai").text
+    assert http.get("/physical-ai").status_code == 302
+    assert http.get("/physical-ai").headers["Location"] == "/robotics"
+    page = http.get("/physical-ai?hardware=jumper").text
     assert 'href="/robotics"' in page
+    assert "More installed tools" not in page
     assert 'href="https://example.com"' not in page
+
+
+def test_recorded_history_uses_dark_dashboard_and_hardware_picker(client):
+    http, _ = client
+    page = http.get('/physical-ai?hardware=jumper').text
+    assert 'data-theme="dark"' in page
+    assert 'name="color-scheme" content="dark"' in page
+    assert 'id="physical-ai-hardware"' in page and 'aria-label="Hardware"' in page
+    assert 'value="jumper" selected' in page
+    assert 'value="asimov_1"' in page
+
+
+def test_supported_hardware_metadata_survives_plugin_failure(client, monkeypatch):
+    from routes.extensions import bp_extensions
+    from clawmetry import extensions
+    http, _ = client
+    http.application.register_blueprint(bp_extensions)
+    monkeypatch.setattr(extensions, 'loaded_plugins', lambda: (_ for _ in ()).throw(RuntimeError('unavailable')))
+    body = http.get('/api/extensions').json
+    assert body['physical_ai_hardware'] == [
+        {'id': 'jumper', 'label': 'Jumper', 'href': '/physical-ai?hardware=jumper'},
+        {'id': 'asimov_1', 'label': 'Asimov 1', 'href': '/physical-ai?hardware=asimov_1'},
+    ]
+
+
+def test_unknown_hardware_is_rejected_without_reflecting_input(client):
+    http, calls = client
+    response = http.get('/physical-ai?hardware=%3Cscript%3E')
+    assert response.status_code == 400
+    assert '<script>' not in response.text
+    assert not calls
+
+
+def test_node_ui_metadata_uses_declared_entitled_plugin_navigation(monkeypatch):
+    from clawmetry import extensions
+    from clawmetry.physical_ai.catalog import snapshot_metadata
+    calls = []
+    def declared(event, payload, **kwargs):
+        calls.append((event, payload))
+        return {"navigation": [{"label": "Physical AI", "href": "/robotics", "view_group": "physical_ai"}, {"href": "/other", "private_data": "never copy this"}],
+                "private_data": "never copy this"}
+    monkeypatch.setattr(extensions, 'call', declared)
+    metadata = snapshot_metadata()
+    assert metadata['navigation'][0]['href'] == '/robotics'
+    assert calls == [('ui.snapshot', {})]
+    assert 'private_data' not in str(metadata)
+    assert len(metadata['navigation']) == 1
+    assert len(metadata['physical_ai_hardware']) == 2
+
+
+@pytest.mark.parametrize('declared', [None, [], {'navigation': [{'href': '//evil.example', 'view_group': 'physical_ai'}]}])
+def test_node_ui_metadata_has_safe_old_plugin_fallback(monkeypatch, declared):
+    from clawmetry import extensions
+    from clawmetry.physical_ai.catalog import snapshot_metadata
+    monkeypatch.setattr(extensions, 'call', lambda *_a, **_kw: declared)
+    assert snapshot_metadata()['navigation'][0]['href'] == '/physical-ai'
