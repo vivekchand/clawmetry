@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Added: built-in Jumper observation and shared Physical AI history (#6473)
+
+- Jumper telemetry observation, task checks and desk-monitoring helpers now ship in the normal open-source package. Mizu scene and skills demos import these APIs instead of installing another observer plugin. No Pro or simulator dependency is needed to view evidence.
+- The shared Physical AI view reads persisted named measurements, task decisions, controller receipts and incidents through the existing daemon-owned DuckDB and read-only query proxy. Known incidents use existing notification preferences; encrypted snapshots carry bounded history for the hosted companion. Existing Asimov-specific views remain source-filtered.
+- Verified using an actual official 35-second Jumper simulation: 22 named joints, wave and bow executed, an out-of-task jump declined, all 366 events flushed and displayed through a separate daemon and authenticated query proxy. Desktop/mobile browser and clean-wheel checks passed.
+- An upgrade revisits journals skipped before their robot source was supported, with bounded batches and duplicate-event protection. Verified recovery of the same real 366-event Jumper journal from a reproduced legacy cursor state, including a restart during replay.
+- Observation is read-only by default. Hardware control, physical containment and phone delivery are not established by this simulation. Robot applications must expose supported telemetry.
+
 ### Fixed: a respawn is not a first sighting on Node activity (#6463)
 
 - **Why:** on a live macOS node, 1,999 of the 2,000 retained Node activity events were "A process was first observed": contactsd 556 times, mdworker_shared 462, Google Chrome Helper 150. 1,930 of the 1,999 were repeat announcements of 165 programs. The declared 24 hour retention window therefore held 3.1 hours of real history, so a change to a watched settings file or a newly bound port is evicted by operating-system daemon churn long before anyone sees it, and replay, the event list and the Guard view all read as noise. Found by reading the live tab, not the diff.
