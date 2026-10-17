@@ -80,11 +80,14 @@ class JournalWriter:
         max_bytes=DEFAULT_RUN_BYTES,
         directory_bytes=DEFAULT_DIRECTORY_BYTES,
         metadata=None,
+        robot_type="asimov_1",
     ):
         if environment not in ("hardware", "simulation"):
             raise ValueError("Environment must be hardware or simulation")
         if not isinstance(robot_id, str) or not robot_id.strip() or len(robot_id) > 200:
             raise ValueError("A robot identifier of at most 200 characters is required")
+        if not isinstance(robot_type, str) or not robot_type.strip() or len(robot_type) > 100 or any(ord(c) < 32 for c in robot_type):
+            raise ValueError("A robot type of at most 100 characters is required")
         if queue_size < 1 or max_bytes < 1024 or directory_bytes < max_bytes:
             raise ValueError("Invalid journal bounds")
         self.run_id = run_id or uuid.uuid4().hex
@@ -112,7 +115,7 @@ class JournalWriter:
         started = dict(metadata or {})
         started.update(
             robot_id=robot_id,
-            robot_type="asimov_1",
+            robot_type=robot_type,
             source_kind=source_kind,
             complete_control_trace=False,
             validation="sdk_only_hardware_unverified",

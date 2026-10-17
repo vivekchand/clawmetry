@@ -9701,6 +9701,7 @@ def send_heartbeat(config: dict) -> bool:
 _PENDING_SHAPES = {
     "incidents", "investigation", "activity", "error_groups", "session_catalog",
     "robotics_runs", "robotics_events",
+    "physical_ai_runs", "physical_ai_events",
     "events", "sessions", "aggregates", "health", "transcript",
     # Added in P4 (#2990): new live shapes from P2 materialized rollups.
     "runtimes", "models", "rollup_sessions",
@@ -9733,6 +9734,9 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     nodes, but the local DuckDB IS a single-node store). Filter to a
     per-shape allowlist so those extras don't surface as TypeErrors.
     """
+    if shape in ("physical_ai_runs", "physical_ai_events"):
+        from clawmetry.physical_ai.query_args import coerce_query_args
+        args = coerce_query_args(shape, args or {})
     from clawmetry import local_store
     store = local_store.get_store(read_only=True)
     if shape == "health":
@@ -9745,6 +9749,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
         "activity": "query_activity",
         "robotics_runs": "robotics_runs",
         "robotics_events": "robotics_events",
+        "physical_ai_runs": "query_physical_ai_runs",
+        "physical_ai_events": "query_physical_ai_events",
         "events":     "query_events",
         "sessions":   "query_sessions",
         "aggregates": "query_aggregates",
@@ -9786,6 +9792,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
 # but defined here so the daemon-only fallback path doesn't need the
 # routes package on sys.path.
 _SHAPE_ALLOWED_KWARGS = {
+    "physical_ai_runs": {"limit", "robot_id", "before_ns", "before_run_id"},
+    "physical_ai_events": {"run_id", "after", "limit"},
     "robotics_runs": {"limit", "before_ns", "before_run_id"},
     "robotics_events": {"run_id", "after", "limit", "before", "tail"},
     "events":     {"session_id", "agent_id", "event_type", "since", "until", "limit"},
@@ -12714,7 +12722,7 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                 "blob": blob,
                 "shape": shape,
                 "args_hash": _canonical_args_hash(args),
-                "ttl": (5 if shape in {"robotics_runs", "robotics_events"} else
+                "ttl": (5 if shape in {"robotics_runs", "robotics_events", "physical_ai_runs", "physical_ai_events"} else
                         15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600),
             }, api_key)
         except Exception as e:
@@ -25273,6 +25281,14 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             payload["asimov"] = _asimov_slice
     except Exception:
         log.warning("Asimov snapshot could not be read")
+
+    try:
+        from clawmetry.asimov.store import physical_ai_snapshot
+        from clawmetry.local_store import get_store as _physical_ai_store
+        _physical_ai_slice = physical_ai_snapshot(_physical_ai_store())
+        payload["physical_ai"] = _physical_ai_slice
+    except Exception:
+        log.warning("Physical AI snapshot could not be read")
 
     # Paid robotics summary shares the normal encrypted envelope.
     try:

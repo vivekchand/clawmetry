@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-337 modules, 96 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+338 modules, 97 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -79,6 +79,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/otel_export.py` | medium | `bp_otel_export` | `/api/otel` | Pro+ OTel/OTLP export. |
 | `routes/overview.py` | large | `bp_overview` | `/api/activity-heatmap`, `/api/channels`, `/api/cloud-cta`, `/api/cloud-proxy`, `/api/device`, `/api/health-timeline`, `/api/overview`, `/api/prompt-errors`, `/api/sync`, `/api/timeline` | Main-dashboard endpoints. |
 | `routes/paywall_lifecycle.py` | small |  |  | the paywall beacons that reach the funnel. |
+| `routes/physical_ai.py` | small | `bp_physical_ai` | `/api/physical-ai`, `/physical-ai` | Free, persisted Physical AI evidence. |
 | `routes/plugins.py` | medium | `bp_plugins` | `/api/plugins` | Plugin registry: unified view of installed plugins (#692). |
 | `routes/policy.py` | medium | `bp_policy` | `/api/approvals`, `/api/approvals-audit`, `/api/policy`, `/api/tool-policy` | tool-policy + sandbox + exec-approval audit (PRD P1-1). |
 | `routes/pricing.py` | medium | `bp_pricing` | `/api/pricing` | the price book API (REQ-OBS-CEA-024, issue #5936). |

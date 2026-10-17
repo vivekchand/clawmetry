@@ -4320,6 +4320,14 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         from clawmetry.asimov.store import events
         return events(self, run_id=run_id, after=after, limit=limit)
 
+    def query_physical_ai_runs(self, *, limit=20, robot_id=None, before_ns=None, before_run_id=None) -> dict:
+        from clawmetry.asimov.store import physical_ai_runs
+        return physical_ai_runs(self, limit=limit, robot_id=robot_id, before_ns=before_ns, before_run_id=before_run_id)
+
+    def query_physical_ai_events(self, *, run_id, after=0, limit=200) -> dict:
+        from clawmetry.asimov.store import physical_ai_events
+        return physical_ai_events(self, run_id=run_id, after=after, limit=limit)
+
     def robotics_runs(self, *, limit=50, before_ns=None, before_run_id=None) -> dict:
         return self.robotics_query("runs", {"limit": limit, "before_ns": before_ns,
                                             "before_run_id": before_run_id})

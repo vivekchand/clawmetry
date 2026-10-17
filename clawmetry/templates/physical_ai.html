@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Physical AI | ClawMetry</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/logo.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/physical_ai.css') }}">
+  <script src="{{ url_for('static', filename='js/physical_ai.js') }}" defer></script>
+</head>
+<body class="physical-ai-page">
+  <header class="physical-ai-nav">
+    <a class="physical-ai-brand" href="/" aria-label="ClawMetry dashboard"><img src="{{ url_for('static', filename='img/logo.svg') }}" width="26" height="26" alt="">Claw<span>Metry</span></a>
+    <nav class="physical-ai-switch" aria-label="AI view"><a id="physical-ai-digital" href="/">Digital AI</a><a href="/physical-ai" aria-current="page">Physical AI</a></nav>
+  </header>
+  <main id="physical-ai-app">
+    <header class="physical-ai-heading"><div><h1>Physical AI</h1><p>See what your robot is doing, what it was allowed to do, and where evidence is missing.</p></div><span class="physical-ai-observe">Observation only</span></header>
+    <p class="physical-ai-qualification">This view reads stored telemetry. It cannot move or stop a robot. Simulation evidence does not establish hardware performance.</p>
+    {% if advanced_links %}<div id="physical-ai-advanced"><p>More installed tools: {% for link in advanced_links %}<a href="{{ link.href }}">{{ link.label }}</a>{% endfor %}</p></div>{% endif %}
+    <p id="physical-ai-message" class="physical-ai-message" role="status" aria-live="polite">Reading stored robot evidence.</p>
+    <section id="physical-ai-empty" class="physical-ai-empty" hidden>
+      <h2>Bring your first physical agent into view</h2>
+      <p>ClawMetry includes support for Jumper and other supported physical agents. No extra adapter package is needed.</p>
+      <p>Publish telemetry from the robot or simulator. ClawMetry then shows its stored state, task decisions, and incidents.</p>
+      <p><a href="https://github.com/vivekchand/clawmetry/blob/main/docs/JUMPER.md">Connect a Jumper telemetry source</a> or <a href="/asimov">open the Asimov 1 guide</a>.</p>
+      <p>ClawMetry cannot observe state that the source has not published.</p>
+    </section>
+    <div id="physical-ai-workbench" class="physical-ai-workbench" hidden>
+      <aside class="physical-ai-rail" aria-label="Robot runs"><h2>Robot runs</h2><p>Choose a source to inspect.</p><div id="physical-ai-runs"></div><button id="physical-ai-more-runs" class="physical-ai-button" hidden>Load older runs</button></aside>
+      <article id="physical-ai-detail" class="physical-ai-detail">
+        <header class="physical-ai-run-heading"><div><h2 id="physical-ai-robot">Robot</h2><p id="physical-ai-source"></p></div><span id="physical-ai-status" class="physical-ai-status"></span></header>
+        <p id="physical-ai-freshness" class="physical-ai-muted"></p>
+        <section class="physical-ai-summary" aria-label="Latest measured state"><div><h3>Current task</h3><p id="physical-ai-task">Not reported</p></div><div><h3>Workspace clearance</h3><p id="physical-ai-margin">Not reported</p><small>Measured footprint distance to the table edge, when reported.</small></div><div><h3>Body tilt</h3><p id="physical-ai-tilt">Not reported</p></div></section>
+        <details class="physical-ai-clocks"><summary>Workspace measurements</summary><p>These bounds come from the source. They do not establish collision avoidance or a physical stop.</p><p id="physical-ai-footprint">Not reported</p><p id="physical-ai-workspace">Not reported</p><p id="physical-ai-guard">Source guard state: Not reported</p></details>
+        <dl class="physical-ai-condition"><div><dt>Mode</dt><dd id="physical-ai-mode">Not reported</dd></div><div><dt>Battery</dt><dd id="physical-ai-battery">Not reported</dd></div><div><dt>Recorded events</dt><dd id="physical-ai-event-count">Not reported</dd></div><div><dt>Dropped evidence</dt><dd id="physical-ai-dropped">Not reported</dd></div></dl>
+        <section class="physical-ai-trace"><div class="physical-ai-section-heading"><h3>Tasks, decisions, and incidents</h3><p>Permission, a controller response, and a measured outcome are separate evidence.</p></div><p id="physical-ai-trace-loaded" class="physical-ai-muted"></p><p id="physical-ai-trace-empty">No activity is stored in the loaded events.</p><ol id="physical-ai-events"></ol><button id="physical-ai-more-events" class="physical-ai-button" hidden>Load more events</button></section>
+        <section class="physical-ai-measurements"><div class="physical-ai-section-heading"><h3>Measured joints</h3><p>Latest stored sample. Missing values stay unknown.</p></div><div class="physical-ai-table-scroll"><table><caption class="physical-ai-sr-only">Latest measured joint values with explicit units</caption><thead><tr><th scope="col">Joint</th><th scope="col">Position (rad)</th><th scope="col">Velocity (rad/s)</th><th scope="col">Effort (N·m)</th><th scope="col">Current (A)</th><th scope="col">Temperature (°C)</th></tr></thead><tbody id="physical-ai-joints"></tbody></table></div></section>
+        <div class="physical-ai-secondary"><section><h3>Base state</h3><p>Position (m)</p><p id="physical-ai-position" class="physical-ai-values">Not reported</p><p>Linear velocity (m/s)</p><p id="physical-ai-linear" class="physical-ai-values">Not reported</p><p>Quaternion, in w, x, y, z order</p><p id="physical-ai-orientation" class="physical-ai-values">Not reported</p><p>Angular velocity (rad/s)</p><p id="physical-ai-angular" class="physical-ai-values">Not reported</p><p>Gravity in body coordinates</p><p id="physical-ai-gravity" class="physical-ai-values">Not reported</p></section><section><h3>Source alerts</h3><p>Alerts reported by this source.</p><ul id="physical-ai-alerts"></ul><p id="physical-ai-health"></p><details><summary>Battery measurements</summary><pre id="physical-ai-battery-detail"></pre></details></section></div>
+        <details class="physical-ai-clocks"><summary>Source and receipt clocks</summary><p>Source time comes from the robot or recording. Receipt time comes from the collector computer.</p><p>These clocks can differ. The sequence orders stored evidence.</p><p id="physical-ai-run-id"></p><p id="physical-ai-clock"></p></details>
+      </article>
+    </div>
+    <noscript><p>Enable JavaScript to read robot runs.</p></noscript>
+  </main>
+</body>
+</html>

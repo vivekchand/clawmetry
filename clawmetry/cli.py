@@ -8374,6 +8374,9 @@ def _cmd_export(args) -> None:
 
 def main() -> None:
     import argparse
+    if len(sys.argv) > 1 and sys.argv[1] == "jumper":
+        from clawmetry.physical_ai.cli import main as _jumper_cli
+        raise SystemExit(_jumper_cli(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "asimov":
         from clawmetry.asimov.cli import main as _asimov_cli
         raise SystemExit(_asimov_cli(sys.argv[2:]))

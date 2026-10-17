@@ -34,6 +34,12 @@ jobs:
           python3 -m pytest tests/test_asimov_journal.py tests/test_asimov_recording.py
           tests/test_asimov_observer.py tests/test_asimov_store.py tests/test_asimov_routes.py
           tests/test_asimov_daemon.py -q
+      - name: Verify built-in Jumper and shared free Physical AI evidence
+        run: >-
+          python3 -m pytest tests/test_jumper_observer.py
+          tests/test_physical_ai_store.py tests/test_physical_ai_routes.py -q
+      - name: Verify free Physical AI history and browser lifecycle
+        run: node tests/test_physical_ai_ui.js
       - name: Check out official Menlo SDK 0.1.0 source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

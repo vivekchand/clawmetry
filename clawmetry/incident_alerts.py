@@ -479,6 +479,13 @@ def _session_url(session_id: str) -> str:
     resolved. Never raises: a missing link must not cost the notification."""
     try:
         from clawmetry import desktop_notify
+        if session_id.startswith("physical_ai:"):
+            run_id = session_id.partition(":")[2]
+            if len(run_id) != 32 or any(c not in "0123456789abcdef" for c in run_id):
+                return ""
+            from urllib.parse import urlsplit, urlunsplit
+            url = urlsplit(desktop_notify.dashboard_url())
+            return urlunsplit((url.scheme, url.netloc, "/physical-ai", "run=" + run_id, ""))
         return desktop_notify.dashboard_url(session_id=session_id)
     except Exception:  # noqa: BLE001
         return ""
