@@ -5,7 +5,7 @@
 - Jumper telemetry observation, task checks and desk-monitoring helpers now ship in the normal open-source package. Mizu scene and skills demos import these APIs instead of installing another observer plugin. No Pro or simulator dependency is needed to view evidence.
 - The shared Physical AI view reads persisted named measurements, task decisions, controller receipts and incidents through the existing daemon-owned DuckDB and read-only query proxy. Known incidents use existing notification preferences; encrypted snapshots carry bounded history for the hosted companion. Existing Asimov-specific views remain source-filtered.
 - Verified using an actual official 35-second Jumper simulation: 22 named joints, wave and bow executed, an out-of-task jump declined, all 366 events flushed and displayed through a separate daemon and authenticated query proxy. Desktop/mobile browser and clean-wheel checks passed.
-- An upgrade revisits journals skipped before their robot source was supported, with bounded batches and duplicate-event protection. Verified recovery of the same real 366-event Jumper journal from a reproduced legacy cursor state, including a restart during replay.
+- An upgrade revisits journals skipped before their robot source was supported, with bounded batches and duplicate-event protection. Verified recovery of the same real 366-event Jumper journal from a reproduced legacy cursor state. Separate regressions cover restart during bounded replay.
 - Observation is read-only by default. Hardware control, physical containment and phone delivery are not established by this simulation. Robot applications must expose supported telemetry.
 
 ### Fixed: a respawn is not a first sighting on Node activity (#6463)
