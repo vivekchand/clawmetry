@@ -11,6 +11,6 @@
     "test:zero-click-auth": "node zero-click-auth.mjs"
   },
   "devDependencies": {
-    "playwright": "^1.63.0"
+    "playwright": "^1.64.0"
   }
 }
