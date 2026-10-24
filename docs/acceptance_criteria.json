@@ -2265,6 +2265,12 @@
       "text": "When a local receipt changes without a newer activity timestamp, the system shall ingest the changed content once and shall deduplicate subsequent unchanged reads."
     },
     {
+      "id": "AC-GOV-ERS-011.7",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "Until the connected-run and delivery release gates are satisfied, the system shall omit OpenDots from the released runtime catalogue, automatic adapter loading and advertised supported-runtime count. Existing stored observations shall retain their OpenDots attribution and remain readable without being reclassified as OpenClaw."
+    },
+    {
       "id": "AC-STE-002.1",
       "doc": "Clear English explanations",
       "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",

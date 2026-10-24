@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: advertise only released runtime adapters (#6501)
+
+- OpenDots is excluded from the supported runtime catalogue and automatic loading while its private adapter remains under review. The existing connected-service and licensed-delivery release gates remain in force.
+- Stored OpenDots observations keep their runtime label, history filtering, receipt revisions and unavailable-usage explanation. The released catalogue and generated copy now cover the available adapters.
+- Hosted Linux verification uses Ubuntu 24.04 so supported Python 3.9 and the pinned Chromium toolchain remain testable. Existing platform coverage, assertions and self-hosted routing remain enabled.
+- The Software Factory acceptance criterion for the deferral is mirrored and linked to its regression test. Coverage checks preserve the existing uncovered-criteria baseline.
+
 ### Fixed: restore the Physical AI workbench and Hardware navigation (#6477)
 
 - Physical AI keeps the installed entitled robot workbench as its default. Explicit run and hardware history links remain available, and the free history view uses the existing dark dashboard theme with a working Hardware filter.

@@ -11,7 +11,9 @@ from clawmetry.adapters.base import DetectResult, Event, Session
 
 
 def test_unreleased_opendots_is_not_offered_or_automatically_loaded():
-    """The draft adapter cannot become availability through catalogue wiring."""
+    """
+    AC-GOV-ERS-011.7: A draft adapter cannot become released availability.
+    """
     from clawmetry import entitlements as ent, sync
     assert 'opendots' not in ent.ALL_RUNTIMES
     assert 'opendots' not in ent.RUNTIME_LANDING_PATHS
