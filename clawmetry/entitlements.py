@@ -154,7 +154,6 @@ PAID_RUNTIMES = frozenset(
         # agents, answering over web chat and chat/email channels, with a
         # scheduler that sends messages on its own later.
         "openexecutive",
-        "opendots",
     }
 )
 
@@ -205,6 +204,7 @@ RUNTIME_LABELS = {
     "replit": "Replit Agent",
     "muse_code": "Muse Code",
     "openexecutive": "OpenExecutive",
+    # Preserve labels on historical records. The adapter is not released.
     "opendots": "OpenDots",
 
 }
@@ -250,7 +250,6 @@ RUNTIME_LANDING_PATHS = {
     "replit": "/runtimes/replit",
     "muse_code": "/runtimes/muse-code",
     "openexecutive": "/runtimes/openexecutive",
-    "opendots": "/runtimes/opendots",
 
 }
 

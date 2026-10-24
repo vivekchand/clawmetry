@@ -16,7 +16,7 @@ leest de sessiebestanden die je coding agents al schrijven, en brengt de tijdlij
 de tool calls en welke token- en kostendata de runtime ook maar blootlegt samen in één
 overzicht — zodat je een lange run die werkt kunt onderscheiden van een die vastzit.
 
-Werkt met **33 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 29 andere. Één dashboard voor je hele agent-fleet. ([de volledige lijst](SUPPORTED_RUNTIMES.txt), gegenereerd uit de catalogus.)
+Werkt met **32 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 andere. Één dashboard voor je hele agent-fleet. ([de volledige lijst](SUPPORTED_RUNTIMES.txt), gegenereerd uit de catalogus.)
 
 > 🌐 **Lees dit in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [meer →](docs/i18n/)
 
@@ -47,11 +47,11 @@ vermeldt welke, per runtime), en het observeren van een actie is niet hetzelfde 
 om die te blokkeren ([welke controls echt zijn, per runtime](docs/APPROVALS.md)).
 
 
-## Werkt met 33 agent runtimes
+## Werkt met 32 agent runtimes
 
 **Gratis in de open source app:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**Op een betaald abonnement:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**Op een betaald abonnement:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 Elke runtime krijgt hetzelfde dashboard. Draai er meerdere tegelijk en de
 switcher in de header herschaalt elk tabblad naar één daarvan.
@@ -80,7 +80,7 @@ Twee vragen die het waard zijn te beantwoorden voordat je enige tool voor agent-
 Een gebruikspercentage is maar zo eerlijk als waardoor het deelt. ClawMetry
 bepaalt de windowgrootte per provider aan de hand van [een tabel die je kunt lezen en
 PR'en](clawmetry/context_windows.py), die Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama en GLM omvat. Het meet niet alle 33
+DeepSeek, Kimi, Qwen, Mistral, Llama en GLM omvat. Het meet niet alle 32
 runtimes met de liniaal van één leverancier. Dat is belangrijk: een beurt van 300K bij GPT-5
 afgezet tegen Anthropics 200K leest als ">100%, overschreden" terwijl het in werkelijkheid op 75% van
 GPT-5's 400K zit. Dezelfde liniaal verbergt een werkelijk overvolle beurt van 130K bij DeepSeek
@@ -100,7 +100,7 @@ of "we zijn blind"**. Een `0` die eigenlijk blind betekent, zegt dat ook.
 
 | Pad | Toegevoegd aan je agent | Standaard? |
 |---|---|---|
-| Session-file tailing (alle 33 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
+| Session-file tailing (alle 32 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
 | HTTP-interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** per LLM-call, of 0,009% van een call van 5s | uit |
 | Pre-tool hook gate (warme cache) | **+44 ms** per gatekeepte tool call, boven een interpreter-bodem van 36 ms | uit |
 | Enforcement proxy | **+9,7 ms** per LLM-call | uit |

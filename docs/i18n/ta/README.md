@@ -17,7 +17,7 @@ tool call-களையும், ரன்டைம் வெளிப்பட�
 ஒரு தொகுப்பு பார்வையில் கொண்டு வருகிறது — இதனால் வேலை செய்யும் ஒரு நீண்ட ரன்னை,
 சிக்கிக் கிடக்கும் ஒன்றிலிருந்து வேறுபடுத்த உங்களுக்கு முடியும்.
 
-**33 AI ஏஜெண்ட் ரன்டைம்களுடன்** செயல்படுகிறது — Claude Code, OpenAI Codex, Hermes, OpenClaw மற்றும் 29 மேலும். உங்கள் முழு ஏஜெண்ட் fleet-க்கும் ஒரு dashboard. ([முழு பட்டியல்](SUPPORTED_RUNTIMES.txt), catalogue-இலிருந்து உருவாக்கப்பட்டது.)
+**32 AI ஏஜெண்ட் ரன்டைம்களுடன்** செயல்படுகிறது — Claude Code, OpenAI Codex, Hermes, OpenClaw மற்றும் 28 மேலும். உங்கள் முழு ஏஜெண்ட் fleet-க்கும் ஒரு dashboard. ([முழு பட்டியல்](SUPPORTED_RUNTIMES.txt), catalogue-இலிருந்து உருவாக்கப்பட்டது.)
 
 > 🌐 **இதை இந்த மொழிகளில் படிக்கவும்:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [மேலும் →](docs/i18n/)
 
@@ -50,11 +50,11 @@ pip install clawmetry && clawmetry
 உண்மையானவை](docs/APPROVALS.md)).
 
 
-## 33 ஏஜெண்ட் ரன்டைம்களுடன் செயல்படுகிறது
+## 32 ஏஜெண்ட் ரன்டைம்களுடன் செயல்படுகிறது
 
 **திறந்த மூலத் தளத்தில் இலவசம்:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**கட்டணமுள்ள திட்டத்தில்:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**கட்டணமுள்ள திட்டத்தில்:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 ஒவ்வொரு ரன்டைமும் அதே dashboard-ஐப் பெறுகிறது. பலவற்றை ஒரே நேரத்தில் இயக்கினால்,
 header switcher ஒவ்வொரு tab-ஐயும் அவற்றில் ஒன்றிற்கு மீண்டும் scope செய்யும்.
@@ -83,7 +83,7 @@ header switcher ஒவ்வொரு tab-ஐயும் அவற்றில�
 ஒரு utilization சதவீதம், அது எதைப் பிரிக்கிறதோ அதை மட்டுமே உண்மையாக இருக்கும்.
 ClawMetry நீங்கள் படித்து PR செய்யக்கூடிய [ஒரு table](clawmetry/context_windows.py)-இலிருந்து
 provider வாரியாக window-ஐ அளவிடுகிறது, இது Anthropic, OpenAI, Google, xAI, DeepSeek,
-Kimi, Qwen, Mistral, Llama மற்றும் GLM-ஐ உள்ளடக்கியது. இது 33 ரன்டைம்களையும் ஒரு
+Kimi, Qwen, Mistral, Llama மற்றும் GLM-ஐ உள்ளடக்கியது. இது 32 ரன்டைம்களையும் ஒரு
 விற்பனையாளரின் அளவுகோலால் அளப்பதில்லை. இது முக்கியம்: Anthropic-இன் 200K-க்கு எதிராக
 மதிப்பிடப்பட்ட 300K GPT-5 turn ">100%, blown" என்று படிக்கப்படும், ஆனால் உண்மையில் அது
 GPT-5-இன் 400K-இல் 75% ஆகும். அதே அளவுகோல் உண்மையிலேயே overflow ஆன 130K DeepSeek
@@ -103,7 +103,7 @@ ClawMetry சில ரன்டைம்களில் மட்டுமே c
 
 | Path | உங்கள் ஏஜெண்டுக்குச் சேர்க்கப்பட்டது | இயல்பாகவா? |
 |---|---|---|
-| Session-file tailing (அனைத்து 33 ரன்டைம்களும்) | **0**. தனி process, உங்கள் ஏஜெண்டில் ClawMetry code இல்லை | on |
+| Session-file tailing (அனைத்து 32 ரன்டைம்களும்) | **0**. தனி process, உங்கள் ஏஜெண்டில் ClawMetry code இல்லை | on |
 | HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | ஒவ்வொரு LLM call-க்கும் **+0.44 ms**, அல்லது 5s call-இல் 0.009% | off |
 | Pre-tool hook gate (warm cache) | gated tool call ஒன்றுக்கு **+44 ms**, 36 ms interpreter floor-க்கு மேல் | off |
 | Enforcement proxy | ஒவ்வொரு LLM call-க்கும் **+9.7 ms** | off |

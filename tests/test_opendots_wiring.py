@@ -10,19 +10,23 @@ import pytest
 from clawmetry.adapters.base import DetectResult, Event, Session
 
 
-def test_opendots_is_paid_and_loaded_only_from_pro():
-    """
-    AC-GOV-ERS-011.1: OpenDots belongs to the paid extension boundary.
-    """
+def test_unreleased_opendots_is_not_offered_or_automatically_loaded():
+    """The draft adapter cannot become availability through catalogue wiring."""
     from clawmetry import entitlements as ent, sync
-    assert 'opendots' in ent.PAID_RUNTIMES
-    assert 'opendots' not in ent.FREE_RUNTIMES
+    assert 'opendots' not in ent.ALL_RUNTIMES
+    assert 'opendots' not in ent.RUNTIME_LANDING_PATHS
     assert ent.RUNTIME_LABELS['opendots'] == 'OpenDots'
-    assert ('clawmetry_pro.adapters.opendots', 'OpenDotsAdapter') in sync._FAMILY_ADAPTER_SPECS
+    assert ('clawmetry_pro.adapters.opendots', 'OpenDotsAdapter') not in sync._FAMILY_ADAPTER_SPECS
+    assert 'opendots' not in {row['id'] for row in ent.runtime_catalog()}
+    export = (Path(__file__).parents[1] / 'SUPPORTED_RUNTIMES.txt').read_text()
+    assert not any(line.startswith('opendots\t') for line in export.splitlines())
+    readme = (Path(__file__).parents[1] / 'README.md').read_text()
+    assert 'https://clawmetry.com/runtimes/opendots' not in readme
+    # Existing evidence remains attributable after availability is deferred.
     assert sync._runtime_of_session('opendots:store:thread:id') == 'opendots'
     assert not ent.Entitlement(tier=ent.TIER_OSS, source='test', grace=False).allows_runtime('opendots')
-    assert ent.Entitlement(tier=ent.TIER_PRO, source='test', grace=False,
-                           runtimes=ent.ALL_RUNTIMES).allows_runtime('opendots')
+    assert not ent.Entitlement(tier=ent.TIER_PRO, source='test', grace=False,
+                              runtimes=ent.ALL_RUNTIMES).allows_runtime('opendots')
 
 
 def test_opendots_ui_and_snapshot_do_not_claim_usage():
@@ -37,6 +41,10 @@ def test_opendots_ui_and_snapshot_do_not_claim_usage():
     record = sync._build_runtime_records()['opendots']
     assert set(record['records'].values()) == {'unavailable'}
     assert record['suppress_zero']
+    from clawmetry import runtime_records
+    assert 'opendots' not in runtime_records.RUNTIME_RECORDS
+    assert 'opendots' in runtime_records.HISTORICAL_RUNTIME_RECORDS
+    assert runtime_records.record_for('opendots')['cost'] == 'unavailable'
 
 
 @pytest.fixture
@@ -54,7 +62,9 @@ def isolated_store(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, '_ingest_keepalive_heartbeat', lambda config: False)
     from clawmetry import entitlements as ent
     monkeypatch.setattr(ent, 'get_entitlement', lambda: ent.Entitlement(
-        tier=ent.TIER_PRO, source='test', grace=False, runtimes=ent.ALL_RUNTIMES))
+        # Explicit draft-adapter test scope, not a standard released plan.
+        tier=ent.TIER_PRO, source='test', grace=False,
+        runtimes=ent.ALL_RUNTIMES | {'opendots'}))
     try:
         yield sync, store
     finally:

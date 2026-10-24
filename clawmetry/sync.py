@@ -15272,7 +15272,6 @@ _FAMILY_ADAPTER_SPECS = (
     # the audit log with per-call usage, and the outbound sends its scheduler
     # has queued. The store has no fixed home, so the adapter discovers it.
     ("clawmetry_pro.adapters.openexecutive", "OpenExecutiveAdapter"),
-    ("clawmetry_pro.adapters.opendots", "OpenDotsAdapter"),
 )
 
 
@@ -17194,9 +17193,11 @@ def _build_runtime_records():
     failure yields ``{}`` and the UI keeps its older, vaguer wording.
     """
     try:
-        from clawmetry.runtime_records import RUNTIME_RECORDS, SIGNALS, coverage_payload
+        from clawmetry.runtime_records import (
+            RUNTIME_RECORDS, HISTORICAL_RUNTIME_RECORDS, SIGNALS, coverage_payload,
+        )
         out = {}
-        for rt in RUNTIME_RECORDS:
+        for rt in RUNTIME_RECORDS.keys() | HISTORICAL_RUNTIME_RECORDS.keys():
             base = coverage_payload(rt, has_data=False)
             out[rt] = {
                 "runtime_label": base["runtime_label"],
