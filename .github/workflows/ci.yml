@@ -776,7 +776,7 @@ jobs:
       # "GITHUB_TOKEN activity does not cascade" rule and, until now, was
       # referenced only in a comment and ran in NO job at all.
       - name: A release actually reaches the cloud
-        run: python3 -m pytest tests/test_release_dispatches_cloud_deploy.py tests/test_release_canary_reachable.py -q
+        run: python3 -m pytest tests/test_release_dispatches_cloud_deploy.py tests/test_release_canary_reachable.py tests/test_release_checkout.py -q
 
       # `runtime` on a sub-agent record is the runtime's NAME. It used to hold
       # a formatted duration, which made the generic client resolver read "12m"

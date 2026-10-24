@@ -37,6 +37,9 @@ jobs:
       attestations: write
 
     steps:
+      - name: Report release workspace disk
+        run: df -h "$RUNNER_TEMP"
+
       # persist-credentials is `true` on purpose, and is stated rather than
       # inherited: this job runs `git push origin refs/tags/$NEW_TAG` (which is
       # what fires publish.yml) and `git push origin $BRANCH` for the version
@@ -50,7 +53,9 @@ jobs:
       # runner.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          # Version selection reads PyPI and the current source. Tag and
+          # version-branch pushes need this merge tree, not archive branches.
+          fetch-depth: 1
           persist-credentials: true
           # The MERGE COMMIT, not the branch ref: on pull_request-closed the
           # `main` ref can lag the merge (replication race) — building it
