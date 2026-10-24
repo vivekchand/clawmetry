@@ -20,7 +20,7 @@ permissions:
 jobs:
   publish:
     name: Build & Publish to PyPI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     permissions:
       # write (not read) so the step below can attach the wheel, sdist and

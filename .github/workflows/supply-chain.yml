@@ -30,7 +30,7 @@ permissions:
 jobs:
   no-external-assets:
     name: No third-party asset loads
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,7 +43,7 @@ jobs:
 
   vendored-assets:
     name: Vendored assets match npm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,7 +56,7 @@ jobs:
 
   fonts-current:
     name: Vendored fonts not stale
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,7 +102,7 @@ jobs:
 
   python-deps:
     name: Python dependency audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -160,7 +160,7 @@ jobs:
 
   fuzz:
     name: Fuzz untrusted parsers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -207,7 +207,7 @@ jobs:
 
   action-refs:
     name: Action references resolve
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -228,7 +228,7 @@ jobs:
 
   actions-security:
     name: Security audit (workflows, package-lock, Python source)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # CI is part of the supply chain: a workflow step runs with this repo's
     # token and secrets, and its output is packaged into the wheel PyPI
     # serves. Both private repos in this family (clawmetry-cloud,
@@ -629,7 +629,7 @@ jobs:
 
   scorecard:
     name: OpenSSF Scorecard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Scorecard reads repo settings/branch protection, and publishing results
     # needs id-token. Skipped on forks, which cannot mint the token.
     if: github.event_name != 'pull_request'

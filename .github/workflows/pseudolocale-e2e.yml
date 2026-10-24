@@ -53,7 +53,7 @@ permissions:
 jobs:
   pseudolocale-e2e:
     name: Pseudolocale machinery is live (en-XA)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # Same rationale as zero-click-auth-e2e.yml: the trial hard block is
     # default-ON in code, and this job tests the unrelated locale surface,

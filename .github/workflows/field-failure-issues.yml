@@ -38,7 +38,7 @@ concurrency:
 jobs:
   file-issues:
     name: File deduped field-failure issues from cloud aggregates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

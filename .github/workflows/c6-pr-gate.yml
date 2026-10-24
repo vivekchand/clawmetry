@@ -59,7 +59,7 @@ permissions:
 jobs:
   c6-pr-gate:
     name: C6 Required-status-checks gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write

@@ -62,7 +62,7 @@ jobs:
   pr-image:
     name: Branch image (${{ matrix.arch }})
     if: github.event_name == 'pull_request'
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -105,7 +105,7 @@ jobs:
   publish:
     name: Publish signed image
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -258,7 +258,7 @@ jobs:
   verify:
     name: Anonymous pull and verify (${{ matrix.arch }})
     needs: publish
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.runner }}
     timeout-minutes: 30
     # Read-only and no registry login anywhere in this job: the whole point is
     # to see what someone with no credentials sees.
@@ -295,7 +295,7 @@ jobs:
   pin:
     name: Propose the verified digest for Compose
     needs: [publish, verify]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write

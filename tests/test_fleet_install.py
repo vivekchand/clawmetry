@@ -463,7 +463,7 @@ def test_recipes_are_exercised_on_their_os_in_ci():
     wf = (REPO / ".github" / "workflows" / "fleet-install-test.yml").read_text(encoding="utf-8")
     linux = _job_block(wf, "linux-ansible")
     windows = _job_block(wf, "windows-intune")
-    assert "runs-on: ubuntu-latest" in linux
+    assert "runs-on: ubuntu-24.04" in linux
     assert "ansible-playbook" in linux and "deploy/fleet/ansible/clawmetry.yml" in linux
     assert "runs-on: windows-latest" in windows
     assert r"deploy\fleet\intune\Install-ClawMetry.ps1" in windows

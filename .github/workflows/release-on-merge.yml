@@ -18,7 +18,7 @@ jobs:
   release:
     name: Bump version & publish to PyPI
     if: github.event.pull_request.merged == true && contains(github.event.pull_request.title, '[RELEASE]') && github.actor == 'vivekchand'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     permissions:
       contents: write

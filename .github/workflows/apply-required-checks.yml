@@ -66,7 +66,7 @@ permissions:
 jobs:
   apply-required-checks:
     name: Apply required E2E status checks (C6)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

@@ -563,7 +563,7 @@ jobs:
 
   linux:
     name: Linux single-folder + AppImage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -747,7 +747,7 @@ jobs:
     name: Attach artifacts to Release
     needs: [macos, windows, linux]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # softprops/action-gh-release needs write access to the Contents API
     # to attach files to the existing tag's Release. Default GITHUB_TOKEN
     # scope is read-only when the org sets that as the default; declare

@@ -38,7 +38,7 @@ permissions:
 jobs:
   zero-click-auth-e2e:
     name: Zero-click localhost auto-login (positive + XFF refuse)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Trial-end hard block is default-ON in code (clawmetry/trial_enforcement.py).
     # This job tests the unrelated zero-click localhost auth flow; opt out so

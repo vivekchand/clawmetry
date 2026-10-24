@@ -19,7 +19,7 @@ concurrency:
 jobs:
   assessment-privacy:
     name: Assessment privacy (${{ matrix.os }}, Python ${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -56,7 +56,7 @@ jobs:
   # caught by running exactly what the publish path runs, on every PR.
   frontend-bundle:
     name: Frontend bundle (npm ci + vite build)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,7 +97,7 @@ jobs:
   # ── Fast syntax check (runs in ~10s, blocks everything else) ─────────────────────
   lint:
     name: Syntax & Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -260,7 +260,7 @@ jobs:
       # faults and never ran once -- so the watchdog for required-check config
       # was itself dead, silently, for months.
       - name: Every workflow file must parse
-        run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
+        run: python3 -m pytest tests/test_workflow_yaml_valid.py tests/ci/test_hosted_linux_image.py -q
 
       - name: English policy regression tests
         run: python3 -m pytest tests/test_english.py tests/test_english_inventory.py tests/test_english_js.py tests/test_english_browser_rendering.py tests/test_english_python.py tests/test_english_cli.py tests/test_insights_english.py tests/test_generated_english.py tests/test_deepeval_bridge.py tests/test_i18n_no_raw_codes.py -q
@@ -905,7 +905,7 @@ jobs:
   api-tests:
     name: API Tests (${{ matrix.os }})
     needs: lint
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     # Trial-end hard block is default-ON in code (clawmetry/trial_enforcement.py).
     # CI has no license file, so every non-allowlisted request would 402 and the
     # dashboard readiness probe would time out. These jobs test unrelated
@@ -1028,7 +1028,7 @@ jobs:
   moat-tests:
     name: MOAT Verifier (72 tests)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1301,7 +1301,7 @@ jobs:
   store-invariants:
     name: Store invariants (property-based)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1357,7 +1357,7 @@ jobs:
   entitlement-tests:
     name: Entitlement API tests
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1394,7 +1394,7 @@ jobs:
   compression-safety:
     name: Compression Safety Eval (Tier-1)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1430,7 +1430,7 @@ jobs:
   redteam-corpus:
     name: Red-team corpus (disclosed attacks)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1506,7 +1506,7 @@ jobs:
   otlp-receiver:
     name: OTLP receiver (with otel extra)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1563,7 +1563,7 @@ jobs:
   otel-recipe-langgraph:
     name: OTel recipe (LangGraph + OpenLLMetry)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
       CLAWMETRY_HARD_BLOCK: '0'
@@ -1623,7 +1623,7 @@ jobs:
   selfhosted-server:
     name: Self-hosted server (container auth + persistence)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1664,7 +1664,7 @@ jobs:
   moat-keystone:
     name: MOAT Keystone (13-endpoint bar)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -1758,7 +1758,7 @@ jobs:
   e2e-critical:
     name: E2E Browser Tests (critical subset)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     # Trial-end hard block is default-ON in code -- see api-tests job.
     env:
@@ -1856,7 +1856,7 @@ jobs:
   pip-install:
     name: pip install (${{ matrix.os }}, py${{ matrix.python-version }})
     needs: lint
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -1939,7 +1939,7 @@ jobs:
   wheel-install:
     name: Wheel install & asset presence
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2038,7 +2038,7 @@ jobs:
   eval-suite:
     name: Eval Suite Gate (Phase 2 evals)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2134,7 +2134,7 @@ jobs:
   live-openclaw-e2e:
     name: Live OpenClaw E2E (real gateway + real send-message)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # NON-BLOCKING for now. OpenClaw harness setup in CI is an open
     # follow-up (see PR #1549 debug-team thread + comment from author).

@@ -80,7 +80,7 @@ permissions:
 jobs:
   c6-auto-heal:
     name: C6 auto-heal (apply required checks if E2E_ADMIN_PAT is set)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

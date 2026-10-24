@@ -31,7 +31,7 @@ permissions:
 jobs:
   detect-and-quarantine:
     name: Detect flaky tests and quarantine within 24h
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write

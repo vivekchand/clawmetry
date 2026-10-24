@@ -55,7 +55,7 @@ env:
 
 jobs:
   visual-diff:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write       # push to orphan pr-screenshots branch
       pull-requests: write  # post comment

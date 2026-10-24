@@ -59,7 +59,7 @@ jobs:
   clear-queue:
     name: Cancel queued non-main runs
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Lists queued runs and cancels them. No checks or pull-request reads here.
     permissions:
@@ -90,7 +90,7 @@ jobs:
   requeue:
     name: Re-run green-drift PRs once main is idle
     if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # actions: re-run parked runs; statuses: read drift-bot's commit status;
     # pull-requests: list the open PRs to consider.

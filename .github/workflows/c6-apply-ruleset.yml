@@ -45,7 +45,7 @@ permissions:
 jobs:
   apply-ruleset:
     name: Upsert E2E required-checks ruleset on main (C6)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

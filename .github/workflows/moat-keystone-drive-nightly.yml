@@ -36,7 +36,7 @@ permissions:
 jobs:
   drive:
     name: Keystone Drive (real openclaw turn -> 13 probes)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Nightly informational at the workflow level, but we still auto-file
     # a P0 issue on failure so a human picks it up within the SLA.

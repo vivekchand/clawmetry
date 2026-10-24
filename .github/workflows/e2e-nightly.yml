@@ -24,7 +24,7 @@ permissions:
 jobs:
   e2e-nightly:
     name: E2E Browser Tests (full suite)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Nightly is informational, not a gate. Don't fail the workflow run
     # itself when the broader suite reports flakes — the job result is
     # what matters for alerting.
