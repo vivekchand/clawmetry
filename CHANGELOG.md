@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: protect detailed robotics queries with the daemon token (#6523)
+
+- Licensed extensions can use the declared detailed trace, span, artifact, review, guard and offline-evaluation operations through the existing daemon-owned query path.
+- Every new detailed read or mutation requires the private daemon bearer, including the dashboard-mounted internal route. Existing robotics reads keep their behavior. The public package adds no paid implementation or robot command path.
+- Verified 156 focused authentication, dispatch and query-contract checks after rebasing onto current code. The full feature CI, native product review and forged-operator rejection passed before this release carrier.
+
+
 ### Added: live Node process monitoring (#6519)
 
 - Search all retained processes by name, PID or ClawMetry role, with clear counts and pagination. A dedicated section identifies the collector and dashboard and shows each process's CPU and resident memory.
