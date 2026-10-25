@@ -20,7 +20,8 @@ def generic_rpc(monkeypatch):
     return local_query, local_server, app.test_client()
 
 
-@pytest.mark.parametrize("operation", ["set_observation_only", "guard_ack"])
+@pytest.mark.parametrize("operation", ["set_observation_only", "guard_ack",
+    "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share"])
 @pytest.mark.parametrize("daemon_token,authorization", [
     (None, None), (None, "Bearer guessed"),
     ("private-test-token", None), ("private-test-token", "Bearer wrong"),
@@ -83,6 +84,10 @@ def actual_plugin_store(tmp_path, monkeypatch):
 @pytest.mark.parametrize("operation,args", [
     ("set_observation_only", {"enabled": True}),
     ("guard_ack", {"run_id": "a" * 32, "incident_id": "b" * 32}),
+    ("trace_annotate", {"run_id": "a" * 32, "note": "isolated annotation"}),
+    ("trace_guard_set", {"run_id": "a" * 32, "mode": "monitor"}),
+    ("trace_evaluate", {"run_id": "a" * 32, "offline": True}),
+    ("trace_share", {"run_id": "a" * 32, "full_trace_shared": True, "expected_version": 1}),
 ])
 def test_real_daemon_bearer_dispatches_through_store_and_extension(
         actual_plugin_store, monkeypatch, operation, args):
@@ -128,3 +133,54 @@ def test_cloud_read_shape_cannot_smuggle_mutation_arguments(actual_plugin_store,
     assert result["runs"] == []
     assert calls == [("runs", {"limit": 50, "before_ns": None, "before_run_id": None})]
     assert store.get_node_setting("test.robotics.rpc") is None
+
+
+@pytest.mark.parametrize('operation', ['trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share'])
+def test_dashboard_copy_accepts_only_real_daemon_bearer(actual_plugin_store, generic_rpc, monkeypatch, operation):
+    query, local_server, client = generic_rpc
+    store, calls = actual_plugin_store
+    monkeypatch.setattr(query, '_store', lambda: store)
+    monkeypatch.setattr(local_server, '_token', 'isolated-real-daemon-token')
+    body = {'kwargs': {'operation': operation, 'args': {'run_id': 'a' * 32}}}
+    for header in ({}, {'Authorization': 'Bearer wrong'}):
+        assert client.post('/__local_query__/robotics_query', json=body, headers=header).status_code == 401
+    assert not calls
+    response=client.post('/__local_query__/robotics_query', json=body,
+        headers={'Authorization': 'Bearer isolated-real-daemon-token'})
+    assert response.status_code == 200
+    assert calls == [(operation, {'run_id': 'a' * 32})]
+
+
+TRACE_READS=['trace_detail','trace_events','trace_spans','trace_artifact','trace_artifacts',
+             'trace_notes','trace_guard_get','trace_jobs']
+
+@pytest.mark.parametrize('operation',TRACE_READS)
+@pytest.mark.parametrize('authorization',[None,'Bearer forged'])
+def test_trace_reads_cannot_forge_operator_on_dashboard(generic_rpc,monkeypatch,operation,authorization):
+    query,local_server,client=generic_rpc
+    monkeypatch.setattr(local_server,'_token','private-daemon-test-token')
+    monkeypatch.setattr(query,'_store',lambda:pytest.fail('Forged operator read reached store'))
+    headers={'Authorization':authorization} if authorization else {}
+    response=client.post('/__local_query__/robotics_query',headers=headers,
+        json={'kwargs':{'operation':operation,'args':{'operator':True,'run_id':'a'*32}}})
+    assert response.status_code==401
+
+@pytest.mark.parametrize('operation',TRACE_READS)
+def test_trace_reads_require_real_bearer_before_plugin(generic_rpc,actual_plugin_store,monkeypatch,operation):
+    query,local_server,client=generic_rpc
+    store,calls=actual_plugin_store
+    monkeypatch.setattr(query,'_store',lambda:store)
+    monkeypatch.setattr(local_server,'_token','private-daemon-test-token')
+    response=client.post('/__local_query__/robotics_query',
+        headers={'Authorization':'Bearer private-daemon-test-token'},
+        json={'kwargs':{'operation':operation,'args':{'operator':True,'run_id':'a'*32}}})
+    assert response.status_code==200
+    assert calls==[(operation,{'operator':True,'run_id':'a'*32})]
+
+
+def test_legacy_runs_read_keeps_existing_dashboard_behavior(generic_rpc,actual_plugin_store,monkeypatch):
+    query,_,client=generic_rpc
+    store,calls=actual_plugin_store
+    monkeypatch.setattr(query,'_store',lambda:store)
+    response=client.post('/__local_query__/robotics_query',json={'kwargs':{'operation':'runs'}})
+    assert response.status_code==200 and calls==[('runs',{})]

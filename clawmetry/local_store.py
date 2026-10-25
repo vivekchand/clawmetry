@@ -4339,7 +4339,9 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
     def robotics_query(self, operation: str, args: dict | None = None) -> dict:
         """Private plugin query on the daemon-owned connection. No raw SQL RPC."""
         from clawmetry.extensions import call
-        if operation not in {"runs", "events", "snapshot", "inventory", "guard_ack", "guard_incidents", "set_observation_only"}:
+        if operation not in {"runs", "events", "snapshot", "inventory", "guard_ack", "guard_incidents", "set_observation_only",
+                             "trace_detail", "trace_events", "trace_spans", "trace_artifact", "trace_artifacts", "trace_notes", "trace_guard_get", "trace_jobs",
+                             "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share"}:
             raise ValueError("Unsupported robotics query")
         return call("robotics.query", {"store": self, "operation": operation, "args": args or {}},
                     default={"error": "unavailable", "message": "Install ClawMetry Pro and restart the collector to view robot traces."})
