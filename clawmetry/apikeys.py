@@ -70,7 +70,6 @@ from clawmetry.query_contract import (
     SCOPE_DOC as _READ_SCOPE_DOC,
     SCOPES as READ_SCOPES,
 )
-from clawmetry.query_contract import SCOPES
 
 # Re-export the read-side public helpers from their own short module so
 # Drift Bot (which reads only the file head) can find them.
