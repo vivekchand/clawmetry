@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-10-25",
+    "synced_at": "2026-10-26",
     "synced_by": "codex"
   },
   "_scope": [
@@ -2586,7 +2586,7 @@
       "id": "AC-ASSIST-010.1",
       "doc": "Investigate an Improve signal instead of browsing to Setup",
       "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
-      "text": "When the operator chooses to investigate a candidate, the system shall open the Assistant with a question carrying that candidate's own evidence — what was said, how often and across how many conversations and projects it was observed, when it was last seen, its scope, the runtimes it came from, and the supporting excerpts — so the answer is grounded in the signal rather than in its one-line summary."
+      "text": "When the operator chooses to investigate a candidate, the system shall open the Assistant with a question carrying that candidate's own evidence \u2014 what was said, how often and across how many conversations and projects it was observed, when it was last seen, its scope, the runtimes it came from, and the supporting excerpts \u2014 so the answer is grounded in the signal rather than in its one-line summary."
     },
     {
       "id": "AC-ASSIST-010.2",
@@ -2604,7 +2604,7 @@
       "id": "AC-ASSIST-010.4",
       "doc": "Investigate an Improve signal instead of browsing to Setup",
       "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
-      "text": "When the Assistant cannot accept the question yet — the computer is unreachable, no engine is connected, or its status has not settled — the question shall remain visible and sendable with the reason stated, and shall not be discarded. A question the operator has edited or already sent shall not be re-sent."
+      "text": "When the Assistant cannot accept the question yet \u2014 the computer is unreachable, no engine is connected, or its status has not settled \u2014 the question shall remain visible and sendable with the reason stated, and shall not be discarded. A question the operator has edited or already sent shall not be re-sent."
     },
     {
       "id": "AC-ASSIST-010.5",
@@ -3091,6 +3091,90 @@
       "doc": "Process search and ClawMetry resource visibility",
       "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
       "text": "When viewed through cloud, the system shall deliver the live measurements as encrypted bounded frames through the existing authenticated cache and relay, without increasing full system-snapshot frequency."
+    },
+    {
+      "id": "AC-GOV-SBG-001.1",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When an approval is resumed or deduplicated, the system shall bind runtime, session, tool, complete normalized arguments, working directory, call identifier when available, and approval kind."
+    },
+    {
+      "id": "AC-GOV-SBG-001.2",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When a pending protected invocation loses its approval service or persistence, the system shall deny execution with an explanation and retain available audit evidence."
+    },
+    {
+      "id": "AC-GOV-SBG-001.3",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When no protecting policy is configured or entitlement resolution fails, the system shall preserve native runtime permission checks without granting or blocking an action."
+    },
+    {
+      "id": "AC-GOV-SBG-002.1",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When security events are committed, the system shall evaluate them through bounded incremental processing regardless of session completion or source-event age."
+    },
+    {
+      "id": "AC-GOV-SBG-002.2",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When processing restarts, retries, or reaches a page boundary, the system shall preserve cursor ordering, retry failed evidence, and avoid duplicate durable findings."
+    },
+    {
+      "id": "AC-GOV-SBG-002.3",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When no new events exist, the system shall avoid repeated whole-store or per-session scans and preserve daemon writer ownership and resource limits."
+    },
+    {
+      "id": "AC-GOV-SBG-002.4",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When a legacy action signature matches, the system shall expose a redacted finding through the continuous incident and explicit-policy path without requiring a page request."
+    },
+    {
+      "id": "AC-GOV-SBG-003.1",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When a mutating tool names a path outside a known workspace, the system shall report the declared boundary crossing even for one file, using component-aware POSIX and Windows path rules."
+    },
+    {
+      "id": "AC-GOV-SBG-003.2",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When workspace identity or path resolution is unknown, the system shall state the evidence limit and shall not claim a verified filesystem escape."
+    },
+    {
+      "id": "AC-GOV-SBG-003.3",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When findings are ranked, the system shall prioritize critical security impact over operational spend consistently in the daemon, API and hosted view."
+    },
+    {
+      "id": "AC-GOV-SBG-004.1",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When protection coverage is shown, the system shall distinguish observed activity, installed hook capability, verified decisions, containment capability, sandbox evidence and unavailable evidence."
+    },
+    {
+      "id": "AC-GOV-SBG-004.2",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When independent sandbox or scanner evidence is absent, the system shall report unknown coverage and shall not claim subprocess isolation or generated-code safety."
+    },
+    {
+      "id": "AC-GOV-SBG-004.3",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When existing scanner and enforcement evidence is available, the system shall preserve action or change identity, source, result and redacted provenance through local persistence and encrypted hosted rendering."
+    },
+    {
+      "id": "AC-GOV-SBG-004.4",
+      "doc": "Guard security boundaries and timely incident handling",
+      "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
+      "text": "When these protections are validated, the system shall retain regression evidence for denied action substitution, service interruption, completed-session attacks, scope escapes and ordinary allowed work."
     }
   ]
 }

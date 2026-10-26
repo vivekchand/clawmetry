@@ -138,6 +138,8 @@ def _seed_question_row(ls, row_id="q-row-1", session="claude_code:s1",
             "kind": "question_set",
             "tool_name": "AskUserQuestion",
             "tool_input": _QUESTIONS_INPUT,
+            "cwd": "/tmp",
+            "tool_use_id": "tu-q1",
             "policy": "AskUserQuestion",
             "on_timeout": "ask",
             "deadline_ms": int(time.time() * 1000) + deadline_offset_ms,
@@ -536,5 +538,6 @@ def test_gate_question_gate_env_kill_switch(app, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_QUESTION_GATE", "0")
     done = client.post("/api/hooks/claude-code/pretooluse",
                        json=_ask_event()).get_json()
-    assert done["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert "updatedInput" not in done["hookSpecificOutput"]
+    assert done["status"] == "no_op"
+    assert "hookSpecificOutput" not in done
+    assert "updatedInput" not in done

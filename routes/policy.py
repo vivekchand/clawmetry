@@ -360,6 +360,7 @@ def _policy_summary(compiled: dict) -> dict:
         "command_not_regex": _pat(compiled.get("command_not_regex")),
         "args_regex": _pat(compiled.get("args_regex")),
         "min_risk": compiled.get("min_risk"),
+        "action_binding": compiled.get("action_binding"),
     }
 
 
@@ -369,9 +370,9 @@ _VALID_ON_TIMEOUT = ("deny", "kill", "approve", "allow", "ask")
 # file). ``match`` is handled separately (nested block).
 _POLICY_SCALAR_KEYS = ("name", "tool", "runtime", "pattern_type", "pattern",
                        "action", "timeout", "on_timeout", "preset_key",
-                       "enabled", "min_risk")
+                       "enabled", "min_risk", "action_binding")
 _MATCH_SCALAR_KEYS = ("tool", "command_regex", "command_not_regex",
-                      "args_regex", "runtime", "min_risk")
+                      "args_regex", "runtime", "min_risk", "action_binding")
 
 
 def _yaml_quote(value):
@@ -404,6 +405,8 @@ def _serialize_policies_yaml(policies: list[dict]) -> str:
         "# the next dashboard save only if they use this same flat format.",
     ]
     for p in policies:
+        if p.get('action_binding') or (p.get('match') or {}).get('action_binding'):
+            p = {**p, 'match': {**(p.get('match') or {}), 'command_regex': '(?!)'}}
         first = True
         for k in _POLICY_SCALAR_KEYS:
             if k not in p or p[k] is None:
@@ -636,7 +639,7 @@ def _row_tool_and_args(row) -> "tuple[str, dict]":
     carry the tool name as the ``action`` string prefix ("Bash: rm -rf x").
     """
     args = row.get("args") if isinstance(row.get("args"), dict) else {}
-    if args.get("source") == "pretooluse-hook":
+    if args.get("source") in ("pretooluse-hook", "permissionrequest-hook"):
         raw = args.get("tool_input")
         return (str(args.get("tool_name") or ""),
                 raw if isinstance(raw, dict) else {})
@@ -645,6 +648,8 @@ def _row_tool_and_args(row) -> "tuple[str, dict]":
     ctx = args.get("_cm_ctx") if isinstance(args.get("_cm_ctx"), dict) else {}
     tool = str(ctx.get("tool") or "").strip() or \
         str(row.get("action") or "").split(": ", 1)[0].strip()
+    if isinstance(ctx.get("tool_input"), dict):
+        return tool, ctx["tool_input"]
     raw = {k: v for k, v in args.items()
            if k not in ("_cm_risk", "_cm_ctx")}
     return tool, raw
@@ -660,26 +665,38 @@ def _apply_remember(row, scope: str) -> "tuple[str | None, str | None]":
     "always" write degrades to session scope rather than silently
     forgetting the choice.
     """
-    import re as _re
     from clawmetry import approvals as ap
     tool, raw = _row_tool_and_args(row)
     sid = str(row.get("requestor_session_id") or "")
+    meta = row.get("args") if isinstance(row.get("args"), dict) else {}
+    context = meta.get("_cm_ctx") if isinstance(meta.get("_cm_ctx"), dict) else {}
+    cwd = str(meta.get("cwd") or "") if meta.get("source") in (
+        "pretooluse-hook", "permissionrequest-hook") else str(context.get("cwd") or "")
+    runtime = str(meta.get("runtime") or context.get("runtime") or ap._session_runtime(sid))
     if not tool:
         return None, "row carries no tool name to remember"
+    if meta.get("source") not in ("pretooluse-hook", "permissionrequest-hook") and not isinstance(context.get("tool_input"), dict):
+        return None, "This older receipt cannot verify the complete action. Request a new review."
     if scope == "session":
-        ap.add_session_allow(sid, tool, raw)
-        return "session", None
+        key = ap.add_session_allow(sid, tool, raw, cwd=cwd, runtime=runtime)
+        return ("session", None) if key else (None, "The action could not be verified for a remembered approval.")
     # scope == "always"
     cmd = ap._extract_command(tool, raw)
     if not cmd:
         return None, "cannot derive a command to pin an always-allow rule to"
     name = f"Always allow {tool}: {cmd}"[:80]
     name = name.replace("\n", " ").replace("'", "").replace('"', "")
+    from clawmetry.approval_binding import action_digest
+    binding = action_digest(runtime, "", tool, raw, cwd, source="persistent-allow", kind="always")
+    if binding is None:
+        return None, "The action could not be verified for a persistent approval."
     candidate = {
         "name": name,
         "action": "approve",
+        "runtime": runtime,
         "match": {"tool": ap._canonical_tool(tool),
-                  "command_regex": "^" + _re.escape(cmd) + "$"},
+                  "command_regex": "(?!)",  # older daemons must never broaden this grant
+                  "action_binding": binding},
     }
     try:
         existing = []
@@ -699,7 +716,7 @@ def _apply_remember(row, scope: str) -> "tuple[str | None, str | None]":
         _os.replace(tmp, ap.POLICIES_PATH)
         return "always", None
     except Exception as e:
-        ap.add_session_allow(sid, tool, raw)
+        ap.add_session_allow(sid, tool, raw, cwd=cwd, runtime=runtime)
         return "session", f"always-allow rule not writable ({e}); " \
                           "remembered for this session instead"
 

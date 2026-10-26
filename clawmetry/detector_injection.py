@@ -105,6 +105,12 @@ def prompt_injection(events: Iterable[dict], session_id: str,
         tool_hits = 0
         user_hits = 0
         followed = None       # (level, tool) of the worst later high-risk call
+        tool_indices = set()
+        user_indices = set()
+        armed_indices = set()
+        followed_indices = set()
+        armed_first = None
+        followed_first = None
         armed = False         # matched content seen in the current turn
         last_call_tool = ""
         for s in steps:
@@ -119,8 +125,11 @@ def prompt_injection(events: Iterable[dict], session_id: str,
                 if armed:
                     level, tool = _call_risk(d, ev)
                     if _pi.RISK_RANK.get(level, 0) >= _pi.RISK_RANK["high"]:
+                        followed_indices.update(armed_indices)
+                        followed_indices.add(i)
                         if followed is None or _pi.RISK_RANK[level] > _pi.RISK_RANK[followed[0]]:
                             followed = (level, tool)
+                            followed_first = armed_first
                 continue
             if kind == "tool_result" or (kind == "user" and _has_tool_result_blocks(data)):
                 source = "tool_result"
@@ -129,6 +138,8 @@ def prompt_injection(events: Iterable[dict], session_id: str,
                 source = "user_message"
                 tool = ""
                 armed = False  # a person spoke: a new turn starts
+                armed_indices.clear()
+                armed_first = None
                 msg = data.get("message") if isinstance(data.get("message"), dict) else {}
                 content = data.get("content") or msg.get("content") or data.get("text") or ""
                 if is_injected_context(content):
@@ -146,10 +157,15 @@ def prompt_injection(events: Iterable[dict], session_id: str,
             if not sigs:
                 continue
             armed = True
+            armed_indices.add(i)
+            if armed_first is None:
+                armed_first = (i, source, tool, sigs)
             if source == "tool_result":
                 tool_hits += 1
+                tool_indices.add(i)
             else:
                 user_hits += 1
+                user_indices.add(i)
             for sid in sigs:
                 if sid not in signatures:
                     signatures.append(sid)
@@ -159,6 +175,8 @@ def prompt_injection(events: Iterable[dict], session_id: str,
                 first = (i, source, tool, sigs)
         if first is None:
             return None
+        if followed_first is not None:
+            first = followed_first
 
         idx, source, tool, first_sigs = first
         rt_label = runtime or "agent"
@@ -181,7 +199,7 @@ def prompt_injection(events: Iterable[dict], session_id: str,
                        f"{followed[0]} risk, before anyone spoke to it again. ")
         detail += ("This is a pattern match on the text, not proof the agent obeyed it. "
                    + d._stop_hint())
-        return d._incident(
+        incident = d._incident(
             "prompt_injection", session_id, runtime, severity, title, detail,
             {"source": source, "tool": tool or None,
              "signatures": signatures,
@@ -194,5 +212,8 @@ def prompt_injection(events: Iterable[dict], session_id: str,
                           "and user-sourced messages; matched text is not kept")},
             idx,
         )
+        incident["_evidence_step_indices"] = sorted(
+            followed_indices if followed is not None else tool_indices or user_indices)
+        return incident
     except Exception:
         return None

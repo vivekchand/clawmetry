@@ -85,7 +85,7 @@ assert(root.textContent.includes('Unknown'));
 live({rows:[],incidents:[{...incident,state:'recovered',recovered_at:Date.now(),detail:'Successful tool result observed',
  spend_at_risk_usd:1.25,cost_provenance:'estimated',spend_basis:'window_fraction'}],execution:{status:'running'}});
 assert(root.textContent.includes('Finding: Recovered'));
-assert(root.textContent.includes('Execution: running'));
+assert(root.textContent.includes('Last recorded session state: running'));
 assert(root.textContent.includes('$1.2500 estimated'));
 assert(root.textContent.includes('Recovery observed'));
 assert(root.textContent.includes('Successful tool result observed'));

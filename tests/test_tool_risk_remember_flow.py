@@ -86,7 +86,7 @@ def _gate_policy(ap, **kw):
 def _post_hook(client, cmd, session="sess-A", tool="Bash", resume=None):
     body = {"tool_name": tool, "tool_input": {"command": cmd},
             "session_id": session, "cwd": "/tmp",
-            "tool_use_id": f"tu-{abs(hash((cmd, session, resume)))}"}
+            "tool_use_id": f"tu-{abs(hash((cmd, session)))}"}
     if resume:
         body["approval_id"] = resume
     return client.post("/api/hooks/claude-code/pretooluse", json=body)
@@ -96,9 +96,9 @@ def test_low_risk_call_passes_min_risk_gate(harness):
     client, ls, ap = harness
     _gate_policy(ap)
     r = _post_hook(client, "git status")
-    hso = r.get_json()["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    assert "no matching policy" in hso["permissionDecisionReason"]
+    assert r.get_json()["status"] == "no_op"
+    assert "hookSpecificOutput" not in r.get_json()
+    assert "No policy matched" in r.get_json()["reason"]
 
 
 def test_high_risk_call_parks_with_risk_chip(harness):
@@ -166,6 +166,24 @@ def test_remember_always_appends_visible_policy(harness):
     hso = r2.get_json()["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert "always-allow" in hso["permissionDecisionReason"]
+
+
+def test_remember_always_binds_content_and_working_directory(harness):
+    """AC-GOV-SBG-001.1: persistent grants do not widen a reviewed action."""
+    client, _, ap = harness
+    _gate_policy(ap)
+    event = {"tool_name": "Write", "tool_input": {"file_path": "/etc/hosts", "content": "reviewed"},
+             "session_id": "sess-A", "cwd": "/tmp", "tool_use_id": "write-1"}
+    aid = client.post("/api/hooks/claude-code/pretooluse", json=event).get_json()["approval_id"]
+    decision = client.post(f"/api/approvals/{aid}/decide", json={"decision": "approve", "remember": "always"})
+    assert decision.get_json()["remembered"] == "always"
+    same = client.post("/api/hooks/claude-code/pretooluse", json=dict(event, session_id="sess-B", tool_use_id="write-2"))
+    assert same.get_json()["hookSpecificOutput"]["permissionDecision"] == "allow"
+    changed = client.post("/api/hooks/claude-code/pretooluse", json=dict(
+        event, tool_use_id="write-3", tool_input={"file_path": "/etc/hosts", "content": "replacement"}))
+    assert changed.get_json()["status"] == "pending"
+    elsewhere = client.post("/api/hooks/claude-code/pretooluse", json=dict(event, tool_use_id="write-4", cwd="/elsewhere"))
+    assert elsewhere.get_json()["status"] == "pending"
 
 
 def test_remember_rejects_unknown_scope(harness):

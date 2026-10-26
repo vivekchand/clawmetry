@@ -158,6 +158,8 @@ def test_armed_parks_and_denial_blocks(mirror_app):
         "id": "denied1", "requestor_session_id": "claude_code:s1",
         "action": "Bash: x", "status": "pending",
         "args": {"runtime": "claude_code", "kind": "permission_prompt",
+                 "source": "permissionrequest-hook", "tool_name": "Bash",
+                 "tool_input": _event()["tool_input"], "cwd": "/tmp", "tool_use_id": "tu1",
                  "deadline_ms": int(time.time() * 1000) + 60000},
         "created_at": "2026-08-15T00:00:00Z"})
     store.update_approval_decision("denied1", "deny", "test", "nope")
@@ -174,6 +176,8 @@ def test_window_elapsed_hands_back_to_the_terminal(mirror_app):
         "id": "expired1", "requestor_session_id": "claude_code:s1",
         "action": "Bash: x", "status": "pending",
         "args": {"runtime": "claude_code", "kind": "permission_prompt",
+                 "source": "permissionrequest-hook", "tool_name": "Bash",
+                 "tool_input": _event()["tool_input"], "cwd": "/tmp", "tool_use_id": "tu1",
                  "on_timeout": "ask", "deadline_ms": 1},
         "created_at": "2026-08-15T00:00:00Z"})
     d = client.post("/api/hooks/claude-code/permissionrequest",

@@ -273,16 +273,16 @@ def _write_policy_yaml(ap, *, tool="exec", pattern="rm", timeout=2,
     )
 
 
-def test_hook_receiver_allows_when_no_policy(hooks_app):
+def test_hook_receiver_preserves_native_permissions_without_policy(hooks_app):
     client, rh, ls, ap = hooks_app
     r = client.post("/api/hooks/claude-code/pretooluse", json={
         "tool_name": "Bash", "tool_input": {"command": "ls"},
         "session_id": "s1", "cwd": "/tmp"})
     assert r.status_code == 200
-    hso = r.get_json()["hookSpecificOutput"]
-    assert hso["hookEventName"] == "PreToolUse"
-    assert hso["permissionDecision"] == "allow"
-    assert "no matching policy" in hso["permissionDecisionReason"]
+    body = r.get_json()
+    assert body["status"] == "no_op"
+    assert "hookSpecificOutput" not in body
+    assert "No policy matched" in body["reason"]
     # Nothing parked in the queue.
     assert ls.get_store().query_approvals(status="pending", limit=10) == []
 
@@ -344,7 +344,8 @@ def test_hook_receiver_pending_resume_and_approve(hooks_app, monkeypatch):
 
     ls.get_store().update_approval_decision(aid, "approve", "local", None)
     r3 = client.post("/api/hooks/claude-code/pretooluse", json={
-        "approval_id": aid, "tool_name": "Bash"})
+        "approval_id": aid, "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf x"}, "session_id": "s9", "tool_use_id": "tu-9"})
     hso = r3.get_json()["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert "Approved by the human" in hso["permissionDecisionReason"]
@@ -375,15 +376,16 @@ def test_hook_receiver_rejects_non_loopback(hooks_app):
     assert r.status_code == 403
 
 
-def test_hook_receiver_unentitled_is_explicit_allow(hooks_app, monkeypatch):
+def test_hook_receiver_unentitled_keeps_native_permissions(hooks_app, monkeypatch):
     client, rh, ls, ap = hooks_app
     _pin_entitlement(monkeypatch, features=())  # approval_queue NOT allowed
     _write_policy_yaml(ap)
     r = client.post("/api/hooks/claude-code/pretooluse", json={
         "tool_name": "Bash", "tool_input": {"command": "rm -rf /"}})
-    hso = r.get_json()["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    assert "not entitled" in hso["permissionDecisionReason"]
+    body = r.get_json()
+    assert body["status"] == "no_op"
+    assert "hookSpecificOutput" not in body
+    assert "Native permissions still apply" in body["reason"]
 
 
 # ── 4. claude_code_gate installer + CLI client ─────────────────────────────
@@ -591,7 +593,7 @@ def test_cli_hook_garbage_stdin_fails_open(cc_gate, monkeypatch, capsys):
 def test_cli_hook_prints_server_decision(cc_gate, monkeypatch, capsys):
     ccg, _ = cc_gate
     responses = [
-        {"status": "pending", "approval_id": "a1", "retry_after_ms": 1},
+        {"status": "pending", "approval_id": "a1", "retry_after_ms": 1, "wait_budget_s": 60},
         {"status": "decided",
          "hookSpecificOutput": {"hookEventName": "PreToolUse",
                                 "permissionDecision": "deny",
@@ -758,7 +760,8 @@ def test_cursor_client_denies_shell_in_cursor_shape(rt_gates, monkeypatch):
     assert payload["tool_name"] == "Bash"
     assert payload["tool_input"] == {"command": "rm -rf /"}
     assert payload["session_id"] == "conv-1"
-    assert payload["tool_use_id"] == "gen-9"
+    assert payload["tool_use_id"] == ""
+    assert payload["generation_id"] == "gen-9"
     got = json.loads(out)
     assert got["permission"] == "deny"
     assert got["user_message"] == "blocked by policy"
@@ -856,8 +859,8 @@ def test_receiver_runtime_scoped_policy_does_not_cross(hooks_app):
         "tool_name": "bash", "tool_input": {"command": "rm -rf /"},
         "session_id": "s9", "cwd": "/p"})
     assert r.status_code == 200
-    hso = r.get_json()["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
+    assert r.get_json()["status"] == "no_op"
+    assert "hookSpecificOutput" not in r.get_json()
     assert ls.get_store().query_approvals(status="pending", limit=10) == []
 
 

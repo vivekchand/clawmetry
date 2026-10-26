@@ -54,6 +54,7 @@ from clawmetry.local_store_projects import ProjectsMixin  # project attribution 
 from clawmetry.activity_store import ActivityStoreMixin, ACTIVITY_DDL
 from clawmetry.node_activity_store import NodeActivityStoreMixin, NODE_ACTIVITY_DDL
 from clawmetry.incident_store import IncidentStoreMixin, INCIDENT_DDL
+from clawmetry.security_ingest_store import SecurityIngestStoreMixin, SECURITY_INGEST_DDL
 from clawmetry.investigations import InvestigationStoreMixin
 from clawmetry.investigation_catalog import InvestigationCatalogMixin
 # REQ-OBS-OIA-001: a value the store cannot hold is refused on its own, not a
@@ -639,7 +640,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # A heartbeat row is a liveness ping, not a transport envelope. The daemon's
 # heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
@@ -2244,18 +2245,19 @@ _DDL = [
     # this column. ALTER (not a new CREATE) so existing stores pick it up.
     "ALTER TABLE session_policy ADD COLUMN IF NOT EXISTS min_spend_at_risk_usd DOUBLE DEFAULT 0",
     # Every policy decision the daemon reached, acted on or not. Doubles as
-    # the DURABLE one-shot latch: the (session_id, policy_id, step_index) PK
-    # means each RUNG of a policy's escalation ladder fires at most once per
+    # the DURABLE one-shot latch: node/runtime/session/policy/rung are distinct.
+    # Each RUNG of a policy's escalation ladder fires at most once per
     # session even across a daemon restart, so a restart can never re-kill a
     # session it already acted on, and can never replay a ladder from rung 0.
     # A policy with no ladder is a one-rung ladder at step_index 0, which is
     # exactly the old (session_id, policy_id) latch.
     """
     CREATE TABLE IF NOT EXISTS policy_actions (
+        node_id         VARCHAR NOT NULL DEFAULT '',
         session_id      VARCHAR NOT NULL,
         policy_id       VARCHAR NOT NULL,
         step_index      INTEGER NOT NULL DEFAULT 0,
-        runtime         VARCHAR,
+        runtime         VARCHAR NOT NULL DEFAULT '',
         action          VARCHAR,
         kind            VARCHAR,
         reason          VARCHAR,
@@ -2264,7 +2266,7 @@ _DDL = [
         result_ok       BOOLEAN DEFAULT FALSE,
         result_detail   VARCHAR,
         created_at      BIGINT NOT NULL,
-        PRIMARY KEY (session_id, policy_id, step_index)
+        PRIMARY KEY (node_id, runtime, session_id, policy_id, step_index)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_policy_actions_created ON policy_actions(created_at DESC)",
@@ -3002,6 +3004,7 @@ def _assistant_decode_conversation(row: tuple[Any, ...]) -> dict[str, Any]:
 
 _DDL.extend(INCIDENT_DDL)
 _DDL.extend(ACTIVITY_DDL)
+_DDL.extend(SECURITY_INGEST_DDL)
 _DDL.extend(NODE_ACTIVITY_DDL)
 
 
@@ -3356,6 +3359,47 @@ def _migrate_policy_actions_ladder(conn) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_actions_created "
                  "ON policy_actions(created_at DESC)")
     log.info("local store: policy_actions migrated to a per-step Guard latch")
+
+
+def _migrate_policy_actions_scope(conn) -> None:
+    """Keep readable decisions while giving exact scopes independent latches.
+
+    Called inside the startup schema transaction. Old node identities were
+    never stored, so their rows retain an empty node_id. Such ambiguous rows
+    suppress a matching scoped ladder; they never establish a rung from
+    which the new worker may escalate. No runtime or node is guessed.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info('policy_actions')").fetchall()}
+    keys = conn.execute("SELECT constraint_column_names FROM duckdb_constraints() "
+                        "WHERE table_name='policy_actions' AND constraint_type='PRIMARY KEY'").fetchall()
+    if 'node_id' in cols and keys and set(keys[0][0]) == {
+            'node_id', 'runtime', 'session_id', 'policy_id', 'step_index'}:
+        return
+    conn.execute("""
+        CREATE TABLE policy_actions__scoped (
+            node_id VARCHAR NOT NULL DEFAULT '',
+            session_id VARCHAR NOT NULL, policy_id VARCHAR NOT NULL,
+            step_index INTEGER NOT NULL DEFAULT 0,
+            runtime VARCHAR NOT NULL DEFAULT '', action VARCHAR, kind VARCHAR,
+            reason VARCHAR, evidence BLOB, enforced BOOLEAN DEFAULT FALSE,
+            result_ok BOOLEAN DEFAULT FALSE, result_detail VARCHAR,
+            created_at BIGINT NOT NULL,
+            PRIMARY KEY (node_id, runtime, session_id, policy_id, step_index))
+    """)
+    if 'node_id' not in cols:
+        conn.execute("ALTER TABLE policy_actions ADD COLUMN node_id VARCHAR DEFAULT ''")
+    conn.execute("""
+        INSERT INTO policy_actions__scoped
+          (node_id, session_id, policy_id, step_index, runtime, action, kind,
+           reason, evidence, enforced, result_ok, result_detail, created_at)
+        SELECT COALESCE(node_id, ''), session_id, policy_id, step_index, COALESCE(runtime, ''),
+               action, kind, reason, evidence, enforced, result_ok, result_detail, created_at
+        FROM policy_actions
+    """)
+    conn.execute("DROP TABLE policy_actions")
+    conn.execute("ALTER TABLE policy_actions__scoped RENAME TO policy_actions")
+    conn.execute("CREATE INDEX idx_policy_actions_created ON policy_actions(created_at DESC)")
+    log.info("local store: policy decisions migrated to explicit node/runtime scope; old node scope remains unknown")
 
 
 # ── v7 dedup migration (#1232) ───────────────────────────────────────────────
@@ -4304,7 +4348,7 @@ def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:
     return fallback or "openclaw"
 
 
-class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMixin, InvestigationStoreMixin, InvestigationCatalogMixin, ActivityStoreMixin):
+class LocalStore(SecurityIngestStoreMixin, NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMixin, InvestigationStoreMixin, InvestigationCatalogMixin, ActivityStoreMixin):
     """Thread-safe local event store with a background batched flusher.
 
     `read_only=True` opens the DuckDB in RO mode — read paths work the same,
@@ -4940,6 +4984,15 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                         )
                         migration_failed = True
                         _migration_err = str(exc)
+                if current < 19:
+                    # Rebuild atomically: a failed copy must retain the old
+                    # latch and must never stamp a successful scope migration.
+                    try:
+                        _migrate_policy_actions_scope(self._conn)
+                    except Exception as exc:
+                        migration_failed = True
+                        _migration_err = str(exc)
+                        log.exception("local store: scoped policy latch migration failed")
                 # Step 4: stamp the version — ONLY if every gated migration
                 # succeeded. Stamping after a swallowed failure is the #1602
                 # silent-half-state bug.
@@ -7768,11 +7821,12 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                 "DELETE FROM session_policy WHERE policy_id = ?", [pid])
         return int(before[0]) if before else 0
 
-    def query_session_policies(self, enabled_only: bool = False) -> list:
+    def query_session_policies(self, enabled_only: bool = False, *, strict=False) -> list:
         """All Guard policies, newest-updated first.
 
         Returns ``[]`` on any error so a policy-table problem degrades to
-        "no enforcement" rather than breaking the daemon tick.
+        "no enforcement" rather than breaking the daemon tick. The security
+        worker uses strict reads to retain its cursor until response is available.
         """
         try:
             sql = ("SELECT policy_id, name, enabled, scope_runtime, "
@@ -7782,8 +7836,10 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
             if enabled_only:
                 sql += " WHERE enabled = TRUE"
             sql += " ORDER BY updated_at DESC"
-            rows = self._conn.execute(sql).fetchall()
+            rows = self._fetch(sql, [])
         except Exception:
+            if strict:
+                raise
             return []
         cols = ["policy_id", "name", "enabled", "scope_runtime",
                 "scope_agent_id", "trigger_kind", "min_severity", "min_repeat",
@@ -7807,7 +7863,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         return out
 
     def policy_already_fired(self, session_id: str, policy_id: str,
-                             step_index: int = 0) -> bool:
+                             step_index: int = 0, *, strict=False, node_id=None, runtime=None) -> bool:
         """Durable one-shot latch, per RUNG of the policy's ladder.
 
         True when this policy has already reached a decision at this rung for
@@ -7816,9 +7872,11 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         CLOSED — any read error returns True, i.e. we decline to act rather
         than risk acting twice.
 
-        ``step_index`` defaults to 0, so a caller that predates escalation
-        ladders keeps the exact old semantics: a single-action policy fires
-        at most once per session.
+        With node_id/runtime supplied, only that exact scope or compatible
+        legacy unknown-scope history can suppress a decision. Legacy rows
+        block the whole ladder, never provide authority to advance it.
+        Omitting scope keeps the historical session-only lookup. strict=True
+        propagates database errors so a durable worker can retry safely.
         """
         sid = str(session_id or "").strip()
         pid = str(policy_id or "").strip()
@@ -7829,15 +7887,31 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         except (TypeError, ValueError):
             return True  # fail closed on an unreadable rung
         try:
-            row = self._conn.execute(
-                "SELECT 1 FROM policy_actions WHERE session_id = ? "
-                "AND policy_id = ? AND step_index = ? LIMIT 1",
-                [sid, pid, step]).fetchone()
-            return row is not None
+            if node_id is not None or runtime is not None:
+                node, rt = str(node_id or ""), str(runtime or "")
+                if not node or not rt:
+                    raise ValueError("An exact policy latch requires node_id and runtime")
+                # Old writers truncated both native IDs to128 characters.
+                # Unknown-scope prefixes therefore conservatively block the
+                # complete compatible ladder, without renaming audit rows.
+                row = self._fetch(
+                    "SELECT 1 FROM policy_actions WHERE "
+                    "(session_id = ? AND policy_id = ? AND node_id = ? AND runtime = ? AND step_index = ?) "
+                    "OR (session_id IN (?, ?) AND policy_id IN (?, ?) "
+                    "AND (node_id = '' OR runtime = '') "
+                    "AND (node_id = '' OR node_id = ?) AND (runtime = '' OR runtime = ?)) LIMIT 1",
+                    [sid, pid, node, rt, step, sid, sid[:128], pid, pid[:128], node, rt])
+            else:
+                row = self._fetch(
+                    "SELECT 1 FROM policy_actions WHERE session_id = ? "
+                    "AND policy_id = ? AND step_index = ? LIMIT 1", [sid, pid, step])
+            return bool(row)
         except Exception:
+            if strict:
+                raise
             return True
 
-    def query_policy_ladder_state(self, limit: int = 2000) -> dict:
+    def query_policy_ladder_state(self, limit: int = 2000, *, strict=False, node_id=None, runtime=None) -> dict:
         """How far each escalation ladder has climbed.
 
         Returns ``{session_id: {policy_id: {"last_step", "last_fired_at"}}}``
@@ -7850,21 +7924,30 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         replay that, for a ladder ending in ``kill``, would mean killing a
         session twice.
 
-        ``{}`` on any error, which reads as "no ladder has started". That is
-        the safe direction: every ladder is treated as being at rung 0, and
-        rung 0 is still protected by the per-step latch.
+        Scoped queries return only exact node/runtime history. Ambiguous
+        legacy history is excluded and blocks the complete policy through
+        policy_already_fired instead of supplying an escalation rung.
+        strict=True propagates read errors; legacy callers retain {} on error.
         """
         try:
             lim = max(1, min(int(limit or 2000), 20000))
         except (TypeError, ValueError):
             lim = 2000
         try:
-            rows = self._conn.execute(
+            where, params = "", []
+            if node_id is not None or runtime is not None:
+                node, rt = str(node_id or ""), str(runtime or "")
+                if not node or not rt:
+                    raise ValueError("An exact policy ladder requires node_id and runtime")
+                where, params = "WHERE node_id = ? AND runtime = ? ", [node, rt]
+            rows = self._fetch(
                 "SELECT session_id, policy_id, MAX(step_index) AS last_step, "
-                "MAX(created_at) AS last_fired_at FROM policy_actions "
+                "MAX(created_at) AS last_fired_at FROM policy_actions " + where +
                 "GROUP BY session_id, policy_id "
-                "ORDER BY last_fired_at DESC LIMIT ?", [lim]).fetchall()
+                "ORDER BY last_fired_at DESC LIMIT ?", params + [lim])
         except Exception:
+            if strict:
+                raise
             return {}
         out: dict = {}
         for sid, pid, last_step, last_fired_ms in rows:
@@ -7887,7 +7970,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                              evidence: Any = None, enforced: bool = False,
                              result_ok: bool = False,
                              result_detail: str = "",
-                             step_index: int = 0) -> None:
+                             step_index: int = 0, node_id: str = "") -> None:
         """Record one policy decision (acted on or not) at one ladder rung.
 
         Written for EVERY decision including dry-run ``monitor`` ones, which
@@ -7901,8 +7984,8 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         before acting and once after, to fill in the result) updates that row
         rather than inserting a second one.
         """
-        sid = str(session_id or "").strip()[:128]
-        pid = str(policy_id or "").strip()[:128]
+        sid = str(session_id or "").strip()
+        pid = str(policy_id or "").strip()
         if not sid or not pid:
             return
         try:
@@ -7913,17 +7996,17 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
             with self._write_lock:
                 self._conn.execute("""
                     INSERT INTO policy_actions (
-                        session_id, policy_id, step_index, runtime, action,
+                        node_id, session_id, policy_id, step_index, runtime, action,
                         kind, reason, evidence, enforced, result_ok,
                         result_detail, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (session_id, policy_id, step_index) DO UPDATE SET
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (node_id, runtime, session_id, policy_id, step_index) DO UPDATE SET
                         result_ok     = excluded.result_ok,
                         result_detail = excluded.result_detail,
                         enforced      = excluded.enforced
                 """, [
-                    sid, pid, step,
-                    str(runtime or "")[:64],
+                    str(node_id or ""), sid, pid, step,
+                    str(runtime or ""),
                     str(action or "")[:32],
                     str(kind or "")[:64],
                     str(reason or "")[:400],
@@ -7934,7 +8017,8 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                     int(time.time() * 1000),
                 ])
         except Exception:
-            return
+            log.exception("Policy decision persistence failed")
+            raise
 
     # ── Silent failure -> human: delivery latch ─────────────────────────────
     def incident_alert_last_sent(self, session_id: str, kind: str) -> int:
@@ -8216,19 +8300,20 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
             lim = 50
         try:
             rows = self._conn.execute(
-                "SELECT session_id, policy_id, step_index, runtime, action, "
+                "SELECT session_id, policy_id, step_index, runtime, action, node_id, "
                 "kind, reason, evidence, enforced, result_ok, result_detail, "
                 "created_at FROM policy_actions ORDER BY created_at DESC "
                 "LIMIT ?", [lim]).fetchall()
         except Exception:
             return []
-        cols = ["session_id", "policy_id", "step_index", "runtime", "action",
+        cols = ["session_id", "policy_id", "step_index", "runtime", "action", "node_id",
                 "kind", "reason", "evidence", "enforced", "result_ok",
                 "result_detail", "created_at"]
         out = []
         for r in rows:
             d = dict(zip(cols, r))
             d["evidence"] = _from_blob(d.get("evidence"))
+            d["scope_state"] = "exact" if d.get("node_id") and d.get("runtime") else "legacy_unscoped"
             out.append(d)
         return out
 
@@ -8679,16 +8764,17 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
             excl = " AND session_id <> ?"
             params.append(str(exclude_session))
         try:
-            row = self._conn.execute(f"""
+            row = self._fetch(f"""
                 SELECT COUNT(*),
                        SUM(CASE WHEN wrote THEN 1 ELSE 0 END),
                        AVG(tool_calls), stddev_pop(tool_calls), MAX(tool_calls),
                        AVG(write_files), stddev_pop(write_files), MAX(write_files)
                 FROM guard_session_stats
                 WHERE cohort = ? AND updated_at >= ?{excl}
-            """, params).fetchone()
+            """, params)
         except Exception:
             return {}
+        row = row[0] if row else None
         if not row or not row[0]:
             return {}
 
@@ -8708,20 +8794,20 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         try:
             lim = max(1, min(int(max_hosts or 500), 5000))
             try:
-                hosts = self._conn.execute("""
+                hosts = self._fetch("""
                     SELECT host, first_seen, write_first_seen, dir_since
                     FROM guard_egress_hosts
                     WHERE cohort = ? AND last_seen >= ?
                     ORDER BY hits DESC LIMIT ?
-                """, [coh, cutoff, lim]).fetchall()
+                """, [coh, cutoff, lim])
             except Exception:
                 # A store whose direction migration failed still answers the
                 # host question; it just cannot say which hosts are read-only.
-                hosts = [tuple(r) + (None, None) for r in self._conn.execute("""
+                hosts = [tuple(r) + (None, None) for r in self._fetch("""
                     SELECT host, first_seen FROM guard_egress_hosts
                     WHERE cohort = ? AND last_seen >= ?
                     ORDER BY hits DESC LIMIT ?
-                """, [coh, cutoff, lim]).fetchall()]
+                """, [coh, cutoff, lim])]
             out["hosts"] = [r[0] for r in hosts if r and r[0]]
             # When each host ENTERED the cohort's memory. network_egress only
             # treats a host as known once it has been there a while; without
@@ -11627,7 +11713,9 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                 "session_id": sid,
                 "agent_type": str(agent_type or "custom"),
                 "agent_id": str(agent_id or "main"),
-                "node_id": node_id,
+                # Match tool_events_for_span's virtual receiver identity when
+                # an exporter omitted node.id. Explicit source nodes survive.
+                "node_id": node_id or "otlp",
                 "title": str(root_name or service_name or sid)[:200],
                 "started_at": _iso_utc(started),
                 "last_active_at": _iso_utc(last),
@@ -12956,6 +13044,12 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         events the other snapshotted but had not yet written."""
         with self._flush_lock:
             n = self._flush_now_locked()
+        if n:
+            try:
+                from clawmetry.security_ingest import notify_commit
+                notify_commit()
+            except Exception:
+                log.exception("Security ingest wakeup unavailable")
         # Issue #1594 — auto-vacuum check runs OUTSIDE ``_flush_lock`` so
         # the vacuum body (which itself acquires ``_write_lock`` and does
         # an internal CHECKPOINT + possible row delete) does not block
@@ -18414,7 +18508,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                    s.attention_state, s.attention_since, s.attention_signal,
                    s.attention_tool,
                    s.intent, s.intent_source,
-                   s.mode_permission, s.mode_sandbox, s.mode_collaboration,
+                   s.mode_permission, s.mode_sandbox, s.mode_collaboration, s.node_id,
                    -- Trail outcome counts from the git join (plaintext,
                    -- no subjects). 0 when no scan has linked this session.
                    (SELECT COUNT(DISTINCT l.sha) FROM git_session_commits l
@@ -18433,7 +18527,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                 "cost_usd", "message_count", "metadata", "cwd", "git_branch",
                 "attention_state", "attention_since", "attention_signal",
                 "attention_tool", "intent", "intent_source",
-                "mode_permission", "mode_sandbox", "mode_collaboration",
+                "mode_permission", "mode_sandbox", "mode_collaboration", "node_id",
                 "commits"]
         # PR counts need the commit -> PR join; one grouped query for the
         # page rather than a correlated subquery per row.
