@@ -211,10 +211,37 @@ def test_appjs_routes_trail():
     assert "var CM_LANDING_TAB = 'assistant';" in js, (
         "the boot landing must default to the conversational assistant"
     )
-    assert "switchTab(window.CLOUD_MODE ? 'inventory' : CM_LANDING_TAB);" in js, "Hosted users keep the working roster until Assistant can query their node"
+    assert "switchTab(CM_LANDING_TAB);" in js, (
+        "local and hosted must land on the one declared tab"
+    )
     assert "/[#&]session=/.test" in js, "a #session= deep link must still land on Sessions"
     assert "_cmVerdictBadge(tx)" in js, "session rows must carry the verdict badge"
     assert "openTrail(this.getAttribute" in js, "session rows need a one-click Open trail"
+
+
+def test_boot_landing_does_not_fork_on_deployment():
+    """One landing tab for every deployment, hosted included.
+
+    ``_cmBootLanding`` used to read ``window.CLOUD_MODE`` and send hosted
+    users to the roster instead of the declared tab, because Assistant could
+    not reach the user's machine from the cloud at the time. It can now, over
+    the cloud relay, and the relay reports an unreachable machine on the
+    screen with a retry instead of rendering nothing.
+
+    Assert on the function body rather than the whole file: ``CLOUD_MODE``
+    is legitimate everywhere else in app.js, so a substring check over the
+    file would either be vacuous or forbid something real.
+    """
+    js = _read(_APP_JS)
+    start = js.index("function _cmBootLanding()")
+    body = js[start:js.index("\n}", start)]
+    assert "CLOUD_MODE" not in body, (
+        "the landing tab must not depend on where the dashboard is served: "
+        "hosted and local are the same product and the same first screen"
+    )
+    assert "switchTab(CM_LANDING_TAB)" in body, (
+        "the fallback must be the one declared constant, not a second literal"
+    )
 
 
 def test_trail_js_public_surface_and_honest_states():
