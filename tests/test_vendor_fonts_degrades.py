@@ -15,6 +15,7 @@ did not parse. Both looked like "ran and failed".
 The distinction this file protects is narrow and load-bearing:
 
 * could not FETCH  -> SKIP, exit 0, loudly labelled unverified
+* fetched INCONSISTENTLY -> SKIP, exit 0 (tests/test_vendor_fonts_check_readonly.py)
 * fetched and DIFFERS -> DRIFT, non-zero exit, exactly as before
 * could not fetch in GENERATE mode -> still raises, because you cannot write a
   stylesheet you were unable to download
@@ -79,7 +80,7 @@ def test_unreachable_upstream_skips_rather_than_failing(error) -> None:
     """None of these are the contributor's fault, so none may fail the check."""
     module = _load_module()
 
-    def boom(_spec):
+    def boom(_spec, fonts_dir=None):
         raise error
 
     module.build = boom
@@ -102,7 +103,7 @@ def test_real_drift_still_fails() -> None:
     become a way to hide bugs and must be reverted.
     """
     module = _load_module()
-    module.build = lambda _spec: "/* deliberately not what is checked in */"
+    module.build = lambda _spec, fonts_dir=None: "/* deliberately not what is checked in */"
 
     code, out = _run(module, ["vendor_fonts.py", "--check"])
 
@@ -118,7 +119,7 @@ def test_generate_mode_still_raises_when_upstream_is_unreachable() -> None:
     """You cannot write a stylesheet you were unable to fetch."""
     module = _load_module()
 
-    def boom(_spec):
+    def boom(_spec, fonts_dir=None):
         raise OSError("simulated network outage")
 
     module.build = boom
@@ -131,7 +132,7 @@ def test_keyboard_interrupt_is_not_swallowed() -> None:
     """A person pressing Ctrl-C is not an upstream outage."""
     module = _load_module()
 
-    def boom(_spec):
+    def boom(_spec, fonts_dir=None):
         raise KeyboardInterrupt()
 
     module.build = boom
