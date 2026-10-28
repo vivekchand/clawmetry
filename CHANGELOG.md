@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Security: publish GHSA-6r57-3vhv-2wpf and close the stale self-hosted pin
+
+- The file-boundary and loopback-authentication fixes released in 0.12.933 (#6511) now carry a published advisory, [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf), CVSS 3.1 `AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H` (7.5). Everything before 0.12.933 is affected. Reported by Wu Jiaxuan (吴嘉炫); a CVE has been requested through GitHub.
+- The advisory records that the **write** endpoint was reachable over DNS rebinding too, which the report had scored as out of reach. Under rebinding the attacker's domain is both `Origin` and `Host`, so the same-origin write guard matches and permits the request. Confirmed by replaying both vectors through the real application from the published 0.12.932 and 0.12.937 wheels.
+- The documented self-hosted Compose deployment was pinned to `0.12.908`, 25 releases behind and short of the fix. Its auto-pin pull requests are opened with the workflow token, so their checks never start on their own and five of them had been parked since 2026-10-24; #6534 carries the verified `0.12.937` digest and was restarted rather than bypassed.
+- `SECURITY.md` no longer sends reporters to GitHub's private advisory form. It is not enabled on this repository, so that link answered 404 for the reporter who followed it; email is named as the private channel and the published-advisory list is linked.
+
 ### Fixed: responsive live measurements during ingestion (#6519)
 
 - Live frame queries and the sampler read existing preferences through DuckDB's concurrent read cursors. Read-only lookups no longer wait for ingestion's exclusive writer lock.
@@ -28,6 +35,8 @@
 
 
 ### Fixed: enforce local file and request boundaries (#6511)
+
+- Reported by Wu Jiaxuan (吴嘉炫). Tracked as [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf); affects every release before 0.12.933.
 
 - Workspace memory, skill-file and transcript filesystem endpoints compare resolved path components before file access. Workspace checks also run before cached memory reads. Symlinked roots remain supported, and links outside the selected root are refused.
 - Password-free local API access requires a direct loopback peer, a loopback Host and no forwarding headers. Authenticated reverse proxies retain access. Token bootstrap keeps its stricter local-only refusal contract.

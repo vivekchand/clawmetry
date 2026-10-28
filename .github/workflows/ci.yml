@@ -884,6 +884,13 @@ jobs:
       - name: File containment and direct loopback authentication
         run: python3 -m pytest tests/test_file_boundaries.py -q --tb=short
 
+      # The reporter of GHSA-6r57-3vhv-2wpf emailed because SECURITY.md's
+      # private-advisory link 404s: that form is not enabled on this repo.
+      # A security policy whose reporting channel is dead costs reports that
+      # are never sent, so the wording is held, not trusted.
+      - name: Security policy names a reporting channel that works
+        run: python3 -m pytest tests/test_security_policy_report_channel.py -q --tb=short
+
       - name: Email sign-in preserves the linked account and opens the dashboard
         run: python3 -m pytest tests/test_signin_owner_not_rebound.py tests/test_verify_otp_opens_dashboard.py tests/test_verify_otp_rail_selection.py tests/test_auth_detected_token.py tests/test_login_overlay_fetches_real_routes.py -q
 
