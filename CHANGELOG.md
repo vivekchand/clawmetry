@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: every detailed-trace query needs the daemon token, by rule not by list (#6549)
+
+- The daemon query route named each detailed-trace operation that requires the private daemon bearer. That was a second list to keep in step with the operations licensed extensions actually expose, with nothing enforcing the two agreed, so a read added on one side and not the other reached dispatch without the bearer.
+- The requirement is now the operation's `trace_` prefix. It fails closed: a detailed-trace read is covered the day it exists rather than the day someone remembers to list it. `guard_ack` and `set_observation_only` keep their explicit names because they are not trace reads.
+- Verified by 96 focused authentication checks covering every declared trace operation plus one that does not exist, each asserting the store is never reached. Restoring the previous named list fails them, as does matching `trace` as a substring rather than a prefix: `retrace_history` must still reach the store.
+
 ### Fixed: responsive live measurements during ingestion (#6519)
 
 - Live frame queries and the sampler read existing preferences through DuckDB's concurrent read cursors. Read-only lookups no longer wait for ingestion's exclusive writer lock.
