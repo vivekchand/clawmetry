@@ -8,11 +8,6 @@ name: i18n autotranslate
 # Code is signed in. Skips gracefully if the token is unset.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'clawmetry/static/locales/en.json'
-      - 'clawmetry/static/locales/_meta.json'
   workflow_dispatch:
     inputs:
       only:

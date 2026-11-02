@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Every code change cites the product record that justified it.
 
-FLYWHEEL.md section 0c: 8090 Software Factory is the product reviewer. The
+FLYWHEEL.md section 0c: versioned product records inform review. The
 requirement is where a change is justified, the blueprint is where it is
 designed, the code is where it is built -- in that order. This makes the
 first half checkable.
@@ -13,7 +13,12 @@ reviewer would have caught went in with them -- a one-click irreversible data
 delete with no confirmation among them. Nothing in CI noticed, because
 nothing was looking.
 
-A PR passes when its body EITHER cites a Factory record:
+A PR passes when its body cites a versioned local record or project issue:
+
+    Product record: docs/product-records/session-controls.md
+    https://github.com/vivekchand/clawmetry-cloud/issues/123
+
+Historical Factory links remain recognized during migration:
 
     https://factory.8090.ai/project/<uuid>/requirements/<uuid>
     https://factory.8090.ai/project/<uuid>/blueprints/<uuid>
@@ -36,6 +41,7 @@ place a human reads.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -45,6 +51,39 @@ FACTORY_LINK = re.compile(
     r"(requirements|blueprints)/[0-9a-f-]{8,}",
     re.I,
 )
+# Only our repositories, and a product-record path rather than an arbitrary URL.
+GITHUB_RECORD = re.compile(
+    r"https://github\.com/vivekchand/clawmetry(?:-cloud|-pro|-landing)?/"
+    r"(?:issues/[1-9][0-9]*(?![0-9A-Za-z/])|blob/[A-Za-z0-9_.-]+/"
+    r"docs/product-records/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\.md(?=$|[\s)#?]))",
+    re.I,
+)
+LOCAL_RECORD = re.compile(
+    r"^\s*(?:\*\*)?Product record:(?:\*\*)?\s*`?"
+    r"(docs/product-records/[A-Za-z0-9_./-]+\.md)`?\s*$", re.I | re.M,
+)
+
+
+def cites_product_record(body, root=None):
+    """Recognize a record, checking local paths exist without leaving the repo.
+
+    Private GitHub links cannot be fetched by an OSS PR token. Review must read
+    their acceptance criteria; this gate only validates the citation shape.
+    """
+    if FACTORY_LINK.search(body) or GITHUB_RECORD.search(body):
+        return True
+    root = Path(root or Path(__file__).resolve().parents[1]).resolve()
+    for match in LOCAL_RECORD.finditer(body):
+        candidate = (root / match.group(1)).resolve()
+        try:
+            candidate.relative_to(root / 'docs' / 'product-records')
+        except ValueError:
+            continue
+        if candidate.is_file() and candidate.stat().st_size:
+            return True
+    return False
+
+
 # Reason required: a bare "No-PRD:" is not an opt-out, it is a shrug.
 OPT_OUT = re.compile(r"^\s*No-PRD:\s*(?P<reason>\S.*)$", re.I | re.M)
 
@@ -128,8 +167,8 @@ def main() -> int:
         print("product-record gate OK - no product-visible code changed")
         return 0
 
-    if FACTORY_LINK.search(body):
-        print("product-record gate OK - cites a Factory record "
+    if cites_product_record(body):
+        print("product-record gate OK - cites a product record "
               f"({len(code)} code file(s) changed)")
         return 0
 
@@ -147,12 +186,12 @@ def main() -> int:
         f"This PR changes {len(code)} product-visible file(s):\n"
         f"{shown}{more}\n"
         "\n"
-        "FLYWHEEL.md section 0c: 8090 Software Factory is the product reviewer,\n"
+        "FLYWHEEL.md section 0c: write and review the product record first,\n"
         "and a requirement written after the fact reviews nothing. Write the\n"
         "record FIRST - problem, who is hurt, non-goals, alternatives rejected,\n"
         "risk accepted - then link it in the PR body:\n"
         "\n"
-        "    https://factory.8090.ai/project/<uuid>/requirements/<uuid>\n"
+        "    Product record: docs/product-records/<name>.md\n"
         "\n"
         "If this change genuinely does not need one, say so on purpose:\n"
         "\n"

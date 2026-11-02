@@ -344,7 +344,7 @@ jobs:
 
           Opened with the workflow token, so checks do not start on their own: push an empty commit to this branch (or close and reopen) before merging.
 
-          Product record: https://factory.8090.ai/project/b415065f-ab2f-4f53-8864-0c009fd098cb/requirements/49529742-f381-4957-9abf-c92efe7b7d65
+          Product record: https://github.com/vivekchand/clawmetry-cloud/blob/main/docs/product-records/requirements/49529742-f381-4957-9abf-c92efe7b7d65.md
           EOF
           gh pr create --base main --head "$BRANCH" \
             --title "chore: pin self-hosted Compose to verified image v${VERSION}" \

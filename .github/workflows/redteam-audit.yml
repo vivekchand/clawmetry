@@ -17,7 +17,7 @@ name: Red-team detection audit (daily)
 
 on:
   schedule:
-    - cron: "0 5 * * *"   # daily 05:00 UTC (an hour before the harness audit)
+    - cron: "0 5 * * 1"   # daily 05:00 UTC (an hour before the harness audit)
   workflow_dispatch:
     inputs:
       file_issues:

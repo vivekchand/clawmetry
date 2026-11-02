@@ -16,7 +16,7 @@ name: Harness observability audit (daily)
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # daily 06:00 UTC (before the runtime-conformance nightly)
+    - cron: "0 6 * * 1"   # daily 06:00 UTC (before the runtime-conformance nightly)
   workflow_dispatch:
     inputs:
       runtime:

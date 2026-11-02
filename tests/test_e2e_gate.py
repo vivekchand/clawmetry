@@ -441,13 +441,13 @@ def test_fresh_pending_status_still_makes_the_gate_wait(monkeypatch):
     fresh = entry("pending", 60)
     shaped = shape(monkeypatch, combined_of(fresh), [fresh])
     assert shaped == [IN_PROGRESS]
-    assert state_of(evaluate(REQUIRED_SPECS, shaped), "Drift Bot") == "pending"
+    assert state_of(evaluate([Spec("Drift Bot", "drift-bot", skip_if_unreported=True)], shaped), "Drift Bot") == "pending"
 
 
 def test_status_undecided_past_the_window_is_treated_as_unreported(monkeypatch):
     old = entry("pending", STALE + 60)
     assert shape(monkeypatch, combined_of(old), [old]) == []
-    assert state_of(evaluate(REQUIRED_SPECS, []), "Drift Bot") == "passed"
+    assert state_of(evaluate([Spec("Drift Bot", "drift-bot", skip_if_unreported=True)], []), "Drift Bot") == "passed"
 
 
 def test_a_reposted_pending_cannot_reset_its_own_clock(monkeypatch):
@@ -491,7 +491,7 @@ def test_a_red_status_still_blocks_the_merge_at_any_age(monkeypatch, state, conc
         red = entry(state, age)
         shaped = shape(monkeypatch, combined_of(red), [red])
         assert shaped == [{"name": "drift-bot", "status": "completed", "conclusion": conclusion}]
-        assert state_of(evaluate(REQUIRED_SPECS, shaped), "Drift Bot") == "failed"
+        assert state_of(evaluate([Spec("Drift Bot", "drift-bot", skip_if_unreported=True)], shaped), "Drift Bot") == "failed"
 
 
 def test_an_old_success_is_not_aged_out(monkeypatch):
@@ -609,3 +609,20 @@ def test_history_is_read_once_even_with_several_stalled_contexts(monkeypatch):
 def test_the_staleness_window_is_far_wider_than_observed_run_times():
     """Guard the constant: 1.3 min was the slowest real finalisation measured."""
     assert e2e_gate.STALE_PENDING_SECS >= 600
+
+
+def test_retired_vendor_is_not_a_required_context():
+    assert not any(spec.pattern == "drift-bot" for spec in REQUIRED_SPECS)
+    assert any(spec.pattern == "PR cites the product record that justified it"
+               and not spec.skip_if_unreported for spec in REQUIRED_SPECS)
+
+
+def test_missing_portable_product_record_blocks_the_merge():
+    results = evaluate(REQUIRED_SPECS, _all_green_runs(except_label="Product record"))
+    assert state_of(results, "Product record") == "pending"
+
+
+def test_failing_portable_record_blocks_the_merge():
+    checks = _all_green_runs(except_label="Product record")
+    checks.append(run("PR cites the product record that justified it", "failure", run_id=999))
+    assert state_of(evaluate(REQUIRED_SPECS, checks), "Product record") == "failed"
