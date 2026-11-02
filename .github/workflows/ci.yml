@@ -520,7 +520,7 @@ jobs:
       - name: Merge gate self-test
         run: |
           python3 scripts/e2e_gate.py --list
-          python3 -m pytest tests/test_e2e_gate.py -q
+          python3 -m pytest tests/test_e2e_gate.py tests/test_queue_priority.py -q
 
       # Guard files must exist, must not be hollowed out, and the ratchets may
       # only move upward. This is the mechanical half of agent-proofing: it

@@ -1,4 +1,4 @@
-name: C6 daily health check (branch-protection audit -- all 3 repos)
+name: C6 weekly health check (branch-protection audit -- all 3 repos)
 
 # Audits whether required E2E status checks are configured on main for
 # ALL 3 repos: clawmetry, clawmetry-cloud, clawmetry-landing.
@@ -24,7 +24,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 
 on:
   schedule:
-    - cron: '0 9 * * *'
+    - cron: "0 9 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -75,7 +75,7 @@ jobs:
           # mechanism.
           # "E2E Gate (required)" is the aggregator job from e2e-gate.yml (PR #4111,
           # merged 2026-07-27); it polls the 4 underlying OSS E2E workflows.
-          # drift-bot is required too, but aggregated inside "E2E Gate (required)"
+          # Portable product-record validation is aggregated inside "E2E Gate (required)"
           # (scripts/e2e_gate.py), not named separately here.
           ALL_CHECKS = {
               "clawmetry": [
