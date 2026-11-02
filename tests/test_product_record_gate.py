@@ -206,3 +206,11 @@ def test_local_record_must_exist_and_stay_in_record_directory(tmp_path):
     assert not prg.cites_product_record('Product record: docs/product-records/../../README.md', tmp_path)
     (records / 'alias.md').symlink_to(outside)
     assert not prg.cites_product_record('Product record: docs/product-records/alias.md', tmp_path)
+
+
+def test_unreadable_diff_is_not_an_empty_code_change(monkeypatch):
+    def failed(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, args[0])
+    monkeypatch.setattr(prg.subprocess, 'check_output', failed)
+    monkeypatch.setenv('PR_BODY', 'No-PRD: test input')
+    assert prg.main() == 1

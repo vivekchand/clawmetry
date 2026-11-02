@@ -1,6 +1,6 @@
 name: i18n autotranslate
 
-# Fans new/changed English keys out to every enabled locale via the Claude API,
+# On manual dispatch, fans changed English keys out to enabled locales via Claude,
 # then opens a "chore(i18n): sync translations" PR. English (en.json) is the
 # single source of truth. Idempotent: only the delta is translated.
 # Uses the Claude Code CLI (no API key). Set CLAUDE_CODE_OAUTH_TOKEN (from

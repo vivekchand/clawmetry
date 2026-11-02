@@ -138,8 +138,8 @@ def changed_files(base: str, head: str) -> list[str]:
             ["git", "diff", "--name-only", f"{base}...{head}"],
             text=True, stderr=subprocess.DEVNULL,
         )
-    except subprocess.CalledProcessError:
-        return []
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError("Cannot determine changed files; refusing an empty-diff pass") from error
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
@@ -162,7 +162,11 @@ def main() -> int:
     base = os.environ.get("BASE_SHA") or "origin/main"
     head = os.environ.get("HEAD_SHA") or "HEAD"
 
-    code = needs_record(changed_files(base, head))
+    try:
+        code = needs_record(changed_files(base, head))
+    except RuntimeError as error:
+        print(f"product-record gate FAILED - {error}", file=sys.stderr)
+        return 1
     if not code:
         print("product-record gate OK - no product-visible code changed")
         return 0

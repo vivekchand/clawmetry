@@ -1,6 +1,6 @@
-name: Harness observability audit (daily)
+name: Harness observability audit (weekly)
 
-# Every day: sync the upstream source of every FREE agent runtime ClawMetry
+# Every Monday: sync the upstream source of every FREE agent runtime ClawMetry
 # monitors (scripts/harness/manifest.json = openclaw + nemoclaw), then have Claude
 # compare what each harness EXPOSES against what our OSS adapter CAPTURES, and file
 # a GitHub issue for each gap so it can be picked up. This is how we keep up as the
@@ -16,7 +16,7 @@ name: Harness observability audit (daily)
 
 on:
   schedule:
-    - cron: "0 6 * * 1"   # daily 06:00 UTC (before the runtime-conformance nightly)
+    - cron: "0 6 * * 1"   # Monday 06:00 UTC (before the runtime-conformance nightly)
   workflow_dispatch:
     inputs:
       runtime:
