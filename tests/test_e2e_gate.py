@@ -484,8 +484,8 @@ def test_a_stall_is_dated_from_the_latest_verdict_not_the_first_ever(monkeypatch
 def test_a_red_status_still_blocks_the_merge_at_any_age(monkeypatch, state, conclusion):
     """Staleness is only ever read off a status with no verdict.
 
-    FLYWHEEL 1f calls a red drift-bot non-negotiable, and an old red one is
-    still red. `error` is the transport-level failure and must not soften.
+    An explicitly requested commit-status check stays red at any age.
+    `error` is the transport-level failure and must not soften.
     """
     for age in (60, STALE + 99999):
         red = entry(state, age)
@@ -510,10 +510,12 @@ def test_a_spec_without_skip_if_unreported_stays_pending_when_stalled(monkeypatc
     assert state_of(evaluate([spec], []), "Syntax & Lint") == "pending"
 
 
-def test_a_stalled_reporter_does_not_wedge_the_whole_gate():
-    """The regression in full: every other check green, drift-bot skipped."""
-    results = evaluate(REQUIRED_SPECS, _all_green_runs(except_label="Drift Bot"))
+def test_an_optional_unreported_reporter_does_not_wedge_the_whole_gate():
+    """An optional legacy status may skip while every mandatory check passes."""
+    optional = Spec("Optional legacy status", "legacy-review-status", skip_if_unreported=True)
+    results = evaluate([*REQUIRED_SPECS, optional], _all_green_runs())
     assert [r.spec.label for r in results if r.state != "passed"] == []
+    assert "skipped" in next(r.detail for r in results if r.spec == optional)
 
 
 # ── failing towards waiting, never towards merging ────────────────────────────────────────────────────────────────
