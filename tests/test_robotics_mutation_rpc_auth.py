@@ -42,6 +42,50 @@ def test_dashboard_generic_mutation_refused_before_store(
     assert response.json == {"error": "unauthorized"}
 
 
+# Detailed-trace reads were gated by naming each one, which made this a second
+# list to keep in step with the private package's own operations. A read added
+# there and not here was served without the daemon's private token. The gate is
+# a prefix now, so an operation nobody has written yet is already covered --
+# which is what the last parameter here stands for.
+@pytest.mark.parametrize("operation", [
+    "trace_runs", "trace_detail", "trace_events", "trace_spans", "trace_artifact",
+    "trace_artifacts", "trace_notes", "trace_guard_get", "trace_jobs", "trace_annotate",
+    "trace_guard_set", "trace_evaluate", "trace_share", "trace_not_yet_invented"])
+def test_every_detailed_trace_operation_is_refused_before_the_store(
+        generic_rpc, monkeypatch, operation):
+    query, local_server, client = generic_rpc
+    monkeypatch.setattr(local_server, "_token", "private-test-token")
+    monkeypatch.setattr(query, "_store", lambda: pytest.fail("Unauthorized trace read reached the store"))
+    response = client.post("/__local_query__/robotics_query",
+        json={"kwargs": {"operation": operation, "args": {"run_id": "a" * 32, "operator": True}}},
+        headers={"Authorization": "Bearer forged", "Origin": "https://untrusted.example"},
+        environ_overrides={"REMOTE_ADDR": "10.0.0.2"})
+    assert response.status_code == 401
+    assert response.json == {"error": "unauthorized"}
+
+
+# The prefix must not quietly widen the gate to unrelated robotics operations.
+def test_the_prefix_gate_does_not_capture_unrelated_operations(generic_rpc, monkeypatch):
+    query, local_server, client = generic_rpc
+    monkeypatch.setattr(local_server, "_token", "private-test-token")
+    reached = []
+
+    def store():
+        reached.append(True)
+        raise RuntimeError("store stub")
+
+    monkeypatch.setattr(query, "_store", store)
+    response = client.post("/__local_query__/robotics_query",
+        json={"kwargs": {"operation": "retrace_history", "args": {}}},
+        headers={"Origin": "https://untrusted.example"},
+        environ_overrides={"REMOTE_ADDR": "10.0.0.2"})
+    # "retrace_history" contains "trace" but does not start with "trace_", so
+    # this rule must not claim it: it reaches the store, where the route's own
+    # handling takes over. A substring test here would have swallowed it.
+    assert reached == [True]
+    assert response.status_code != 401
+
+
 @pytest.mark.parametrize("body", [[], [1], False, 0, "", "invalid", None,
     {"kwargs": []}, {"kwargs": False}, {"kwargs": 0},
     {"kwargs": {"operation": []}}, {"kwargs": {"operation": {}}}])
