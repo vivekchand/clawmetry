@@ -21,10 +21,12 @@ No shell command runs anywhere here; destructive commands are strings inside
 span attributes.
 """
 import argparse
+import hashlib
 import importlib
 import json
 import os
 import pathlib
+import re
 import tempfile
 import threading
 import time
@@ -220,7 +222,16 @@ def test_a_span_raised_incident_reaches_the_hosted_guard_tab_through_the_encrypt
 
     signals = [r for r in store.query_recent_loop_signals(limit=200, since_minutes=0)
                if r.get("session_id") == "conv-hosted"]
-    assert any(r["signature"] == "daemon_detect_file_blast_radius" for r in signals)
+    blast_rows = [r for r in signals if r["signature"].startswith("daemon_detect_file_blast_radius:")]
+    assert len(blast_rows) == 1
+    blast = blast_rows[0]
+    assert re.fullmatch(r"daemon_detect_file_blast_radius:[0-9a-f]{24}", blast["signature"])
+    scope = ["otlp", RUNTIME, "conv-hosted"]
+    digest = hashlib.sha256(json.dumps(scope, separators=(",", ":")).encode()).hexdigest()[:24]
+    assert blast["signature"] == "daemon_detect_file_blast_radius:" + digest
+    assert blast["details"]["node_id"] == "otlp"
+    assert blast["details"]["kind"] == "file_blast_radius"
+    assert blast["details"]["incident_id"]
     # Filed under the runtime the telemetry names, not the Free-install guess.
     assert {r["agent_type"] for r in signals} == {RUNTIME}
 

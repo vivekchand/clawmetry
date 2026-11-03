@@ -22416,6 +22416,22 @@ def _agent_inventory_incidents(recent: list, session_id: str, runtime: str,
         return []
 
 
+def _detector_fact_key(row):
+    """Readable exact keys in memory; native session aliases remain compatible."""
+    sid = str(row.get("session_id") or "")
+    node = str(row.get("node_id") or "")
+    runtime = str(row.get("runtime") or _detector_runtime(sid, row.get("agent_type") or "") or "")
+    return (node, runtime, sid) if node and runtime else sid
+
+
+def _detector_first_seen_key(row):
+    key = _detector_fact_key(row)
+    # Daemon state is JSON. Keep explicit readable identities, not tuple
+    # object keys or an opaque substitute for the native session ID.
+    return json.dumps(["scope", *key] if isinstance(key, tuple) else ["legacy", key],
+                      separators=(",", ":"))
+
+
 def _detector_session_facts(sessions: list, state: dict, now: float,
                             store=None) -> dict:
     """``session_id -> {cost_usd, bad_for_seconds, session_seconds, cwd,
@@ -22437,6 +22453,7 @@ def _detector_session_facts(sessions: list, state: dict, now: float,
         sid = str(s.get("session_id") or "")
         if not sid:
             continue
+        runtime = str(s.get("runtime") or _detector_runtime(sid, s.get("agent_type") or "") or "")
         cwd = _session_row_cwd(s)
         try:
             cost = float(s.get("cost_usd") or 0)
@@ -22451,7 +22468,7 @@ def _detector_session_facts(sessions: list, state: dict, now: float,
                 session_seconds = max(0.0, float(_seconds_since(s.get("started_at"))))
         except Exception:
             session_seconds = 0.0
-        started = first_seen.get(sid)
+        started = first_seen.get(_detector_first_seen_key(s))
         # How long since the session last did anything, for blocked_on_user:
         # a question asked two minutes ago is a conversation, one asked an
         # hour ago is a silent stop.
@@ -22462,16 +22479,19 @@ def _detector_session_facts(sessions: list, state: dict, now: float,
                 idle_seconds = max(0.0, float(_seconds_since(la)))
         except Exception:
             idle_seconds = 0.0
-        facts[sid] = {
+        row_facts = {
             "cost_usd": cost,
             "bad_for_seconds": max(0.0, now - started) if started else 0.0,
             "session_seconds": session_seconds,
             "idle_seconds": idle_seconds,
             "pending_approvals": int(pending_by_sid.get(sid, 0)),
-            "runtime": _detector_runtime(sid, s.get("agent_type") or ""),
+            "runtime": runtime,
+            "node_id": str(s.get("node_id") or ""),
             "cwd": cwd,
             "agent_id": str(s.get("agent_id") or ""),
         }
+        facts[_detector_fact_key(s)] = row_facts
+        facts[sid] = row_facts  # same object: legacy single-row consumers
     return facts
 
 
@@ -22865,13 +22885,51 @@ def _epoch_of(ts: Any) -> int:
     return int(dt.timestamp())
 
 
+_GUARD_POLICY_LOCK = threading.RLock()
+
+
 def _apply_guard_policies(store, state: dict, incidents: list,
-                          facts: dict) -> int:
+                          facts: dict, *, deliver_alert=None, strict=False) -> int:
+    # Both the periodic pass and committed-event service share the same
+    # durable policy latch. Serialize claim and dispatch, not only the write.
+    pending_alerts = []
+    def collect_alert(incident, policy_id, decision):
+        pending_alerts.append((incident, policy_id, decision))
+        return {"delivered": False, "reason": "Notification delivery pending"}
+    with _GUARD_POLICY_LOCK:
+        result = _apply_guard_policies_locked(
+            store, state, incidents, facts,
+            deliver_alert=deliver_alert or collect_alert, strict=strict)
+    # A slow notification must not hold the policy claim/dispatch lock.
+    # The incremental service supplies a durable-outbox callback instead.
+    if deliver_alert is None:
+        from clawmetry import incident_alerts
+        for incident, policy_id, decision in pending_alerts:
+            delivery = incident_alerts.deliver_incident(store, incident, source="policy",
+                                                        force=True, policy_id=policy_id)
+            try:
+                _record_policy_step(
+                    store, session_id=decision.get("session_id") or "", policy_id=policy_id,
+                    node_id=decision.get("node_id"), strict=strict,
+                    runtime=decision.get("runtime") or "", action="alert",
+                    kind=decision.get("kind") or "", reason=decision.get("reason") or "",
+                    evidence=decision.get("evidence"), enforced=False,
+                    result_ok=bool(delivery.get("delivered")),
+                    result_detail=str(delivery.get("reason") or "No notification delivered"),
+                    step_index=decision.get("step_index") or 0)
+            except Exception:
+                log.exception("Policy notification result could not be recorded")
+    return result
+
+
+def _apply_guard_policies_locked(store, state: dict, incidents: list,
+                                 facts: dict, *, deliver_alert=None, strict=False) -> int:
     """Evaluate Guard policies against this tick's incidents and act.
 
     Returns the number of decisions reached (including dry-run ones, which
     are recorded but never signal a process). Never raises into the daemon
-    loop: a policy failure must not stop telemetry ingest.
+    loop by default. The incremental worker requests strict failures so its
+    durable cursor cannot pass an unavailable policy response.
     """
     if os.environ.get(_GUARD_POLICIES_ON, "1") == "0":
         return 0
@@ -22881,30 +22939,87 @@ def _apply_guard_policies(store, state: dict, incidents: list,
         from clawmetry import policy_engine as _pe
     except Exception as e:  # noqa: BLE001
         log.warning("guard: policy_engine import failed: %s", e)
+        if strict:
+            raise
         return 0
     try:
-        policies = store.query_session_policies(enabled_only=True) or []
+        policies = store.query_session_policies(enabled_only=True, **({"strict": True} if strict else {})) or []
     except Exception as e:  # noqa: BLE001
         log.warning("guard: policy read failed: %s", e)
+        if strict:
+            raise
         return 0
     if not policies:
         return 0
 
-    # How far each escalation ladder has already climbed. An unreadable
-    # ladder table degrades to {} — every ladder treated as being at rung 0,
-    # which is still protected by the per-rung latch below.
-    try:
-        ladder_state = store.query_policy_ladder_state() or {}
-    except Exception as e:  # noqa: BLE001
-        log.debug("guard: ladder state read failed (%s); assuming rung 0", e)
-        ladder_state = {}
+    # The pure engine keys its facts/ladder by native session ID. Evaluate
+    # each node/runtime independently so a colliding native ID cannot merge
+    # decisions or borrow another scope's ladder or session facts.
+    decisions = []
+    groups = {}
+    normalized_incidents = []
+    for incident in incidents:
+        if not isinstance(incident, dict):
+            continue
+        sid = str(incident.get("session_id") or "")
+        fact = facts.get(sid) or {}
+        node = str(incident.get("node_id") or fact.get("node_id") or "")
+        runtime = str(incident.get("runtime") or fact.get("runtime") or "")
+        if node and runtime:
+            exact_fact = facts.get((node, runtime, sid))
+            if exact_fact is not None:
+                fact = exact_fact
+            elif (str(fact.get("node_id") or ""), str(fact.get("runtime") or "")) != (node, runtime):
+                fact = {}
+        if strict and (not node or not runtime):
+            raise ValueError("Strict policy evaluation requires exact node_id and runtime")
+        scope = (node, runtime) if node and runtime else None
+        if scope:
+            fact_matches = (str(fact.get("node_id") or "") == node
+                            and str(fact.get("runtime") or "") == runtime)
+            if not fact_matches:
+                if strict:
+                    raise ValueError("Policy incident and session facts have different scopes")
+                log.warning("guard: exact incident has no matching scoped session facts; response skipped")
+                continue
+            scoped_fact = fact
+            incident = {**incident, "node_id": node, "runtime": runtime}
+        else:
+            scoped_fact = fact
+        group = groups.setdefault(scope, {"incidents": [], "facts": {}})
+        group["incidents"].append(incident)
+        normalized_incidents.append(incident)
+        group["facts"][sid] = scoped_fact
 
-    try:
-        decisions = _pe.evaluate(incidents, policies, facts,
-                                 ladder_state=ladder_state) or []
-    except Exception as e:  # noqa: BLE001
-        log.warning("guard: evaluate errored: %s", e)
-        return 0
+    incidents = normalized_incidents
+    for scope, group in groups.items():
+        query_kw = {"strict": True} if strict else {}
+        if scope:
+            query_kw.update(node_id=scope[0], runtime=scope[1])
+        try:
+            ladder_state = store.query_policy_ladder_state(**query_kw) or {}
+        except Exception as exc:  # noqa: BLE001
+            if strict:
+                raise
+            if scope:
+                # A version-skewed store cannot establish exact scope. Do
+                # not drop scope and poison future exact latches.
+                log.warning("guard: exact policy ladder unavailable (%s)", exc)
+                continue
+            log.debug("guard: legacy ladder read failed (%s); assuming rung 0", exc)
+            ladder_state = {}
+        try:
+            selected = _pe.evaluate(group["incidents"], policies, group["facts"],
+                                    ladder_state=ladder_state) or []
+        except Exception as exc:  # noqa: BLE001
+            log.warning("guard: evaluate errored: %s", exc)
+            if strict:
+                raise
+            continue
+        for decision in selected:
+            if scope:
+                decision.update(node_id=scope[0], runtime=scope[1])
+            decisions.append(decision)
     if not decisions:
         return 0
 
@@ -22922,7 +23037,9 @@ def _apply_guard_policies(store, state: dict, incidents: list,
             step = max(0, int(d.get("step_index") or 0))
         except (TypeError, ValueError):
             step = 0
-        if _policy_step_already_fired(store, sid, pid, step):
+        if _policy_step_already_fired(
+                store, sid, pid, step, strict=strict, node_id=d.get("node_id"),
+                runtime=d.get("runtime") if d.get("node_id") else None):
             continue
 
         actuating = _pe.is_actuating(action)
@@ -22936,10 +23053,15 @@ def _apply_guard_policies(store, state: dict, incidents: list,
             # entitled webhook) and say exactly where it went, or why not.
             inc = _incident_for_decision(incidents, d)
             try:
-                from clawmetry import incident_alerts as _ia
-                res = _ia.deliver_incident(store, inc, source="policy",
-                                           force=True, policy_id=pid)
+                if deliver_alert is not None:
+                    res = deliver_alert(inc, pid, d)
+                else:
+                    from clawmetry import incident_alerts as _ia
+                    res = _ia.deliver_incident(store, inc, source="policy",
+                                               force=True, policy_id=pid)
             except Exception as _ae:  # noqa: BLE001
+                if strict:
+                    raise
                 res = {"delivered": False, "delivered_via": [],
                        "reason": f"alert failed: {type(_ae).__name__}"}
             detail = str(res.get("reason") or "alert: nothing delivered")[:400]
@@ -22956,12 +23078,15 @@ def _apply_guard_policies(store, state: dict, incidents: list,
         try:
             _record_policy_step(
                 store, session_id=sid, policy_id=pid,
+                node_id=d.get("node_id"), strict=strict,
                 runtime=d.get("runtime") or "", action=action,
                 kind=d.get("kind") or "", reason=d.get("reason") or "",
                 evidence=d.get("evidence"), enforced=will_enforce,
                 result_ok=False, result_detail=detail, step_index=step)
         except Exception as e:  # noqa: BLE001
             log.warning("guard: could not record decision for %s: %s", sid, e)
+            if strict:
+                raise
             continue
         acted += 1
 
@@ -22978,6 +23103,7 @@ def _apply_guard_policies(store, state: dict, incidents: list,
         try:
             _record_policy_step(
                 store, session_id=sid, policy_id=pid,
+                node_id=d.get("node_id"), strict=strict,
                 runtime=d.get("runtime") or "", action=action,
                 kind=d.get("kind") or "", reason=d.get("reason") or "",
                 evidence=d.get("evidence"), enforced=True,
@@ -23000,12 +23126,15 @@ def _incident_for_decision(incidents: list, decision: dict) -> dict:
     for inc in incidents or []:
         if not isinstance(inc, dict):
             continue
+        if decision.get("node_id") and (inc.get("node_id") != decision["node_id"]
+                or inc.get("runtime") != decision.get("runtime")):
+            continue
         if str(inc.get("session_id") or "") == sid and (
                 not kind or str(inc.get("kind") or "") == kind):
             return inc
     return {
         "kind": kind or "policy", "session_id": sid,
-        "runtime": decision.get("runtime") or "",
+        "runtime": decision.get("runtime") or "", "node_id": decision.get("node_id") or "",
         "severity": "warning",
         "title": str(decision.get("reason") or "Guard policy matched"),
         "detail": str(decision.get("reason") or ""),
@@ -23013,7 +23142,7 @@ def _incident_for_decision(incidents: list, decision: dict) -> dict:
     }
 
 
-def _record_policy_step(store, **kw) -> None:
+def _record_policy_step(store, *, strict=False, **kw) -> None:
     """Write one policy-decision row, tolerating a pre-ladder store.
 
     Same version-skew hazard as ``_policy_step_already_fired``: the daemon
@@ -23025,6 +23154,14 @@ def _record_policy_step(store, **kw) -> None:
     Raises on a genuine store failure so the caller's fail-closed handler
     still refuses to act on an unlatched decision.
     """
+    if kw.get("node_id"):
+        # Exact scope must survive transport and persistence unchanged.
+        store.record_policy_action(**kw)
+        return
+    kw.pop("node_id", None)
+    if strict:
+        store.record_policy_action(**kw)
+        return
     try:
         store.record_policy_action(**kw)
         return
@@ -23035,7 +23172,7 @@ def _record_policy_step(store, **kw) -> None:
 
 
 def _policy_step_already_fired(store, session_id: str, policy_id: str,
-                               step: int) -> bool:
+                               step: int, *, strict=False, node_id=None, runtime=None) -> bool:
     """Per-rung latch check that tolerates an older store.
 
     ``policy_already_fired`` grew a ``step_index`` argument when escalation
@@ -23050,11 +23187,24 @@ def _policy_step_already_fired(store, session_id: str, policy_id: str,
     Fails CLOSED (returns True = do not act) for any *other* error, which is
     the right direction when the alternative is acting twice.
     """
+    if node_id is not None or runtime is not None:
+        try:
+            return bool(store.policy_already_fired(
+                session_id, policy_id, step, node_id=node_id, runtime=runtime,
+                **({"strict": True} if strict else {})))
+        except Exception:
+            if strict:
+                raise
+            return True  # A scoped read must never downgrade to a broad latch.
+    if strict:
+        return bool(store.policy_already_fired(session_id, policy_id, step, strict=True))
     try:
         return bool(store.policy_already_fired(session_id, policy_id, step))
     except TypeError:
         pass  # older signature — fall through
     except Exception:
+        if strict:
+            raise
         return True
     try:
         # Pre-ladder store: it can only latch per (session, policy). Rungs
@@ -23068,6 +23218,8 @@ def _policy_step_already_fired(store, session_id: str, policy_id: str,
             return True
         return bool(store.policy_already_fired(session_id, policy_id))
     except Exception:
+        if strict:
+            raise
         return True
 
 
@@ -23168,7 +23320,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
         log.debug("capability gaps: exporter unavailable: %s", _ce)
     for s in candidates:
         sid = s.get("session_id") or ""
-        facts = facts_by_session.get(sid) or {}
+        facts = facts_by_session.get(_detector_fact_key(s)) or {}
         # Derived from the session id, not from agent_type: see
         # _detector_runtime. Getting this wrong silently merges every runtime
         # into one cohort.
@@ -23257,6 +23409,15 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         observed_at=int(now * 1000))
         except Exception as exc:
             log.warning("Incident reconciliation unavailable for %s: %s", sid, exc, exc_info=True)
+        if hasattr(store, "record_incident_observation"):
+            from clawmetry.incident_store import DURABLE_KINDS
+            # Both producers share one durable graph. A failed or uncertain
+            # observation cannot fall back to an unscoped live signal or act
+            # through the periodic path after the incremental path withheld it.
+            incidents = [inc for inc in incidents
+                         if inc.get("kind") not in DURABLE_KINDS
+                         or (inc.get("kind") in episodes
+                             and episodes[inc["kind"]].get("state") == "active")]
         if incidents:
             all_incidents.extend(incidents)
             # Remember when this session FIRST looked wrong, so the next tick
@@ -23265,8 +23426,9 @@ def _emit_detector_incidents(store, state: dict) -> int:
             # FOLDER, not a stretch of the session going off track, and letting
             # it start the clock would inflate the spend at risk of a real
             # trajectory incident found later.
-            bad_sessions.add(sid)
-            first_seen_memo.setdefault(sid, now)
+            seen_key = _detector_first_seen_key(s)
+            bad_sessions.add(seen_key)
+            first_seen_memo.setdefault(seen_key, now)
 
         # The workspace surface: what the tool stream cannot see (a poisoned
         # .git/config, an autorun task, a tampered agent hook). Same incident
@@ -23299,7 +23461,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
         # Fold the LOUDEST incident into the heartbeat slice. run_all orders by
         # spend at risk first and severity second, so on a session with a known
         # cost this is the most expensive finding, not merely the most severe.
-        top = incidents[0]
+        top = _det.sort_incidents(incidents)[0]
         # An edited CLAUDE.md is worth a row in Guard, not a line on the desk
         # device: an info-level inventory finding never rides the heartbeat.
         if (top in supply and str(top.get("severity") or "") == "info"):
@@ -26431,6 +26593,15 @@ def run_daemon() -> None:
         _ae.daemon_ready(config.get("node_id"))
     except Exception as _e:
         log.warning(f"approval delivery layer not started: {_e}")
+
+    # Security evidence must also reach inspection when a session ends
+    # between trajectory ticks. The worker uses this daemon's writer handle.
+    try:
+        from clawmetry import security_ingest as _security_ingest
+        from clawmetry import local_store as _security_store
+        _security_ingest.start(_security_store.get_store())
+    except Exception as _security_error:
+        log.warning("Security ingest service unavailable: %s", _security_error)
 
     # ── Decision-sampling cron (issue #1615) ──────────────────────────
     # Daily-at-midnight thread that picks N random sessions from yesterday

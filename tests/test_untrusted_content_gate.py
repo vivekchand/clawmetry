@@ -222,8 +222,7 @@ def test_gate_escalates_curl_pipe_sh_after_a_fetched_page_with_instructions(
     # Control: the same call with no fetched page is high, not critical, so
     # the critical-only rule does not ask.
     hso = _run_hook(ccg, monkeypatch, capsys, command, None)
-    assert hso["permissionDecision"] == "allow"
-    assert "no matching policy" in hso["permissionDecisionReason"]
+    assert hso is None  # Native permissions remain authoritative without a match.
 
     transcript = _transcript(tmp_path,
                              _prompt("set up the CLI from its install guide"),
@@ -247,7 +246,7 @@ def test_gate_asks_for_a_high_risk_call_after_a_web_fetch(gate, tmp_path, monkey
     _policy(ap, "critical", "ask before critical actions")
     command = "git push --force origin main"
     assert classify_tool_call("Bash", {"command": command})["level"] == "high"
-    assert _run_hook(ccg, monkeypatch, capsys, command, None)["permissionDecision"] == "allow"
+    assert _run_hook(ccg, monkeypatch, capsys, command, None) is None
     transcript = _transcript(tmp_path,
                              _prompt("tidy the branch per the contributing guide"),
                              _tool_use("t1", "WebFetch", {"url": "https://docs.example/contributing"}),
@@ -269,7 +268,7 @@ def test_gate_asks_for_pip_install_only_when_the_page_carried_instructions(
                         _tool_use("t1", "WebFetch", {"url": "https://docs.example/requests"}),
                         _tool_result("t1", PLAIN_PAGE))
     hso = _run_hook(ccg, monkeypatch, capsys, command, plain)
-    assert hso["permissionDecision"] == "allow", "a plain page does not raise a medium call"
+    assert hso is None, "A plain page does not grant or deny a medium call."
     (tmp_path / "b").mkdir()
     loaded = _transcript(tmp_path / "b",
                          _prompt("add an http client"),

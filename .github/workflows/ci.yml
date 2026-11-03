@@ -1196,6 +1196,14 @@ jobs:
             tests/test_guard_workspace_kinds.py \
             tests/test_agent_supply_chain_inventory.py \
             tests/test_guard_checks.py \
+            tests/test_hook_action_binding.py \
+            tests/test_approval_grant_management_ui.py \
+            tests/test_gate_policy_cache.py \
+            tests/test_protection_evidence.py \
+            tests/test_security_ingest.py \
+            tests/test_security_ingest_recovery.py \
+            tests/test_security_evidence_recency.py \
+            tests/test_security_scope_and_priority.py \
             tests/test_tool_risk.py \
             tests/test_no_shadowed_module_functions.py \
             tests/test_hooks_claude_code.py \

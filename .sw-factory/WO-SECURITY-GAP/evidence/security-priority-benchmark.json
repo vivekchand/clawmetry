@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "environment": "Isolated temporary DuckDB, local workstation, harmless synthetic arguments, real evaluator/store/outbox, no actual tool execution or notification delivery",
+  "method": "Each sample resets inspection progress and finding/outbox tables; one complete priority+FIFO pass. First sample cold, next five warm. CPU sleep is calculated from current duty formula, not executed. No full-queue wall-clock drain was measured.",
+  "priority_first_pass": [
+    {
+      "historical_receipts": 100000,
+      "historical_session_scopes": 1,
+      "fresh_receipts": 1,
+      "pages_per_sample": {
+        "priority": 128,
+        "fifo": 128
+      },
+      "samples": 6,
+      "warm_samples": 5,
+      "warm_mean": {
+        "wall_ms": 137.542,
+        "process_cpu_ms": 160.323,
+        "fresh_durable_outbox_ms": 112.756,
+        "budgeted_total_cycle_s": 2.138
+      },
+      "cold_sample": {
+        "wall_ms": 163.663,
+        "process_cpu_ms": 196.977,
+        "fresh_durable_outbox_ms": 136.984,
+        "budgeted_total_cycle_s": 2.626
+      },
+      "fresh_episode_state": "active",
+      "fresh_outbox_rows": 1,
+      "fifo_position_after_first_pass": 128,
+      "priority_position_after_first_pass": 100001
+    },
+    {
+      "historical_receipts": 100000,
+      "historical_session_scopes": 10,
+      "fresh_receipts": 1,
+      "pages_per_sample": {
+        "priority": 128,
+        "fifo": 128
+      },
+      "samples": 6,
+      "warm_samples": 5,
+      "warm_mean": {
+        "wall_ms": 345.019,
+        "process_cpu_ms": 381.342,
+        "fresh_durable_outbox_ms": 302.454,
+        "budgeted_total_cycle_s": 5.085
+      },
+      "cold_sample": {
+        "wall_ms": 359.408,
+        "process_cpu_ms": 389.713,
+        "fresh_durable_outbox_ms": 314.181,
+        "budgeted_total_cycle_s": 5.196
+      },
+      "fresh_episode_state": "active",
+      "fresh_outbox_rows": 1,
+      "fifo_position_after_first_pass": 128,
+      "priority_position_after_first_pass": 100001
+    },
+    {
+      "historical_receipts": 100000,
+      "historical_session_scopes": 128,
+      "fresh_receipts": 1,
+      "pages_per_sample": {
+        "priority": 128,
+        "fifo": 128
+      },
+      "samples": 6,
+      "warm_samples": 5,
+      "warm_mean": {
+        "wall_ms": 3315.589,
+        "process_cpu_ms": 3519.432,
+        "fresh_durable_outbox_ms": 3004.816,
+        "budgeted_total_cycle_s": 46.926
+      },
+      "cold_sample": {
+        "wall_ms": 3279.619,
+        "process_cpu_ms": 3475.053,
+        "fresh_durable_outbox_ms": 2957.181,
+        "budgeted_total_cycle_s": 46.334
+      },
+      "fresh_episode_state": "active",
+      "fresh_outbox_rows": 1,
+      "fifo_position_after_first_pass": 128,
+      "priority_position_after_first_pass": 100001
+    }
+  ],
+  "source": {
+    "baseline_revision_before_priority": "f9ee5b6e02",
+    "priority_service_sha256": "6237126a3b8b5d8ef43c88012cd146ffca49138592e2d02b69948dbef482cbea",
+    "priority_query_sha256": "43c2ad1b146e1840a8a170dd105c08b9f14b0f03692fa13aea4089125b59f9ef"
+  },
+  "retention": {
+    "maximum_changes": 100000,
+    "prune_batch": 10000,
+    "normal_writer_retained_receipts_less_than": 110000,
+    "million_retained_receipts_reachable_normally": false
+  },
+  "baseline_fifo_only": {
+    "scope_distribution": "Interleaved journal rows across declared session scopes; harmless echo calls, old2020 source timestamps. Actual temporary DuckDB and complete process_batch, no tool execution.",
+    "full_queue_measured": false,
+    "early_pages": [
+      {
+        "receipts": 10000,
+        "scopes": 128,
+        "samples": 6,
+        "warm_samples": 5,
+        "wall_ms": 334.65,
+        "process_cpu_ms": 371.43,
+        "budgeted_page_s": 4.952,
+        "equivalent_tail_minutes_at_observed_page_cost": 6.45
+      },
+      {
+        "receipts": 100000,
+        "scopes": 1,
+        "samples": 6,
+        "warm_samples": 5,
+        "wall_ms": 55.86,
+        "process_cpu_ms": 62.29,
+        "budgeted_page_s": 1.056,
+        "equivalent_tail_minutes_at_observed_page_cost": 13.75
+      },
+      {
+        "receipts": 100000,
+        "scopes": 10,
+        "samples": 6,
+        "warm_samples": 5,
+        "wall_ms": 89.04,
+        "process_cpu_ms": 96.88,
+        "budgeted_page_s": 1.307,
+        "equivalent_tail_minutes_at_observed_page_cost": 17.02
+      },
+      {
+        "receipts": 100000,
+        "scopes": 128,
+        "samples": 6,
+        "warm_samples": 5,
+        "wall_ms": 347.39,
+        "process_cpu_ms": 386.23,
+        "budgeted_page_s": 5.15,
+        "equivalent_tail_minutes_at_observed_page_cost": 67.05
+      },
+      {
+        "receipts": 100000,
+        "scopes": 100000,
+        "samples": 6,
+        "warm_samples": 5,
+        "wall_ms": 331.95,
+        "process_cpu_ms": 372.92,
+        "budgeted_page_s": 4.972,
+        "equivalent_tail_minutes_at_observed_page_cost": 64.74
+      }
+    ],
+    "late_pages_starting_at_position_85000": [
+      {
+        "receipts": 100000,
+        "scopes": 1,
+        "samples": 4,
+        "warm_samples": 3,
+        "wall_ms": 82.81,
+        "process_cpu_ms": 101.9,
+        "budgeted_page_s": 1.359,
+        "equivalent_tail_minutes_at_observed_page_cost": 17.69
+      },
+      {
+        "receipts": 100000,
+        "scopes": 10,
+        "samples": 4,
+        "warm_samples": 3,
+        "wall_ms": 256.07,
+        "process_cpu_ms": 270.68,
+        "budgeted_page_s": 3.609,
+        "equivalent_tail_minutes_at_observed_page_cost": 46.99
+      },
+      {
+        "receipts": 100000,
+        "scopes": 128,
+        "samples": 4,
+        "warm_samples": 3,
+        "wall_ms": 2689.81,
+        "process_cpu_ms": 2757.96,
+        "budgeted_page_s": 36.773,
+        "equivalent_tail_minutes_at_observed_page_cost": 478.81
+      }
+    ]
+  },
+  "limits": [
+    "Calculated duty-cycle sleeps were not executed; no full historical drain was timed.",
+    "Interleaved128-scope workload is a stress distribution, not evidence of a typical customer workload.",
+    "Fresh response means durable local incident and notification outbox enqueue; notification network delivery and native actuation were not measured.",
+    "The7.5percent target uses process CPU and has a60second sleep ceiling; it is not an isolated per-thread hard CPU or latency guarantee.",
+    "Sustained arrival beyond processing capacity remains backlog; priority processing does not claim that all prior evidence was inspected."
+  ]
+}

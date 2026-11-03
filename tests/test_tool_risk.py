@@ -271,14 +271,11 @@ def test_session_allow_never_raises_on_corrupt_file(tmp_home):
     assert approvals.check_session_allow("s", "Bash", {"command": "x"}) is True
 
 
-def test_session_allow_same_command_across_harness_aliases(tmp_home):
-    """The key uses the canonical tool category, so an approval recorded
-    from a Claude Code ``Bash`` row also covers the same session's ``exec``
-    naming of the identical command (same normalisation match_policy
-    uses)."""
+def test_session_allow_requires_the_exact_tool(tmp_home):
+    """AC-GOV-SBG-001.1: tool aliases do not share remembered authority."""
     sid = "openclaw:agent:main:x"
     approvals.add_session_allow(sid, "Bash", {"command": "npm ci"})
-    assert approvals.check_session_allow(sid, "exec", {"command": "npm ci"})
+    assert not approvals.check_session_allow(sid, "exec", {"command": "npm ci"})
 
 
 # ── hardening added after the runtime-shape research pass ────────────────

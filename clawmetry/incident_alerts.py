@@ -23,6 +23,7 @@ Operators mute or pin channels per monitor in ``~/.clawmetry/builtin_monitors.js
 (the ``agent_attention`` monitor), the same prefs the Alerts tab writes.
 
 Dedup: one delivery per (session, kind) per ``cooldown_sec`` (30 min default),
+with node and runtime scope for security findings,
 latched in DuckDB (``incident_alerts``) so a daemon restart does not re-fire
 every channel. The latch row also records ``delivered_via``.
 
@@ -528,7 +529,8 @@ def deliver_incident(store: Any, incident: dict, *,
             return out
 
         cd = DEFAULT_COOLDOWN_SEC if cooldown_sec is None else max(0, int(cooldown_sec))
-        last_ms = _last_sent(store, sid, kind)
+        latch_kind = _cooldown_kind(incident, kind)
+        last_ms = _last_sent(store, sid, latch_kind)
         now_ms = int(time.time() * 1000)
         if cd > 0 and last_ms and (now_ms - last_ms) < cd * 1000:
             ago = max(1, int((now_ms - last_ms) / 60000))
@@ -583,7 +585,7 @@ def deliver_incident(store: Any, incident: dict, *,
         if not via:
             out["reason"] = "no channel accepted the alert (banner write failed)"
             return out
-        _record(store, sid, kind, via, sev)
+        _record(store, sid, latch_kind, via, sev)
         out["delivered"] = True
         out["delivered_via"] = via
         reason = "alerted via " + ", ".join(via)
@@ -599,6 +601,18 @@ def deliver_incident(store: Any, incident: dict, *,
 
 
 _MEMO: dict = {}
+
+
+def _cooldown_kind(incident, kind):
+    """A matching session ID on another node must retain its own alert."""
+    from hashlib import sha256
+    from clawmetry.detector_money import SECURITY_KINDS
+    node, runtime = incident.get("node_id"), incident.get("runtime")
+    if kind not in SECURITY_KINDS or not isinstance(node, str) or not node \
+            or not isinstance(runtime, str) or not runtime:
+        return kind
+    scope = json.dumps([node, runtime], separators=(",", ":"))
+    return kind + ":" + sha256(scope.encode()).hexdigest()[:24]
 
 
 def _last_sent(store: Any, sid: str, kind: str) -> int:

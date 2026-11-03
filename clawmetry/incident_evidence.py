@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from clawmetry.incident_store import LIFECYCLE_KINDS, clean_refs, epoch_ms
+from clawmetry.incident_store import DURABLE_KINDS, LIFECYCLE_KINDS, clean_refs, epoch_ms
 
 
 def call_id(data, *, include_id=False, _depth=0):
@@ -101,17 +101,22 @@ def reference(step):
 
 def attach_evidence(incident, steps):
     """Resolve window-relative localization before that window moves."""
-    if incident.get("kind") not in LIFECYCLE_KINDS:
+    if incident.get("kind") not in DURABLE_KINDS:
         return incident
     first = incident.get("first_bad_step")
     if not isinstance(first, int):
         return incident
-    selected = [s for s in steps if s["i"] >= first]
+    if incident.get("kind") in LIFECYCLE_KINDS:
+        selected = [s for s in steps if s["i"] >= first]
+    else:
+        indices = incident.pop("_evidence_step_indices", None)
+        indices = {i for i in indices if type(i) is int and i >= 0} if isinstance(indices, (list, tuple, set)) else set()
+        selected = [s for s in steps if s.get("i") in indices]
     if incident["kind"] == "repeated_tool_failure":
         tool = (incident.get("evidence") or {}).get("tool")
         selected = [s for s in selected if s["kind"] == "tool_result"
                     and s["is_error"] and (s["tool"] or "tool") == tool]
-    else:
+    elif incident["kind"] == "stuck_loop":
         selected = [s for s in selected if s["kind"] == "tool_call"]
         incident["evidence"]["call_signatures"] = list(dict.fromkeys(
             (s["tool"], s["args_hash"]) for s in selected))[:16]
@@ -162,13 +167,13 @@ def reconcile_session(store, incidents, events, steps, *, session_id, runtime,
     """
     if not completed or not events or not steps or not node_id:
         return {}
-    enabled = LIFECYCLE_KINDS.difference(disabled)
+    enabled = DURABLE_KINDS.difference(disabled)
     current = {inc["kind"]: inc for inc in incidents if inc.get("kind") in enabled}
     previous = store.query_incident_heads(session_id=session_id, runtime=runtime,
                                           node_id=node_id)
     for episode in previous:
         kind = episode["kind"]
-        if kind not in enabled or episode["state"] == "recovered":
+        if kind not in enabled.intersection(LIFECYCLE_KINDS) or episode["state"] == "recovered":
             continue
         proof = positive_recovery(episode, steps,
                                   before_index=current.get(kind, {}).get("first_bad_step"))
@@ -196,6 +201,8 @@ def reconcile_ended_sessions(store, active_session_ids, *, disabled=(), observed
     from clawmetry import detectors
     windows = {}
     for episode in store.query_incident_heads():
+        if episode["kind"] not in LIFECYCLE_KINDS:
+            continue
         if episode["session_id"] in active_session_ids or episode["kind"] in disabled:
             continue
         key = (episode["session_id"], episode["runtime"], episode["node_id"])

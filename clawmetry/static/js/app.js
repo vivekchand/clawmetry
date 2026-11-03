@@ -10999,6 +10999,7 @@ var LOOP_KIND_LABEL = {
   action_discrepancy: 'Carried on after a failure',
   file_blast_radius: 'Changed a lot of files at once',
   credential_access: 'Opened a password or key file',
+  security_threat: 'Tool arguments match a security signature',
   network_egress: 'Contacted somewhere new',
   privilege_change: 'Asked for admin rights',
   untrusted_package_source: 'Asked a tool to install a package from a path or remote',
@@ -11007,7 +11008,7 @@ var LOOP_KIND_LABEL = {
   crashed: 'Crashed and restarted',
   // Content: text the agent read tried to give it instructions.
   prompt_injection: 'Read text that tried to give it orders',
-  inspection_incomplete: 'Some tool content could not be fully inspected',
+  inspection_incomplete: 'Some tool content or command syntax could not be inspected',
   // Fleet-wide: several unrelated agents doing the same unusual thing.
   // Mirrors clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Acting in step with unrelated agents',
@@ -33434,6 +33435,7 @@ var GUARD_KIND_LABEL = {
   // Behaviour: is this agent doing something it does not normally do?
   file_blast_radius: 'Wide or destructive file changes',
   credential_access: 'Read credentials',
+  security_threat: 'Security action signature',
   network_egress: 'Unusual network destination',
   privilege_change: 'Privilege change',
   untrusted_package_source: 'Package from an untrusted source',
@@ -33443,7 +33445,7 @@ var GUARD_KIND_LABEL = {
   crashed: 'Crashed and restarted',
   // Content: does text the agent read try to give it instructions?
   prompt_injection: 'Prompt injection',
-  inspection_incomplete: 'Credential inspection incomplete',
+  inspection_incomplete: 'Inspection incomplete',
   // Fleet: several unrelated agents doing the same unusual thing. Keys
   // mirror clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Coordinated with unrelated agents',
@@ -33841,6 +33843,58 @@ async function _loadSelfReportsPanel(sessionId) {
   } catch (e) { /* the panel is optional decoration on the transcript */ }
 }
 
+function guardProtectionEvidence(session) {
+  var proof = session && session.protection;
+  if (!proof || proof.schema_version !== 1) {
+    return '<details class="guard-protection"><summary>Protection evidence unavailable</summary>' +
+      '<p>This snapshot has no protection evidence. Update this node and wait for its next snapshot.</p></details>';
+  }
+  var gate = proof.pre_tool || {}, config = gate.configuration || {}, last = gate.last_decision;
+  var configWords = {configured: 'Configured, not verified', not_configured: 'Not configured', broken: 'Configuration needs review',
+    stale: 'Configuration record is old', unknown: 'Configuration unknown'};
+  var gateWords = configWords[config.state] || configWords.unknown;
+  if (Array.isArray(config.matchers) && config.matchers.length) gateWords += ' (' + config.matchers.slice(0, 12).join(', ') + ')';
+  if (config.checked_at) gateWords += '. Checked ' + guardAgo(config.checked_at);
+  if (last) {
+    var verdicts = {pending: 'Review pending', approved: 'Approval recorded', auto_approved: 'Approval recorded',
+      denied: 'Denial recorded', expired: 'Review expired', timeout: 'Review timed out'};
+    gateWords += '. ' + (verdicts[last.result] || 'Review record available');
+    if (last.observed_at) gateWords += ' ' + guardAgo(last.observed_at);
+    if (!last.recent) gateWords += ' (historical)';
+  }
+  var isolation = proof.isolation || {};
+  var isolationWords = isolation.state === 'configured' ? 'Setting recorded, isolation unverified'
+    : isolation.state === 'not_configured' ? 'Native sandbox is off'
+    : isolation.state === 'stale' ? 'Sandbox setting is old' : 'Isolation unknown';
+  var control = proof.containment || {};
+  var controlWords = control.state === 'available' ? 'Controls available, outcome unverified'
+    : control.state === 'unavailable' ? 'Controls unavailable' : 'Control capability unknown';
+  var inspection = proof.node_inspection || {};
+  var inspectionWords = {inspected: 'A page of activity was inspected', partial: 'Some activity could not be fully inspected',
+    backlog: 'More activity remains to inspect', unavailable: 'Inspection unavailable', disabled: 'Inspection is off',
+    stale: 'No recent inspection record', unknown: 'Inspection evidence unknown'};
+  var inspectionText = inspectionWords[inspection.state] || inspectionWords.unknown;
+  if (inspection.backfill_pending === true && ['partial', 'inspected', 'backlog'].indexOf(inspection.state) !== -1) {
+    inspectionText = Number.isInteger(inspection.priority_processed) && inspection.priority_processed > 0
+      ? 'Newer records were processed while earlier activity remains pending inspection'
+      : 'Earlier activity remains pending inspection';
+  }
+  if (inspection.state === 'partial' && inspection.history_gap === true) inspectionText += '. Earlier activity is unavailable for inspection';
+  if (inspection.last_pass_ms) inspectionText += '. Last pass ' + guardAgo(inspection.last_pass_ms);
+  var rows = [
+    ['Activity', proof.observation && proof.observation.state === 'pending' ? 'Waiting for recorded activity' : 'Recorded activity'],
+    ['Node security inspection (all runtimes)', inspectionText],
+    ['Before tools run', gateWords],
+    ['Process controls', controlWords],
+    ['File and network isolation', isolationWords],
+    ['Independent code checks', 'Evidence unavailable in this view']
+  ];
+  return '<details class="guard-protection"><summary>Protection evidence</summary><dl>' + rows.map(function (row) {
+    return '<div><dt>' + guardEsc(row[0]) + '</dt><dd>' + guardEsc(row[1]) + '</dd></div>';
+  }).join('') + '</dl><p>A setting or review record does not prove that every action was blocked.</p>' +
+    '<p>Initial service failure remains a coverage gap. Verify subprocess isolation and code changes with independent checks.</p></details>';
+}
+
 function loadGuardSessions() {
   var el = document.getElementById('guard-sessions-body');
   if (!el) return;
@@ -34001,7 +34055,7 @@ function loadGuardSessions() {
       }
 
       html += '<tr><td title="' + guardEsc(s.session_id) + '">' +
-        guardEsc((s.title || s.session_id || '').slice(0, 48)) + '</td>' +
+        guardEsc((s.title || s.session_id || '').slice(0, 48)) + guardProtectionEvidence(s) + '</td>' +
         '<td>' + guardEsc(s.runtime) + '</td>' +
         '<td>' + statusCell + '</td>' +
         '<td>' + riskCell + '</td>' +
@@ -34480,7 +34534,7 @@ function loadGuardActions() {
     // of ONE policy are indistinguishable from three unrelated decisions.
     var anyLadder = rows.some(function (a) { return Number(a.step_index) > 0; });
     var html = '<table class="data-table"><thead><tr>' +
-      '<th>When</th><th>Session</th>' + (anyLadder ? '<th>Step</th>' : '') +
+      '<th>When</th><th>Scope</th><th>Session</th>' + (anyLadder ? '<th>Step</th>' : '') +
       '<th>Action</th><th>Enforced</th><th>Why</th><th>Result</th>' +
       '</tr></thead><tbody>';
     rows.forEach(function (a) {
@@ -34491,6 +34545,8 @@ function loadGuardActions() {
           (si + 1) + '</td>';
       }
       html += '<tr><td>' + guardEsc(guardAgo(new Date(a.created_at).toISOString())) + '</td>' +
+        '<td>' + (a.node_id ? guardEsc(a.node_id) : '<span class="muted">Node unknown</span>') +
+          '<br>' + (a.runtime ? guardEsc(a.runtime) : '<span class="muted">Runtime unknown</span>') + '</td>' +
         '<td title="' + guardEsc(a.session_id) + '">' + guardEsc(String(a.session_id).slice(0, 20)) + '</td>' +
         stepCell +
         '<td>' + guardEsc(a.action) + '</td>' +

@@ -13,10 +13,12 @@ Everything here runs through the real receiver (``_process_otlp_traces`` /
 this file: the destructive command is a string inside a span attribute, which
 is exactly what an exported trace is.
 """
+import hashlib
 import importlib
 import json
 import os
 import pathlib
+import re
 import tempfile
 import time
 
@@ -231,11 +233,20 @@ def test_a_destructive_tool_span_raises_a_guard_incident_labelled_as_observed(st
     delivered, policy_batches = _guard_tick(store, monkeypatch)
 
     rows = [r for r in _signals(store, "conv-canary")
-            if r["signature"] == "daemon_detect_file_blast_radius"]
+            if r["signature"].startswith("daemon_detect_file_blast_radius:")]
     assert rows, "a recursive delete at the root in a received trace raised nothing"
+    assert len(rows) == 1
     row = rows[0]
+    assert re.fullmatch(r"daemon_detect_file_blast_radius:[0-9a-f]{24}", row["signature"])
+    scope = ["otlp", "support_agent", "conv-canary"]
+    digest = hashlib.sha256(json.dumps(scope, separators=(",", ":")).encode()).hexdigest()[:24]
+    assert row["signature"] == "daemon_detect_file_blast_radius:" + digest
+    assert row["agent_type"] == "support_agent"
     assert row["severity"] == "critical"
     details = row["details"]
+    assert details["node_id"] == "otlp"
+    assert details["kind"] == "file_blast_radius"
+    assert details["incident_id"]
     assert details["observation"] == {
         "source": "received_telemetry", "signals": ["trace"],
         "after_the_fact": True, "prevented": False,
@@ -245,6 +256,26 @@ def test_a_destructive_tool_span_raises_a_guard_incident_labelled_as_observed(st
     # The same incident reaches the policy pass every other runtime uses.
     assert any(i.get("kind") == "file_blast_radius"
                for batch in policy_batches for i in batch)
+
+
+@pytest.mark.parametrize("source_node", [None, "exporter-node"])
+def test_received_trace_session_and_tool_events_keep_the_same_node_scope(store, source_node):
+    """AC-OBS-OTG-001.1/.7: materialization retains the event producer's node identity."""
+    request = trace_service_pb2.ExportTraceServiceRequest.FromString(_traces([
+        _chat_span(0x01, "conv-node-scope"),
+        _tool_span(0x02, "bash", {"command": "echo harmless"}, conv="conv-node-scope"),
+    ]))
+    if source_node is not None:
+        request.resource_spans[0].resource.attributes.append(_kv("node.id", s=source_node))
+    _d._process_otlp_traces(request.SerializeToString())
+    expected_node = source_node or "otlp"
+    sessions = [row for row in store.query_sessions_table(limit=50)
+                if row["session_id"] == "conv-node-scope"]
+    assert len(sessions) == 1
+    assert sessions[0]["node_id"] == expected_node
+    events = _tool_events(store, "conv-node-scope")
+    assert events
+    assert {event["node_id"] for event in events} == {expected_node}
 
 
 def test_failing_tool_spans_are_failed_tool_results_the_detectors_count(store):
