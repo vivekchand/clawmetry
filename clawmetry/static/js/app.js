@@ -32286,6 +32286,11 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       d = await r.json();
       if (!r.ok) throw new Error(d.error || ('http ' + r.status));
     }
+    if (d.binary || d.preview_type === 'image' || _cmSetupImageName(file.path || group.root || group.label) || _cmSetupBinaryContent(d.content)) {
+      var host = document.getElementById(hostId);
+      if (host) _cmSetupMountPreview(host, d, file.path || (group.root || '').split('/').pop() || group.label || 'file');
+      return;
+    }
     var content = d.content || '';
     var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
     var mstr = d.mtime ? new Date(d.mtime * 1000).toLocaleString() : '';
