@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixed: proper Setup image previews (#6568)
+
+- Setup displays supported local images and lets you save the original file. Text files remain readable source.
+- Binary files, damaged images and large images show clear fallback messages. Hosted images without synced original bytes explain how to open the file on the agent machine.
+- Selected files show their folder and size. The Memory and Skills browsers use the same image preview.
+- Verified with 29 focused checks, existing hosted Setup controls, and the real Codex PNG in Chrome. PNG and SVG API responses preserve the original bytes.
+
+
 ### Fixed: every detailed-trace query needs the daemon token, by rule not by list (#6549)
 
 - The daemon query route named each detailed-trace operation that requires the private daemon bearer. That was a second list to keep in step with the operations licensed extensions actually expose, with nothing enforcing the two agreed, so a read added on one side and not the other reached dispatch without the bearer.
