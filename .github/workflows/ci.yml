@@ -680,6 +680,11 @@ jobs:
       - name: Runtime memory catalog
         run: python3 -m pytest tests/test_runtime_memory_catalog.py -q
 
+      - name: Setup file previews preserve bytes and reject binary text
+        run: |
+          python3 -m pytest tests/test_setup_file_preview.py -q
+          node --test tests/test_setup_file_preview.js
+
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) -- the
       # 2026-08-29 Windows "PyPI install failed" brick. Runs here because
