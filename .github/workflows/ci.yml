@@ -968,6 +968,10 @@ jobs:
       # one thing standing between a Windows user and no alert at all.
       # Running the same file on all three runners costs a second and is the
       # only place this code ever executes natively on Windows or macOS.
+      - name: Trial recovery and license writer races (native, all three OS)
+        timeout-minutes: 3
+        run: python3 -m pytest tests/test_trial_extension.py tests/test_license_write_races.py -q --tb=short
+
       - name: Desktop notification backends (native, all three OS)
         timeout-minutes: 3
         run: python3 -m pytest tests/test_desktop_notify_clickable.py -q --tb=short
@@ -1855,6 +1859,7 @@ jobs:
             tests/test_e2e_oss_all_tabs.py \
             tests/test_assistant_evidence_browser.py \
             tests/test_node_activity_browser.py \
+            tests/test_trial_offer_browser.py \
             -v --tb=short -m 'not quarantine' \
             --junitxml=/tmp/junit-e2e-critical.xml
 

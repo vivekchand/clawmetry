@@ -35,7 +35,7 @@ function check(name, fn) {
   const record = function (e) {
     if (e) {
       failures++;
-      console.log('  FAIL ' + name + ' -- ' + (e && e.message ? e.message : e));
+      console.log('  FAIL ' + name + ' -- ' + (e && e.stack ? e.stack : e));
     } else {
       console.log('  ok   ' + name);
     }
@@ -71,8 +71,8 @@ function makeEl(tag) {
     _listeners: {},
     _text: '',
     get innerHTML() { return this._html; },
-    set innerHTML(v) { this._html = String(v); this.children = parseChildren(this._html); },
-    get textContent() { return this._text; },
+    set innerHTML(v) { this._html = String(v); this.children = parseChildren(this._html); this.children.forEach(c => { c.parentNode = this; }); },
+    get textContent() { return this._text || this._html.replace(/<[^>]*>/g, ''); },
     set textContent(v) { this._text = String(v); },
     setAttribute: function (k, v) { this._attrs[k] = String(v); },
     getAttribute: function (k) { return Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null; },
@@ -86,7 +86,10 @@ function makeEl(tag) {
     },
     addEventListener: function (t, fn) { (this._listeners[t] = this._listeners[t] || []).push(fn); },
     removeEventListener: function () {},
-    focus: function () {},
+    get isConnected() { let n=this; while(n) { if(n.tagName==='BODY'||n.tagName==='HEAD') return true; n=n.parentNode; } return false; },
+    getClientRects: function () { let n=this; while(n) { if(n.hidden||n.style.display==='none') return []; n=n.parentNode; } return this.isConnected ? [{}] : []; },
+    contains: function (node) { while(node) { if(node===this) return true; node=node.parentNode; } return false; },
+    focus: function () { let n=this; while(n&&!n._document) n=n.parentNode; if(n) n._document.activeElement=this; },
     click: function (ev) { (this._listeners.click || []).forEach(function (f) { f(ev || {}); }); },
     querySelector: function (sel) { return this.querySelectorAll(sel)[0] || null; },
     querySelectorAll: function (sel) { return queryIn(this, sel); },
@@ -117,10 +120,14 @@ function parseChildren(html) {
     const selfClosed = m[4] === '/' || VOID_TAGS[tag];
     if (closing) {
       // Never pop past the root on unbalanced markup.
-      if (stack.length > 1) stack.pop();
+      if (stack.length > 1) { const closed=stack.pop(); closed._html=html.slice(closed._contentStart,m.index); }
       continue;
     }
     const el = makeEl(tag);
+    el._contentStart = re.lastIndex;
+    for (const attr of attrs.matchAll(/([\w:-]+)(?:="([^"]*)")?/g)) el._attrs[attr[1]]=attr[2]||'';
+    const style=/\bstyle="([^"]*)"/.exec(attrs);
+    if(style) style[1].split(';').forEach(rule => { const pair=rule.split(':'); if(pair.length===2) el.style[pair[0].trim()]=pair[1].trim(); });
     const idM = /\bid="([^"]*)"/.exec(attrs);
     if (idM) el.id = idM[1];
     const clM = /\bclass="([^"]*)"/.exec(attrs);
@@ -153,9 +160,11 @@ function matchSimple(el, s) {
   if (!el) return false;
   if (s.charAt(0) === '#') return el.id === s.slice(1);
   if (s.charAt(0) === '.') return (' ' + el.className + ' ').indexOf(' ' + s.slice(1) + ' ') !== -1;
+  const presence=/^(?:([a-z]+))?\[([\w-]+)\]$/.exec(s);
+  if(presence) return (!presence[1]||el.tagName===presence[1].toUpperCase())&&el.getAttribute(presence[2])!==null;
   const attr = /\[([\w-]+)="?([^\]"]*)"?\]/.exec(s);
   if (attr) return el.getAttribute && el.getAttribute(attr[1]) === attr[2];
-  if (/^[a-z]+$/.test(s)) return el.tagName === s.toUpperCase();
+  if (/^[a-z][a-z0-9]*$/.test(s)) return el.tagName === s.toUpperCase();
   return false;
 }
 
@@ -238,6 +247,8 @@ function makeEnv(opts) {
     Math: Math,
     encodeURIComponent: encodeURIComponent,
   };
+  document.activeElement = null;
+  body._document = head._document = document;
   env.window = env;
   env.__translationMode = opts.translationMode || 'none';
   env.CLOUD_MODE = opts.cloud || false;
@@ -290,6 +301,7 @@ function run(env) {
     vm.runInContext('var DICT={},EN=' + JSON.stringify(env.__translationMode === 'loaded' ? english : {})
       + ';var LANG="en";' + translate + ';window.t=T;', env);
   }
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clawmetry/static/js/trial-offer.js'), 'utf8'), env, { filename: 'trial-offer.js' });
   vm.runInContext(source, env, { filename: 'trial-pill.js' });
   return env;
 }
@@ -433,9 +445,10 @@ check('modal offers both tiers on both intervals, at CM_PLANS prices', function 
     const h = m.innerHTML;
     includes(h, 'Starter'); includes(h, 'Pro');
     includes(h, 'Monthly'); includes(h, 'Annual');
-    // Annual is preselected, so the annual figures are what render first.
-    includes(h, '$90', 'starter annual price missing');
-    includes(h, '$190', 'pro annual price missing');
+    // Monthly is the explicit lowest-commitment starting point.
+    includes(h, '$9<', 'starter monthly price missing');
+    includes(h, '$19<', 'pro monthly price missing');
+    eq(m.querySelector('[data-interval="month"]').getAttribute('aria-pressed'), 'true');
   });
 });
 
@@ -459,7 +472,7 @@ check('switching to Monthly repaints monthly prices', function () {
     const monthly = m.querySelectorAll('[data-interval="month"]')[0];
     assert(monthly, 'no monthly button');
     monthly.click();
-    const h = m.querySelector('#cm-up-tiers').innerHTML;
+    const h = m.querySelectorAll('.cm-offer-tier-price').map(function (price) { return price.innerHTML; }).join(' ');
     // Exact figures, anchored. "$9" is a substring of "$90" and "$19" of
     // "$190", so a loose contains() passes on the ANNUAL render and proves
     // nothing about the switch.
@@ -467,7 +480,7 @@ check('switching to Monthly repaints monthly prices', function () {
     includes(h, '$19<', 'monthly pro price missing after switch');
     assert(h.indexOf('$90<') === -1 && h.indexOf('$190<') === -1,
       'annual prices survived the switch to monthly: ' + h.slice(0, 300));
-    includes(h, 'node/mo', 'per-unit suffix did not switch to monthly');
+    includes(h, '/ node/mo', 'per-unit suffix did not switch to monthly');
   });
 });
 
@@ -518,7 +531,7 @@ check('cloud checkout goes to the cloud billing endpoint with the account key', 
     return flush().then(function () {
       assert(hit, 'cloud never called /api/billing/checkout');
       eq(hit.cm_key, 'cm_live_abc', 'account key not forwarded');
-      eq(hit.plan, 'yearly');
+      eq(hit.plan, 'monthly');
     });
   });
 });
@@ -807,13 +820,13 @@ check('a dead status endpoint leaves the header clean, not half-rendered', funct
         openModal(env);
         const modal = env.document.getElementById('cm-upgrade-modal');
         includes(modal.innerHTML, 'Your trial has ' + count + (count === 1 ? ' day left.' : ' days left.'));
-        includes(modal.innerHTML, 'Includes a free $149 desk device.');
-        includes(modal.innerHTML, '$190<');
-        includes(modal.innerHTML, 'node/yr');
+        includes(modal.innerHTML, '$149 desk device after payment.');
+        includes(modal.innerHTML, '$19<');
+        includes(modal.innerHTML, '/ node/mo');
         assert(!/\{(?:days|hours|value)\}/.test(modal.innerHTML), 'unexpanded message parameter');
         modal.querySelectorAll('[data-interval="month"]')[0].click();
-        includes(modal.querySelector('#cm-up-tiers').innerHTML, '$19<');
-        includes(modal.querySelector('#cm-up-tiers').innerHTML, 'node/mo');
+        includes(modal.querySelectorAll('.cm-offer-tier-price').map(function (price) { return price.innerHTML; }).join(' '), '$19<');
+        includes(modal.querySelectorAll('.cm-offer-tier-price').map(function (price) { return price.innerHTML; }).join(' '), '/ node/mo');
       });
     });
     check('trial hours retain grammar with translation state ' + mode + ', count ' + count, function () {
@@ -824,6 +837,144 @@ check('a dead status endpoint leaves the header clean, not half-rendered', funct
         includes(slotHtml(env), count + (count === 1 ? ' hour remaining' : ' hours remaining'));
         assert(slotHtml(env).indexOf('1 hours') === -1, 'incorrect singular hour');
       });
+    });
+  });
+});
+
+
+check('recovery is requested only after decline and preserves optional feedback on retry', function () {
+  let claims=0;
+  const env=makeEnv({fetch: function(url,init) {
+    if(url==='/api/trial/extension') {
+      if(init.method==='GET') return {ok:true,eligible:true,free_days:60};
+      claims++;
+      if(claims===1) return Promise.reject(new Error('offline'));
+      return {ok:true,grant_state:'applied',trial_end:'2027-01-05T08:00:00Z'};
+    }
+    return {tier:'trial',expired:true,days_until_expiry:-1};
+  }});
+  run(env);
+  return flush().then(function() {
+    const modal=openModal(env);
+    assert(!env.__fetches.some(r=>r.url==='/api/trial/extension'), 'offer was checked without user intent');
+    modal.querySelector('.cm-offer-more').click();
+    return flush().then(function() {
+      const panel=modal.querySelector('.cm-offer-recovery');
+      assert(modal.querySelector('.cm-offer-content').hidden);
+      includes(panel.innerHTML,'No automatic charge');
+      eq(claims,0,'opening the survey consumed the offer');
+      panel.querySelector('select').value='setup';
+      panel.querySelector('textarea').value='Make setup easier';
+      panel.querySelector('[data-claim]').click();
+      return flush().then(function() {
+        eq(panel.querySelector('textarea').value,'Make setup easier');
+        assert(!panel.querySelector('[data-claim]').disabled);
+        panel.querySelector('[data-claim]').click();
+        return flush().then(function() {
+          eq(claims,2);
+          includes(modal.querySelector('.cm-offer-body').textContent,'2027');
+          assert(panel.querySelector('[data-done]'));
+          const request=env.__fetches.filter(r=>r.url==='/api/trial/extension'&&r.init.method==='POST')[0];
+          eq(JSON.parse(request.init.body).feedback,'Make setup easier');
+        });
+      });
+    });
+  });
+});
+
+check('ineligible recovery retains back and free choices without promising a grant', function() {
+  const env=makeEnv({fetch:function(url) {
+    return url==='/api/trial/extension' ? {ok:true,eligible:false,message:'Already used'} : {tier:'trial',expired:true};
+  }});
+  run(env);
+  return flush().then(function() {
+    const modal=openModal(env);
+    modal.querySelector('.cm-offer-more').click();
+    return flush().then(function() {
+      const panel=modal.querySelector('.cm-offer-recovery');
+      assert(!panel.querySelector('[data-claim]'));
+      includes(panel.querySelector('.cm-offer-status').textContent,'Already used');
+      assert(panel.querySelector('[data-free]'));
+      panel.querySelector('[data-back]').click();
+      assert(!modal.querySelector('.cm-offer-content').hidden);
+      assert(!modal.querySelector('.cm-offer-recovery'));
+    });
+  });
+});
+
+check('hosted recovery authenticates the account and creates no local activation request', function() {
+  const env=makeEnv({cloud:true,token:'cm_s_browser_session',fetch:function(url,init) {
+    if(url==='/api/license/trial/extension') return {ok:true,eligible:true,free_days:60};
+    return {plan:'free',trial_active:false,expired:true,trial_days_left:0};
+  }});
+  env.CLOUD_TOKEN='cm_s_browser_session';run(env);
+  return flush().then(function() {
+    const modal=openModal(env);modal.querySelector('.cm-offer-more').click();
+    return flush().then(function() {
+      const r=env.__fetches.find(r=>r.url==='/api/license/trial/extension');
+      eq(r.init.headers.Authorization,'Bearer cm_s_browser_session');
+      assert(!env.__fetches.some(r=>r.url==='/api/trial/extension'));
+    });
+  });
+});
+
+check('compact offer keeps the key form collapsed and traps keyboard focus', function() {
+  const env=makeEnv({fetch:()=>({tier:'trial',expired:true})});run(env);
+  return flush().then(function() {
+    const modal=openModal(env);
+    eq(modal.querySelector('#cm-up-keywrap').style.display,'none');
+    assert(!/Waiting for payment/.test(modal.innerHTML));
+    assert(env.document.activeElement===modal.querySelector('h2'));
+    const buttons=modal.querySelectorAll('button,a[href],input,select,textarea,[tabindex="0"]').filter(n=>n.getClientRects().length);
+    buttons[buttons.length-1].focus();
+    let prevented=false;
+    modal._listeners.keydown.forEach(fn=>fn({key:'Tab',preventDefault:()=>{prevented=true;}}));
+    assert(prevented&&env.document.activeElement===buttons[0], 'Tab escaped the dialog');
+  });
+});
+
+
+check('initial Shift+Tab remains inside the dialog from its heading', function() {
+  const env=makeEnv({fetch:()=>({tier:'trial',expired:true})});run(env);
+  return flush().then(function() {
+    const modal=openModal(env);
+    const buttons=modal.querySelectorAll('button,a[href],input,select,textarea,[tabindex="0"]').filter(n=>n.getClientRects().length);
+    let prevented=false;
+    modal._listeners.keydown.forEach(fn=>fn({key:'Tab',shiftKey:true,preventDefault:()=>{prevented=true;}}));
+    assert(prevented&&env.document.activeElement===buttons[buttons.length-1], 'Shift+Tab escaped from the heading');
+  });
+});
+
+check('free-mode failure remains visible in recovery and permits retry', function() {
+  const env=makeEnv({fetch:function(url,init) {
+    if(url==='/api/trial/extension') return {eligible:true,free_days:60};
+    if(url==='/api/trial/continue-free') return Promise.reject(new Error('offline'));
+    return {tier:'trial',expired:true};
+  }});run(env);
+  return flush().then(function() {
+    const modal=openModal(env);modal.querySelector('.cm-offer-more').click();
+    return flush().then(function() {
+      const panel=modal.querySelector('.cm-offer-recovery');
+      const free=panel.querySelector('[data-free]');free.click();
+      return flush().then(function() {
+        includes(panel.querySelector('.cm-offer-status').textContent,'Could not switch');
+        assert(!free.disabled&&panel.getClientRects().length, 'recovery free action cannot retry');
+        includes(panel.querySelector('.cm-offer-free-note').textContent,'Paid runtimes');
+      });
+    });
+  });
+});
+
+check('shared plan labels preserve existing non-English translation keys', function() {
+  const env=makeEnv({fetch:url=>url==='/api/trial/extension'?{eligible:true,free_days:60}:{tier:'trial',expired:true}});run(env);
+  return flush().then(function() {
+    const translated={'trial.monthly':'Mensuel','trial.annual':'Annuel','trial.two_months_free':'2 mois offerts','trial.per_month':'noeud/mois','trial.per_year':'noeud/an','trial.activate':'Activer la licence','trial.offer.optional':'(facultatif)','trial.offer.extension_promise':'Encore {days} jours. Sans carte.'};
+    env.t=(key,vars,fb)=>String(translated[key]||fb).replace(/\{(\w+)\}/g,(m,k)=>vars&&vars[k]!==undefined?vars[k]:m);
+    const modal=openModal(env);
+    includes(modal.innerHTML,'Mensuel');includes(modal.innerHTML,'Annuel');includes(modal.innerHTML,'2 mois offerts');includes(modal.innerHTML,'noeud/mois');includes(modal.innerHTML,'Activer la licence');
+    modal.querySelector('.cm-offer-more').click();
+    return flush().then(function() {
+      const panel=modal.querySelector('.cm-offer-recovery');includes(panel.innerHTML,'(facultatif)');includes(panel.innerHTML,'Encore 60 jours');
     });
   });
 });

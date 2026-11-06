@@ -7663,6 +7663,7 @@ DASHBOARD_HTML = r"""
      every dollar amount and score renders through. Loaded BEFORE app.js so
      window.cmMoney / cmProvBadge exist by the time a tab paints. -->
 <script src="{{ url_for('static', filename='js/provenance.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/trial-offer.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/guard-checks.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/activity-live.js', v=asset_version|default(version, true)) }}"></script>

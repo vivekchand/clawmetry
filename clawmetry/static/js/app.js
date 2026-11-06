@@ -114,7 +114,6 @@
   var PAYING_WINDOW_MS = 10 * 60 * 1000;  // fast-poll for 10 min after click
   var _checkoutClickedAt = 0;
   var OVERLAY_ID     = 'cm-hard-block-overlay';
-  var STYLE_ID       = 'cm-hard-block-overlay-style';
 
   // Plan picker state + copy.
   //
@@ -133,8 +132,8 @@
   // Kept deliberately close to /pricing so the overlay and the public page
   // make the same promise in the same words.
   var PLAN_BLURB = {
-    starter: 'Every agent, every session, and every dollar in one dashboard.',
-    pro: 'The governance layer: gate tools before they fire, score runs with evals, catch runaway waste.',
+    starter: window.CMTrialOffer.tr('trial.offer.starter_blurb', null, 'See every agent, session, and cost in one place.'),
+    pro: window.CMTrialOffer.tr('trial.offer.pro_blurb', null, 'Set tool rules, check output quality, and spot wasted spend.'),
   };
   var PLAN_FEATURES = {
     starter: ['Unlimited channels + cloud sync', 'Approval queue'],
@@ -154,207 +153,9 @@
     deviceValue: 149,
   };
   var _selTier = 'starter';
-  var _selInterval = 'year';   // annual preselected: better retention + the device perk
-  // Filled from /api/entitlement (allowlisted, so it answers while blocked).
-  // Never hardcode a runtime count -- it has drifted every time it was.
-  var _paidRuntimeCount = 0;
-
-  function planPriceHtml() {
-    var p = PLAN_PRICES[_selTier] || PLAN_PRICES.starter;
-    var yearly = _selInterval === 'year';
-    var amt = yearly ? p.year : p.month;
-    var was = (yearly && p.was)
-      ? '<span class="cm-hbo-was">$' + p.was + '</span> ' : '';
-    return was + '$' + amt
-      + '<span class="cm-hbo-per"> / node / ' + (yearly ? 'year' : 'month') + '</span>';
-  }
-
-  function featsHtml() {
-    var rows = [runtimesLine()].concat(PLAN_FEATURES[_selTier] || PLAN_FEATURES.starter);
-    return rows.map(function (r) { return '<li>' + escapeHtml(r) + '</li>'; }).join('');
-  }
-
-  function runtimesLine() {
-    return _paidRuntimeCount
-      ? ('All ' + _paidRuntimeCount + ' runtimes (Claude Code, Codex, Cursor +'
-         + Math.max(0, _paidRuntimeCount - 3) + ')')
-      : 'Every supported runtime (Claude Code, Codex, Cursor, …)';
-  }
-
-  function injectStyles() {
-    if (document.getElementById(STYLE_ID)) return;
-    var st = document.createElement('style');
-    st.id = STYLE_ID;
-    st.textContent = ''
-      + '#' + OVERLAY_ID + ' {'
-      + '  position: fixed; inset: 0; z-index: 2147483647;'
-      + '  background: rgba(15,17,20,0.92); backdrop-filter: blur(6px);'
-      + '  -webkit-backdrop-filter: blur(6px);'
-      // align-items:center clips BOTH ends once the card is taller than the
-      // window, and a fixed inset:0 box does not scroll, so the overflow is
-      // unreachable rather than merely hidden. That took out the headline at
-      // the top and the "continue on free runtimes" escape at the bottom on a
-      // laptop-height desktop window. flex-start + overflow-y:auto lets a tall
-      // card scroll; the auto margins on the card keep it optically centred
-      // whenever it does fit.
-      + '  display: flex; align-items: flex-start; justify-content: center;'
-      + '  overflow-y: auto; overscroll-behavior: contain;'
-      + '  padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-card {'
-      + '  max-width: 460px; width: 100%; background: #1a1d22;'
-      + '  border: 1px solid #2a2f36; border-radius: 14px;'
-      + '  box-shadow: 0 24px 60px rgba(0,0,0,0.55);'
-      + '  padding: 22px 26px; color: #e8eaed;'
-      + '  margin: auto;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-eyebrow {'
-      + '  color: #ffb020; font-size: 11px; font-weight: 700;'
-      + '  text-transform: uppercase; letter-spacing: 1.3px;'
-      + '  margin: 0 0 6px 0;'
-      + '}'
-      + '#' + OVERLAY_ID + ' h2 {'
-      + '  margin: 0 0 8px 0; font-size: 19px; line-height: 1.25;'
-      + '  color: #ffffff; font-weight: 700;'
-      + '}'
-      + '#' + OVERLAY_ID + ' p.cm-hbo-body {'
-      + '  margin: 0 0 14px 0; font-size: 13px; line-height: 1.5;'
-      + '  color: #b5b8be;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-cta {'
-      + '  display: block; width: 100%; padding: 11px 18px;'
-      + '  border-radius: 10px; border: 0; background: #ff9500;'
-      + '  color: #1a1d22; font-size: 15px; font-weight: 700;'
-      + '  cursor: pointer; text-align: center; text-decoration: none;'
-      + '  box-sizing: border-box; margin: 0 0 10px 0;'
-      + '  transition: background 120ms ease;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-cta:hover { background: #ffa726; }'
-      // ── plan picker ──────────────────────────────────────────────────
-      + '#' + OVERLAY_ID + ' .cm-hbo-seg {'
-      + '  display: flex; gap: 4px; padding: 3px; margin: 0 0 10px 0;'
-      + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-seg button {'
-      + '  flex: 1; padding: 7px 10px; border: 0; border-radius: 7px;'
-      + '  background: transparent; color: #b5b8be; font-size: 13px;'
-      + '  font-weight: 600; cursor: pointer; font-family: inherit;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-seg button[aria-pressed="true"] {'
-      + '  background: #ff9500; color: #1a1d22;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-seg .cm-hbo-save {'
-      + '  font-weight: 400; opacity: 0.85; margin-left: 4px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier {'
-      + '  display: flex; align-items: center; gap: 11px; width: 100%;'
-      + '  padding: 10px 13px; margin: 0 0 6px 0; text-align: left;'
-      + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
-      + '  color: #e8eaed; cursor: pointer; font-family: inherit;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier[aria-pressed="true"] {'
-      + '  border-color: #ff9500; background: #211a12;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-radio {'
-      + '  width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;'
-      + '  border: 2px solid #4a4f57;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier[aria-pressed="true"] .cm-hbo-radio {'
-      + '  border-color: #ff9500; box-shadow: inset 0 0 0 3px #ff9500;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier-name {'
-      + '  font-size: 14px; font-weight: 700; color: #fff; display: block;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier-sub {'
-      + '  font-size: 12px; color: #9aa0a8; display: block; margin-top: 2px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-feats {'
-      + '  margin: 9px 0 10px 0; padding: 0; list-style: none;'
-      + '  font-size: 12.5px; color: #b5b8be;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-feats li { margin: 0 0 4px 0; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-feats li::before {'
-      + '  content: "+"; color: #22c55e; font-weight: 700; margin-right: 8px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-price {'
-      + '  text-align: center; margin: 0 0 10px 0;'
-      + '  font-size: 23px; font-weight: 700; color: #fff;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-device {'
-      + '  margin: 0 0 10px 0; padding: 9px 12px; border-radius: 9px;'
-      + '  border: 1px solid #33406b; background: #151a2b;'
-      + '  font-size: 12.5px; color: #b9c2dd; line-height: 1.45;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-device strong { color: #22c55e; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-was {'
-      + '  color: #6b7078; text-decoration: line-through;'
-      + '  font-size: 17px; font-weight: 600; margin-right: 4px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-per {'
-      + '  font-size: 13px; font-weight: 500; color: #9aa0a8;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-price small {'
-      + '  display: block; margin-top: 4px; font-size: 12px;'
-      + '  font-weight: 500; color: #22c55e;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-divider {'
-      + '  display: flex; align-items: center; gap: 10px;'
-      + '  color: #6b7078; font-size: 11px; text-transform: uppercase;'
-      + '  letter-spacing: 1.2px; margin: 12px 0;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-divider::before,'
-      + '#' + OVERLAY_ID + ' .cm-hbo-divider::after {'
-      + '  content: ""; flex: 1; height: 1px; background: #2a2f36;'
-      + '}'
-      + '#' + OVERLAY_ID + ' label.cm-hbo-label {'
-      + '  display: block; font-size: 12px; color: #b5b8be;'
-      + '  margin: 0 0 6px 0;'
-      + '}'
-      + '#' + OVERLAY_ID + ' textarea.cm-hbo-key {'
-      + '  width: 100%; min-height: 52px; padding: 8px 11px;'
-      + '  border-radius: 8px; border: 1px solid #2a2f36;'
-      + '  background: #12141a; color: #e8eaed;'
-      + '  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;'
-      + '  font-size: 12px; box-sizing: border-box; resize: vertical;'
-      + '}'
-      + '#' + OVERLAY_ID + ' button.cm-hbo-activate {'
-      + '  margin-top: 8px; width: 100%; padding: 9px 14px;'
-      + '  border-radius: 10px; border: 1px solid #2a2f36;'
-      + '  background: transparent; color: #e8eaed;'
-      + '  font-size: 14px; font-weight: 600; cursor: pointer;'
-      + '}'
-      + '#' + OVERLAY_ID + ' button.cm-hbo-activate:hover { border-color: #4a5058; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-status {'
-      + '  min-height: 16px; margin-top: 9px; font-size: 11.5px;'
-      + '  color: #b5b8be; text-align: center;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-status.err { color: #ff6b6b; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-status.ok  { color: #59d18d; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-foot {'
-      + '  margin-top: 18px; font-size: 11px; color: #6b7078;'
-      + '  text-align: center;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-foot code {'
-      + '  font-family: "JetBrains Mono", ui-monospace, monospace;'
-      + '  color: #b5b8be; background: #12141a; padding: 1px 5px;'
-      + '  border-radius: 3px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' button.cm-hbo-free {'
-      + '  margin-top: 12px; width: 100%; padding: 11px 14px;'
-      + '  border-radius: 10px; border: 1px solid #2a2f36;'
-      + '  background: transparent; color: #b5b8be;'
-      + '  font-size: 13px; font-weight: 600; cursor: pointer;'
-      + '  transition: color 120ms ease, border-color 120ms ease;'
-      + '}'
-      + '#' + OVERLAY_ID + ' button.cm-hbo-free:hover {'
-      + '  color: #e8eaed; border-color: #4a5058;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-free-note {'
-      + '  margin-top: 8px; font-size: 11px; color: #6b7078;'
-      + '  text-align: center; line-height: 1.45;'
-      + '}';
-    document.head.appendChild(st);
-  }
+  var _selInterval = 'month';  // show the lowest commitment before annual billing
+  // Shared dialog styles live in dashboard.css.
+  function injectStyles() {}
 
   function buildOverlay(state) {
     var el = document.createElement('div');
@@ -365,11 +166,6 @@
     el.setAttribute('data-cm-locked', '1');
     var upgradeUrl = (state && (state.checkout_url || state.upgrade_url)) || 'https://app.clawmetry.com/upgrade';
     var reason = (state && state.reason) || 'A valid ClawMetry subscription is required to continue.';
-    var eyebrow = state && state.expired ? 'Trial ended' : 'Subscription required';
-    var daysLeft = state && typeof state.days_until_expiry === 'number' ? state.days_until_expiry : null;
-    var subline = daysLeft !== null && daysLeft > 0
-      ? ('Your trial ends in ' + daysLeft + ' day' + (daysLeft === 1 ? '' : 's') + '. Upgrade now to keep syncing without interruption.')
-      : 'Complete checkout to unlock the dashboard, or paste a license key you already own.';
     var freeEndpoint = (state && state.free_only_endpoint) || '/api/trial/continue-free';
     var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
       ? state.free_runtimes
@@ -383,48 +179,14 @@
     var freeRuntimesLabel = freeRuntimes
       .map(function (r) { return RT_LABELS[r] || r; })
       .join(' + ');
-    el.innerHTML = ''
-      + '<div class="cm-hbo-card">'
-      + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
-      + '  <h2 id="cm-hbo-title">' + escapeHtml(reason) + '</h2>'
-      + '  <p class="cm-hbo-body">' + escapeHtml(subline) + '</p>'
-      + '  <div class="cm-hbo-seg" role="group" aria-label="Billing interval">'
-      + '    <button type="button" data-interval="month" aria-pressed="' + (_selInterval === 'month') + '">Monthly</button>'
-      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">Annual<span class="cm-hbo-save">2 months free</span></button>'
-      + '  </div>'
-      + '  <button type="button" class="cm-hbo-tier" data-tier="starter" aria-pressed="' + (_selTier === 'starter') + '">'
-      + '    <span class="cm-hbo-radio"></span>'
-      + '    <span><span class="cm-hbo-tier-name">Starter</span>'
-      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.starter) + '</span></span>'
-      + '  </button>'
-      + '  <button type="button" class="cm-hbo-tier" data-tier="pro" aria-pressed="' + (_selTier === 'pro') + '">'
-      + '    <span class="cm-hbo-radio"></span>'
-      + '    <span><span class="cm-hbo-tier-name">Pro</span>'
-      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.pro) + '</span></span>'
-      + '  </button>'
-      + '  <ul class="cm-hbo-feats" id="cm-hbo-feats">' + featsHtml() + '</ul>'
-      // Annual-only perk. The cloud already collects a shipping address on
-      // annual checkouts for this (_annual_device_checkout_extras), and it
-      // ships on the first PAID invoice, so this is not a promise we invent
-      // here. Hidden on monthly.
-      + '  <div class="cm-hbo-device" id="cm-hbo-device" style="' + (_selInterval === 'year' ? '' : 'display:none;') + '">'
-      + '    Includes a free <strong>$149 desk device</strong>.'
-      + '  </div>'
-      + '  <div class="cm-hbo-price" id="cm-hbo-price">' + planPriceHtml() + '</div>'
-      + '  <a class="cm-hbo-cta" href="' + escapeAttr(upgradeUrl) + '" target="_blank" rel="noopener">'
-      + '    Continue to Stripe  →'
-      + '  </a>'
-      + '  <div class="cm-hbo-divider">or</div>'
-      + '  <label class="cm-hbo-label" for="cm-hbo-key">Paste license key</label>'
-      + '  <textarea id="cm-hbo-key" class="cm-hbo-key" spellcheck="false" autocomplete="off" placeholder="header.payload.signature"></textarea>'
-      + '  <button type="button" class="cm-hbo-activate">Activate license</button>'
-      + '  <div class="cm-hbo-status" id="cm-hbo-status" aria-live="polite">Waiting for payment — the dashboard will unlock automatically once your license lands.</div>'
-      + '  <button type="button" class="cm-hbo-free" data-endpoint="' + escapeAttr(freeEndpoint) + '">'
-      + '    Continue free with ' + escapeHtml(freeRuntimesLabel) + ' only'
-      + '  </button>'
-      + '  <div class="cm-hbo-free-note">Free mode keeps ' + escapeHtml(freeRuntimesLabel) + ' observability working. Paid runtimes (Claude Code, Codex, Cursor, …) stay locked until you upgrade.</div>'
-      + '  <div class="cm-hbo-foot">Prefer the CLI? Run <code>clawmetry activate &lt;KEY&gt;</code></div>'
-      + '</div>';
+    el.className = 'cm-trial-offer';
+    el.innerHTML = window.CMTrialOffer.html({
+      prefix: 'cm-hbo', title: window.CMTrialOffer.tr('trial.offer.continue_title', null, 'Choose how to continue'), body: reason,
+      tier: _selTier, interval: _selInterval, checkoutUrl: upgradeUrl,
+      showFree: true, freeLabel: freeRuntimesLabel,
+      recoverable: !!(state && state.expired && ['trial', 'oss', 'cloud_free'].indexOf(state.tier) !== -1),
+    });
+    el.querySelector('.cm-hbo-free').setAttribute('data-endpoint', freeEndpoint);
 
     // Emit paywall telemetry so the fleet dashboard sees a "user hit hard block"
     // count. Fire-and-forget; failure never blocks the render.
@@ -452,21 +214,8 @@
     // Plan picker. Selection lives in module state (not the DOM) so a
     // re-render from the background poll never silently resets the user's
     // choice back to the default mid-checkout.
-    var priceEl = el.querySelector('#cm-hbo-price');
     function repaintPicker() {
-      Array.prototype.forEach.call(
-        el.querySelectorAll('.cm-hbo-seg button'), function (b) {
-          b.setAttribute('aria-pressed', String(b.getAttribute('data-interval') === _selInterval));
-        });
-      Array.prototype.forEach.call(
-        el.querySelectorAll('.cm-hbo-tier'), function (b) {
-          b.setAttribute('aria-pressed', String(b.getAttribute('data-tier') === _selTier));
-        });
-      if (priceEl) priceEl.innerHTML = planPriceHtml();
-      var featsEl = el.querySelector('#cm-hbo-feats');
-      if (featsEl) featsEl.innerHTML = featsHtml();
-      var devEl = el.querySelector('#cm-hbo-device');
-      if (devEl) devEl.style.display = (_selInterval === 'year') ? '' : 'none';
+      window.CMTrialOffer.repaint(el, 'cm-hbo', _selTier, _selInterval);
     }
     Array.prototype.forEach.call(
       el.querySelectorAll('.cm-hbo-seg button'), function (b) {
@@ -483,37 +232,21 @@
         });
       });
 
-    // Runtime count for the copy. /api/entitlement is allowlisted so it
-    // answers even while blocked; on failure we keep the countless wording
-    // rather than printing a number we cannot stand behind.
-    if (!_paidRuntimeCount) {
-      try {
-        fetch('/api/entitlement')
-          .then(function (r) { return r.json().catch(function () { return {}; }); })
-          .then(function (ent) {
-            var all = ent && ent.all_runtimes;
-            if (Array.isArray(all) && all.length) {
-              _paidRuntimeCount = all.length;
-              var fe = el.querySelector('#cm-hbo-feats');
-              if (fe) fe.innerHTML = featsHtml();
-            }
-          })
-          .catch(function () {});
-      } catch (e) { /* noop */ }
-    }
-
     var ctaEl = el.querySelector('.cm-hbo-cta');
     var statusElForCta = el.querySelector('.cm-hbo-status');
     ctaEl.addEventListener('click', function (ev) {
       ev.preventDefault();
       _checkoutClickedAt = Date.now();
+      var desktop = !!(window.pywebview && window.pywebview.api && window.pywebview.api.open_external);
       var payTab = null;
-      try { payTab = window.open('about:blank', '_blank'); } catch (e) { payTab = null; }
+      if (!desktop) {
+        try { payTab = window.open('about:blank', '_blank'); } catch (e) { payTab = null; }
+      }
       function go(url) {
         if (payTab) { try { payTab.location = url; return; } catch (e) { /* fall through */ } }
         try { window.open(url, '_blank', 'noopener'); } catch (e) { window.location.href = url; }
       }
-      statusElForCta.className = 'cm-hbo-status';
+      statusElForCta.className = 'cm-hbo-status cm-offer-status';
       statusElForCta.textContent = 'Opening secure checkout…';
       fetch('/api/trial/checkout', {
         method: 'POST',
@@ -554,11 +287,11 @@
       var ta = el.querySelector('#cm-hbo-key');
       var key = (ta && ta.value || '').trim();
       if (!key) {
-        statusEl.className = 'cm-hbo-status err';
+        statusEl.className = 'cm-hbo-status cm-offer-status err';
         statusEl.textContent = 'Paste a license key first.';
         return;
       }
-      statusEl.className = 'cm-hbo-status';
+      statusEl.className = 'cm-hbo-status cm-offer-status';
       statusEl.textContent = 'Verifying key…';
       activateBtn.disabled = true;
       fetch('/api/license/activate', {
@@ -570,17 +303,17 @@
         .then(function (resp) {
           activateBtn.disabled = false;
           if (resp && resp.ok === false) {
-            statusEl.className = 'cm-hbo-status err';
+            statusEl.className = 'cm-hbo-status cm-offer-status err';
             statusEl.textContent = resp.message || resp.error || 'License activation failed.';
             return;
           }
-          statusEl.className = 'cm-hbo-status ok';
+          statusEl.className = 'cm-hbo-status cm-offer-status ok';
           statusEl.textContent = 'The license was installed. The page will reload.';
           return refreshAndMaybeUnblock(true);
         })
         .catch(function (err) {
           activateBtn.disabled = false;
-          statusEl.className = 'cm-hbo-status err';
+          statusEl.className = 'cm-hbo-status cm-offer-status err';
           statusEl.textContent = 'Activation failed: ' + (err && err.message || err);
         });
     });
@@ -595,41 +328,38 @@
     // stays down. Paid-runtime tabs on the free scope render a locked
     // padlock CTA (handled by the existing paywall banner system).
     var freeBtn = el.querySelector('.cm-hbo-free');
-    if (freeBtn) {
-      freeBtn.addEventListener('click', function () {
-        var ep = freeBtn.getAttribute('data-endpoint') || '/api/trial/continue-free';
-        statusEl.className = 'cm-hbo-status';
-        statusEl.textContent = 'Switching to free mode…';
-        freeBtn.disabled = true;
-        activateBtn.disabled = true;
-        fetch(ep, { method: 'POST' })
-          .then(function (r) { return r.json().catch(function () { return {}; }); })
-          .then(function () {
-            statusEl.className = 'cm-hbo-status ok';
-            statusEl.textContent = 'Free mode enabled — reloading with OpenClaw scope…';
-            // Force the URL onto a free runtime so the gate lets the page
-            // in even though the entitlement is still expired.
-            try {
-              var url = new URL(window.location.href);
-              url.searchParams.set('runtime', 'openclaw');
-              window.location.replace(url.toString());
-            } catch (e) {
-              window.location.replace('/?runtime=openclaw');
-            }
-          })
-          .catch(function (err) {
-            freeBtn.disabled = false;
-            activateBtn.disabled = false;
-            statusEl.className = 'cm-hbo-status err';
-            statusEl.textContent = 'Could not switch to free mode: ' + (err && err.message || err);
-          });
+    function continueFree() {
+      var ep = freeBtn.getAttribute('data-endpoint') || '/api/trial/continue-free';
+      return fetch(ep, {method: 'POST'}).then(function (response) {
+        if (!response.ok) throw new Error('Could not switch to free mode.');
+        try {
+          var url = new URL(window.location.href);
+          url.searchParams.set('runtime', 'openclaw');
+          window.location.replace(url.toString());
+        } catch (e) { window.location.replace('/?runtime=openclaw'); }
       });
     }
+    if (freeBtn) freeBtn.addEventListener('click', function () {
+      freeBtn.disabled = true;
+      statusEl.textContent = window.CMTrialOffer.tr('trial.offer.switching_free', null, 'Switching to free mode...');
+      continueFree().catch(function () {
+        statusEl.textContent = window.CMTrialOffer.tr('trial.offer.free_failed', null, 'Could not switch to free mode. Please try again.');
+      }).finally(function () { freeBtn.disabled = false; });
+    });
 
-    // Belt & braces: block ESC / TAB-out / right-click chrome from letting
-    // the user reach controls behind the overlay while it's mounted.
-    el.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); }
+    var keyLink = el.querySelector('#cm-hbo-havekey');
+    var keyWrap = el.querySelector('#cm-hbo-keywrap');
+    keyLink.addEventListener('click', function () {
+      var open = keyWrap.style.display === 'none';
+      keyWrap.style.display = open ? 'block' : 'none';
+      keyLink.setAttribute('aria-expanded', String(open));
+      if (open) el.querySelector('#cm-hbo-key').focus();
+    });
+    var more = el.querySelector('.cm-offer-more');
+    if (more) more.addEventListener('click', function () {
+      window.CMTrialOffer.recover(el, function () {
+        refreshAndMaybeUnblock(true).then(function () { window.location.reload(); });
+      }, continueFree);
     });
     return el;
   }
@@ -646,15 +376,17 @@
   function mount(state) {
     injectStyles();
     var existing = document.getElementById(OVERLAY_ID);
-    if (existing) existing.remove();
+    if (existing) { if (existing._cmReleaseFocus) existing._cmReleaseFocus(); existing.remove(); }
+    if (window.cmCloseUpgradeModal) window.cmCloseUpgradeModal();
     var el = buildOverlay(state);
     document.body.appendChild(el);
+    el._cmReleaseFocus = window.CMTrialOffer.trap(el);
     try { document.body.style.overflow = 'hidden'; } catch (e) { /* noop */ }
   }
 
   function unmount() {
     var existing = document.getElementById(OVERLAY_ID);
-    if (existing) existing.remove();
+    if (existing) { if (existing._cmReleaseFocus) existing._cmReleaseFocus(); existing.remove(); }
     try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
   }
 

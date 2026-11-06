@@ -425,3 +425,73 @@ def api_trial_checkout():
         return jsonify({"ok": True, "url": cached, "source": "cached"})
     return jsonify({"ok": True, "url": _te.resolved_upgrade_url(),
                     "source": "upgrade"})
+
+
+@bp_trial.route('/api/trial/extension', methods=['GET', 'POST'])
+def api_trial_extension():
+    """Recover a server-authorized trial using the normal signed license path."""
+    if os.environ.get('CLOUD_MODE') == '1':
+        return jsonify({'error': 'Use the trial offer in your hosted account.'}), 409
+    origin = request.headers.get('Origin')
+    if ((origin and origin.rstrip('/') != request.host_url.rstrip('/'))
+            or request.headers.get('Sec-Fetch-Site') == 'cross-site'):
+        return jsonify({'error': 'Open this action from your ClawMetry dashboard.'}), 403
+    data = {}
+    if request.method == 'POST':
+        data = request.get_json(silent=True) if request.is_json else None
+        if (not isinstance(data, dict) or set(data) - {'reason', 'feedback'}
+                or not isinstance(data.get('reason', ''), str)
+                or not isinstance(data.get('feedback', ''), str)
+                or len(data.get('feedback', '')) > 500):
+            return jsonify({'error': 'Choose a reason and keep optional feedback to 500 characters.'}), 400
+    from clawmetry import license as lic
+    headers = {'Content-Type': 'application/json', 'User-Agent': 'ClawMetry-Trial-Recovery'}
+    api_key = _local_api_key()
+    if api_key:
+        headers['X-Api-Key'] = api_key
+    else:
+        try:
+            with open(lic.LICENSE_PATH, encoding='utf-8') as fh:
+                key = fh.read(4097).strip()
+            if len(key) > 4096 or not key.startswith('CLAW1.'):
+                raise ValueError('No signed trial')
+            headers['Authorization'] = 'Bearer ' + key
+        except (OSError, ValueError):
+            return jsonify({'error': 'Sign in to the account that owns your trial to continue.'}), 401
+    req = urllib.request.Request(
+        lic._cloud_base().rstrip('/') + '/api/license/trial/extension',
+        data=json.dumps(data).encode() if request.method == 'POST' else None,
+        headers=headers, method=request.method)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+        # Do not reflect raw upstream codes, traces or credentials into UI.
+        message = ('Sign in to the account that owns your trial to continue.'
+                   if exc.code in (401, 403) else
+                   'Could not confirm your trial extension. Please try again.')
+        return jsonify({'error': message}), 401 if exc.code in (401, 403) else 502
+    except Exception:
+        return jsonify({'error': 'Could not reach the trial service. Check your connection and try again.'}), 502
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'Could not confirm your trial extension. Please try again.'}), 502
+    key = payload.pop('key', None)
+    if request.method == 'POST' and payload.get('ok') and payload.get('grant_state') == 'applied':
+        if not isinstance(key, str) or not key.strip():
+            return jsonify({'error': 'Your extension is reserved. Try again to finish activating it.'}), 502
+        from clawmetry import entitlements as ent
+        try:
+            current = ent.get_entitlement(force=True)
+            # The shared license writer also checks under a cross-process lock,
+            # so a paid heartbeat arriving after this check still wins.
+            if current.tier not in {'starter', 'pro', 'cloud_pro', 'cloud_starter', 'enterprise'} or current.expired:
+                ok, _ = lic.activate(key, actor='trial-recovery')
+                if not ok:
+                    return jsonify({'error': 'Your extension is reserved. Try again to finish activating it.'}), 502
+            ent.invalidate()
+        except Exception:
+            _hb_log.warning('trial.extension: local activation could not finish')
+            return jsonify({'error': 'Your extension is reserved. Try again to finish activating it.'}), 502
+    response = jsonify(payload)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
