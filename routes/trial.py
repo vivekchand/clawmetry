@@ -446,18 +446,25 @@ def api_trial_extension():
             return jsonify({'error': 'Choose a reason and keep optional feedback to 500 characters.'}), 400
     from clawmetry import license as lic
     headers = {'Content-Type': 'application/json', 'User-Agent': 'ClawMetry-Trial-Recovery'}
+    # Email/OTP activation installs a signed trial without necessarily replacing
+    # the auto-registered machine key. Recover the account owning that trial,
+    # even when config still carries an unlinked or revoked machine credential.
+    trial_key = ''
+    try:
+        with open(lic.LICENSE_PATH, encoding='utf-8') as fh:
+            candidate = fh.read(4097).strip()
+        signed = lic.verify_token(candidate) if len(candidate) <= 4096 else None
+        if signed and str(signed.get('tier', '')).strip().lower() == 'trial':
+            trial_key = candidate
+    except OSError:
+        pass
     api_key = _local_api_key()
-    if api_key:
+    if trial_key:
+        headers['Authorization'] = 'Bearer ' + trial_key
+    elif api_key:
         headers['X-Api-Key'] = api_key
     else:
-        try:
-            with open(lic.LICENSE_PATH, encoding='utf-8') as fh:
-                key = fh.read(4097).strip()
-            if len(key) > 4096 or not key.startswith('CLAW1.'):
-                raise ValueError('No signed trial')
-            headers['Authorization'] = 'Bearer ' + key
-        except (OSError, ValueError):
-            return jsonify({'error': 'Sign in to the account that owns your trial to continue.'}), 401
+        return jsonify({'error': 'Sign in to the account that owns your trial to continue.'}), 401
     req = urllib.request.Request(
         lic._cloud_base().rstrip('/') + '/api/license/trial/extension',
         data=json.dumps(data).encode() if request.method == 'POST' else None,

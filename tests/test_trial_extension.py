@@ -87,13 +87,22 @@ def test_cross_site_and_cloud_proxy_rejected(client, monkeypatch):
     assert client.get('/api/trial/extension').status_code == 409
 
 
-def test_expired_signed_trial_can_authenticate_without_cloud_key(client, monkeypatch):
-    monkeypatch.setattr(trial, '_local_api_key', lambda: '')
+@pytest.mark.parametrize('machine_key', ['', 'cm_machine_unlinked', 'cm_revoked'])
+def test_installed_trial_owns_recovery_despite_unlinked_machine_key(client, monkeypatch, machine_key):
+    import time
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    monkeypatch.setattr(lic, '_PUBLIC_KEY_PEM', public)
+    token = lic._encode_token({'sub':'human@example.com','tier':'trial','nodes':1,'jti':'lic_test','exp':int(time.time())-86400}, private)
+    monkeypatch.setattr(trial, '_local_api_key', lambda: machine_key)
     with open(lic.LICENSE_PATH, 'w') as fh:
-        fh.write('CLAW1.test.signature')
+        fh.write(token)
     calls = upstream(monkeypatch, {'eligible': True})
     assert client.get('/api/trial/extension').status_code == 200
-    assert calls[0].get_header('Authorization') == 'Bearer CLAW1.test.signature'
+    assert calls[0].get_header('Authorization') == 'Bearer ' + token
+    assert calls[0].get_header('X-api-key') is None
 
 
 def test_network_and_upstream_errors_are_actionable(client, monkeypatch):
@@ -111,3 +120,12 @@ def test_applied_without_a_key_is_not_a_local_confirmation(client, monkeypatch):
     upstream(monkeypatch, {'ok': True, 'grant_state': 'applied'})
     response = client.post('/api/trial/extension', json={})
     assert response.status_code == 502 and 'reserved' in response.json['error']
+
+
+def test_invalid_trial_file_uses_account_key_without_forwarding_forgery(client, monkeypatch):
+    with open(lic.LICENSE_PATH, 'w') as fh:
+        fh.write('CLAW1.forged.signature')
+    calls = upstream(monkeypatch, {'eligible': False})
+    assert client.get('/api/trial/extension').status_code == 200
+    assert calls[0].get_header('X-api-key') == 'cm_private_test'
+    assert calls[0].get_header('Authorization') is None
