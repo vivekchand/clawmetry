@@ -189,7 +189,7 @@ def _store_license_key(key, *, path=None, payload=None):
         try:
             with open(path, encoding='utf-8') as fh:
                 existing = fh.read(8192).strip()
-        except FileNotFoundError:
+        except (FileNotFoundError, UnicodeError):
             existing = ''
         current = verify_token(existing) if existing else None
         expiry = current.get('exp') if current else None

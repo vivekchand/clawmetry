@@ -35,6 +35,7 @@ import os
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from flask import Blueprint, jsonify, request
@@ -456,7 +457,7 @@ def api_trial_extension():
         signed = lic.verify_token(candidate) if len(candidate) <= 4096 else None
         if signed and str(signed.get('tier', '')).strip().lower() == 'trial':
             trial_key = candidate
-    except OSError:
+    except (OSError, UnicodeError):
         pass
     api_key = _local_api_key()
     if trial_key:
@@ -465,12 +466,22 @@ def api_trial_extension():
         headers['X-Api-Key'] = api_key
     else:
         return jsonify({'error': 'Sign in to the account that owns your trial to continue.'}), 401
+    base = lic._cloud_base().rstrip('/')
+    try:
+        address = urllib.parse.urlsplit(base)
+        local_http = address.scheme == 'http' and address.hostname in {'localhost', '127.0.0.1', '::1'}
+        valid_address = (address.scheme == 'https' or local_http) and address.hostname and not (
+            address.username or address.password or address.query or address.fragment)
+    except ValueError:
+        valid_address = False
+    if not valid_address:
+        return jsonify({'error': 'The trial service address is unavailable. Please contact support@clawmetry.com.'}), 502
     req = urllib.request.Request(
-        lic._cloud_base().rstrip('/') + '/api/license/trial/extension',
+        base + '/api/license/trial/extension',
         data=json.dumps(data).encode() if request.method == 'POST' else None,
         headers=headers, method=request.method)
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:  # nosec B310: HTTPS or loopback HTTP validated above.
             payload = json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         # Do not reflect raw upstream codes, traces or credentials into UI.

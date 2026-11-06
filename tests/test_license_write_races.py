@@ -102,3 +102,11 @@ def test_heartbeat_uses_shared_writer_preserving_paid_key(keys, monkeypatch):
     monkeypatch.setattr(sync.os.path, 'expanduser', lambda value: path if value == '~/.clawmetry/license.key' else original(value))
     sync._maybe_install_license_from_heartbeat({'license_key': token('trial',60)})
     assert Path(path).read_text().strip() == paid
+
+
+def test_verified_license_repairs_a_corrupt_binary_file(keys):
+    path, _, token = keys
+    Path(path).write_bytes(b'\xff\x00\xfe')
+    paid = token('pro', 365)
+    assert lic._store_license_key(paid, path=path)
+    assert Path(path).read_text().strip() == paid

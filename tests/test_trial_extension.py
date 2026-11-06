@@ -129,3 +129,24 @@ def test_invalid_trial_file_uses_account_key_without_forwarding_forgery(client, 
     assert client.get('/api/trial/extension').status_code == 200
     assert calls[0].get_header('X-api-key') == 'cm_private_test'
     assert calls[0].get_header('Authorization') is None
+
+
+def test_binary_license_file_falls_back_to_account_key(client, monkeypatch):
+    with open(lic.LICENSE_PATH, 'wb') as fh:
+        fh.write(b'\xff\x00\xfe')
+    calls = upstream(monkeypatch, {'eligible': False})
+    assert client.get('/api/trial/extension').status_code == 200
+    assert calls[0].get_header('X-api-key') == 'cm_private_test'
+
+
+@pytest.mark.parametrize('base', ['file:///private/tmp', 'ftp://example.com', 'http://example.com', 'https://user:secret@example.com', 'https://example.com?other=1', 'https://[broken'])
+def test_proxy_refuses_non_network_or_insecure_trial_service(client, monkeypatch, base):
+    monkeypatch.setattr(lic, '_cloud_base', lambda: base)
+    monkeypatch.setattr(trial.urllib.request, 'urlopen', lambda *a, **kw: pytest.fail('invalid service fetched'))
+    assert client.get('/api/trial/extension').status_code == 502
+
+
+def test_loopback_http_test_service_remains_supported(client, monkeypatch):
+    monkeypatch.setattr(lic, '_cloud_base', lambda: 'http://127.0.0.1:8999')
+    upstream(monkeypatch, {'eligible': False})
+    assert client.get('/api/trial/extension').status_code == 200
