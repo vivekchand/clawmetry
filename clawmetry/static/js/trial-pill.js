@@ -574,11 +574,16 @@
       // The cloud page fetches this itself on load; reuse the result when it
       // is already there rather than issuing a second identical request.
       try {
-        if (window._account) return Promise.resolve(window._account);
+        var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
+        if (window._account && !paying) return Promise.resolve(window._account);
       } catch (e) { /* noop */ }
       if (!tok) return Promise.resolve(null);
       return fetch('/api/cloud/account?token=' + encodeURIComponent(tok))
         .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (account) {
+          if (account && account.plan) { window._account = account; window.CLOUD_PLAN = account.plan; }
+          return account;
+        })
         .catch(function () { return null; });
     }
     return fetch('/api/trial/status')
@@ -589,8 +594,13 @@
   function apply(raw) {
     var st = normalise(raw);
     if (!st) return;
+    var unlocked = _checkoutClickedAt && _state && !isPaid(_state) && isPaid(st);
     _state = st;
     renderPill(st);
+    if (unlocked && document.getElementById(MODAL_ID)) {
+      closeModal();
+      window.location.reload();
+    }
   }
 
   function schedule() {

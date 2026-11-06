@@ -994,6 +994,46 @@ check('hosted account expiry cannot be overwritten by host-local license broadca
   });
 });
 
+check('hosted checkout refreshes the account and unlocks after confirmed payment', function() {
+  const env=makeEnv({cloud:true,token:'cm_account',fetch:function(url) {
+    if(url.indexOf('/api/cloud/account')===0) return {plan:'starter',expired:false,trial_active:false};
+    if(url==='/api/billing/checkout') return {url:'https://checkout.stripe.com/test'};
+    return {};
+  }});env._account={plan:'trial',expired:true,trial_active:false};run(env);
+  return flush().then(function() {
+    assert(!env.__fetches.some(r=>r.url.indexOf('/api/cloud/account')===0), 'initial account fetched twice');
+    const modal=openModal(env);modal.querySelector('.cm-up-cta').click();
+    return flush().then(function() {
+      const timer=env.__timers.filter(t=>t.ms===10000).pop();assert(timer,'checkout did not use its existing fast timer');timer.fn();
+      return flush().then(function() {
+        eq(env.__fetches.filter(r=>r.url.indexOf('/api/cloud/account')===0).length,1);
+        eq(env.CLOUD_PLAN,'starter');assert(env.__reloaded,'confirmed payment did not refresh access');
+        assert(!env.document.getElementById('cm-upgrade-modal'),'paid modal remained open');
+      });
+    });
+  });
+});
+
+check('local checkout dismisses the chooser when a paid license arrives',function() {
+  const env=makeEnv({fetch:url=>url==='/api/trial/status'?{tier:'trial',expired:true}:{url:'https://checkout.stripe.com/test'}});run(env);
+  return flush().then(function() {
+    openModal(env).querySelector('.cm-up-cta').click();
+    return flush().then(function() {
+      (env.document._listeners['cm:trial-state']||[]).forEach(fn=>fn({detail:{tier:'cloud_starter',expired:false}}));
+      assert(env.__reloaded&&!env.document.getElementById('cm-upgrade-modal'));
+    });
+  });
+});
+
+check('an unchanged paid status does not interrupt an existing plan chooser',function() {
+  const env=makeEnv({fetch:()=>({tier:'pro',expired:false})});run(env);
+  return flush().then(function() {
+    const modal=openModal(env);
+    (env.document._listeners['cm:trial-state']||[]).forEach(fn=>fn({detail:{tier:'pro',expired:false}}));
+    assert(env.document.getElementById('cm-upgrade-modal')===modal&&!env.__reloaded);
+  });
+});
+
 Promise.all(pending).then(function () {
   if (failures) {
     console.log('\nFAIL: ' + failures + ' check(s) failed');
