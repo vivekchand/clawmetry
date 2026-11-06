@@ -75,7 +75,7 @@
 # latter. All four caps now sit BELOW a published fix, so holding them
 # accepts 15 distinct advisories. Measured 2026-10-03 against OSV and PyPI:
 #
-#   cryptography==48.0.1  cap <=48.1. No release exists in (48.0.1, 48.1],
+#   cryptography==50.0.0  cap <=48.1. No release exists in (48.0.1, 48.1],
 #                         so this is the ceiling. 3 advisories, fixes above:
 #                         GHSA-jwv3-5hgf-82ww (HIGH, 49.0.0),
 #                         GHSA-m2h6-j472-rp4c (MODERATE, 49.0.0),
@@ -668,7 +668,7 @@ click==8.5.0 \
 colorama==0.4.6 \
     --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6 \
     --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44
-cryptography==48.0.1 \
+cryptography==50.0.0 \
     --hash=sha256:3e4a1a3232eef2e6c732827d5722db29a0cc8b27af2a4d865b094cf954be9ca1 \
     --hash=sha256:32143b24adb918f078134e1e230f1eb8cc04886b92c28b5f0041aaf3e5699225 \
     --hash=sha256:f0d27a5696721ef7a672b8c810f6aded391058e0b9486e63e6d93baf765da691 \
