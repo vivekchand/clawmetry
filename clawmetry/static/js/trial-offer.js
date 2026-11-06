@@ -182,7 +182,7 @@
           heading.focus();
         }).catch(function (error) {
           claim.disabled = false;
-          status.textContent = error.name === 'AbortError' ? tr("trial.offer.this_took_too_long_try_again_your_offer_will_not_be_used_twice", null, "This took too long. Try again; your offer will not be used twice.") : error.message;
+          status.textContent = error.name === 'AbortError' ? tr("trial.offer.this_took_too_long_try_again_your_offer_will_not_be_used_twice", null, "This took too long. Try again. Your offer will not be used twice.") : error.message;
         });
       });
     }).catch(function () {
