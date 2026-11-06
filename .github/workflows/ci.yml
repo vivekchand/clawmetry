@@ -970,7 +970,9 @@ jobs:
       # only place this code ever executes natively on Windows or macOS.
       - name: Trial recovery and license writer races (native, all three OS)
         timeout-minutes: 3
-        run: python3 -m pytest tests/test_trial_extension.py tests/test_license_write_races.py -q --tb=short
+        run: |
+          pip install --require-hashes -r .github/requirements/ci-trial-recovery.txt
+          python3 -m pytest tests/test_trial_extension.py tests/test_license_write_races.py -q --tb=short
 
       - name: Desktop notification backends (native, all three OS)
         timeout-minutes: 3
