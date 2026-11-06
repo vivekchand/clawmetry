@@ -69,10 +69,11 @@ function makeEl(tag) {
     _html: '',
     _attrs: {},
     _listeners: {},
-    _text: '',
+    _text: null,
+    _parts: [],
     get innerHTML() { return this._html; },
-    set innerHTML(v) { this._html = String(v); this.children = parseChildren(this._html); this.children.forEach(c => { c.parentNode = this; }); },
-    get textContent() { return this._text || this._html.replace(/<[^>]*>/g, ''); },
+    set innerHTML(v) { this._html = String(v); const parsed = parseChildren(this._html); this.children = parsed.children; this._parts = parsed.parts; this._text = null; this.children.forEach(c => { c.parentNode = this; }); },
+    get textContent() { return this._text !== null ? this._text : this._parts.map(p => typeof p === 'string' ? p : p.textContent).join(''); },
     set textContent(v) { this._text = String(v); },
     setAttribute: function (k, v) { this._attrs[k] = String(v); },
     getAttribute: function (k) { return Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null; },
@@ -109,11 +110,13 @@ function makeEl(tag) {
 const VOID_TAGS = { br: 1, hr: 1, img: 1, input: 1, link: 1, meta: 1 };
 
 function parseChildren(html) {
-  const root = { children: [] };
+  const root = { children: [], _parts: [] };
   const stack = [root];
   const re = /<(\/?)(\w+)([^>]*?)(\/?)>/g;
-  let m;
+  let m, textAt = 0;
   while ((m = re.exec(html)) !== null) {
+    stack[stack.length - 1]._parts.push(html.slice(textAt, m.index));
+    textAt = re.lastIndex;
     const closing = m[1] === '/';
     const tag = m[2].toLowerCase();
     const attrs = m[3] || '';
@@ -139,9 +142,11 @@ function parseChildren(html) {
     const parent = stack[stack.length - 1];
     el.parentNode = parent === root ? null : parent;
     parent.children.push(el);
+    parent._parts.push(el);
     if (!selfClosed) stack.push(el);
   }
-  return root.children;
+  stack[stack.length - 1]._parts.push(html.slice(textAt));
+  return {children: root.children, parts: root._parts};
 }
 
 // True when `el` sits anywhere under an element matching `token`.
