@@ -984,6 +984,16 @@ check('shared plan labels preserve existing non-English translation keys', funct
   });
 });
 
+check('hosted account expiry cannot be overwritten by host-local license broadcasts', function() {
+  const env=makeEnv({cloud:true,token:'cm_account'});
+  env._account={plan:'trial',expired:true,trial_active:false};run(env);
+  return flush().then(function() {
+    (env.document._listeners['cm:trial-state']||[]).forEach(fn=>fn({detail:{tier:'oss',expired:false}}));
+    const modal=openModal(env);
+    assert(modal.querySelector('.cm-offer-more'), 'host-local state hid the account recovery offer');
+  });
+});
+
 Promise.all(pending).then(function () {
   if (failures) {
     console.log('\nFAIL: ' + failures + ' check(s) failed');

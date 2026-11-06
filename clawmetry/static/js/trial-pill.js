@@ -611,7 +611,8 @@
   // poll above is the fallback for a cached app.js that predates the event.
   try {
     window.addEventListener('cm:trial-state', function (ev) {
-      if (ev && ev.detail) apply(ev.detail);
+      // Hosted billing state comes from the account, not the cloud host's local license.
+      if (ev && ev.detail && (!isCloud() || ev.detail.plan !== undefined)) apply(ev.detail);
     });
   } catch (e) { /* noop */ }
 
