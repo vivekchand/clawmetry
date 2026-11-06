@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Improved: compact trial dialogs and optional recovery (#6575)
+
+- Plan dialogs fit ordinary laptop screens, show prices in each plan row, and use a readable green action. License entry opens only when requested.
+- After an expired trial, users can request an eligible one-time extension with optional feedback. The offer requires no card and carries no automatic charge.
+- Paid licenses remain protected during simultaneous activation and heartbeat updates. Checkout refreshes access automatically after payment is confirmed.
+- Verified desktop and mobile layouts, keyboard access, translated controls, checkout recovery and native license writes on Linux, macOS and Windows.
+
+
 ### Fixed: proper Setup image previews (#6568)
 
 - Setup displays supported local images and lets you save the original file. Text files remain readable source.
