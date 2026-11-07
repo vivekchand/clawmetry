@@ -14,5 +14,5 @@ Evidence:
 - Root and independent reviewer approved the bounded Python/SQL parsing and five query expressions.
 
 Branch: fix/epoch-rollup-day-20261107
-PR: pending verification.
+PR: https://github.com/vivekchand/clawmetry/pull/6584; final CI correction pending.
 Release: pending normal separate RELEASE workflow; no manual version or tag changes.

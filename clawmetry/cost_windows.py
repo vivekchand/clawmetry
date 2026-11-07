@@ -146,7 +146,7 @@ def local_day(ts):
     # existing source shape before interpreting numeric timestamp strings.
     if re.fullmatch(r"[0-9]{8}", s):
         try:
-            return _date.fromisoformat(s).isoformat()
+            return _date(int(s[:4]), int(s[4:6]), int(s[6:])).isoformat()
         except ValueError:
             pass
     try:

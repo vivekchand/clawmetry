@@ -1,6 +1,7 @@
 """Epoch timestamps must persist without poisoning a whole ingest batch."""
 import importlib
 import math
+import os
 import time
 from datetime import datetime, timezone
 
@@ -8,6 +9,16 @@ import duckdb
 import pytest
 
 from clawmetry import cost_windows as cw
+
+
+def _duck():
+    db = duckdb.connect()
+    # These tests change libc's TZ after the driver has loaded. Older ICU
+    # versions cache their startup zone; align both clocks explicitly rather
+    # than assuming a connection notices an in-process environment mutation.
+    if os.environ.get('TZ'):
+        db.execute('SET TimeZone = ?', [os.environ['TZ']])
+    return db
 
 
 @pytest.fixture(params=['UTC', 'America/Los_Angeles'])
@@ -31,7 +42,7 @@ def test_epoch_python_and_sql_use_the_same_local_day(zone, value):
     if abs(seconds) > 1e11:
         seconds /= 1000
     expected = datetime.fromtimestamp(seconds, timezone.utc).astimezone().date().isoformat()
-    with duckdb.connect() as db:
+    with _duck() as db:
         actual = db.execute('SELECT ' + cw.day_expr_sql('$1'), [value]).fetchone()[0]
     assert cw.local_day(value) == actual == expected
 
@@ -43,7 +54,7 @@ def test_iso_calendar_contract_and_prefix_fallback_are_preserved(zone, value):
     expected = '2026-08-24'
     if value.endswith('Z') or value.endswith('-07:00'):
         expected = datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone().date().isoformat()
-    with duckdb.connect() as db:
+    with _duck() as db:
         actual = db.execute('SELECT ' + cw.day_expr_sql('$1'), [value]).fetchone()[0]
     assert cw.local_day(value) == actual == expected
 
@@ -52,7 +63,7 @@ def test_iso_calendar_contract_and_prefix_fallback_are_preserved(zone, value):
                                 '2026-11-01T08:30:00Z', '2026-11-01T09:30:00Z'])
 def test_epoch_and_iso_agree_across_local_dst_changes(zone, iso):
     epoch = datetime.fromisoformat(iso.replace('Z', '+00:00')).timestamp()
-    with duckdb.connect() as db:
+    with _duck() as db:
         actual = db.execute('SELECT ' + cw.day_expr_sql('$1'), [str(epoch)]).fetchone()[0]
     assert actual == cw.local_day(epoch) == cw.local_day(iso)
 
@@ -61,9 +72,17 @@ def test_epoch_and_iso_agree_across_local_dst_changes(zone, iso):
     math.nan, math.inf, -math.inf, 'NaN', 'Infinity', 1e100, '1e100'])
 def test_bad_values_cannot_become_a_real_rollup_day(value):
     assert cw.local_day(value) is None
-    with duckdb.connect() as db:
+    with _duck() as db:
         # SQL retains its historical junk bucket, but must never throw.
         db.execute('SELECT ' + cw.day_expr_sql('$1'), [value]).fetchone()
+
+
+@pytest.mark.parametrize('columns', [('ts); DROP TABLE events; --', 'id'),
+    ('ts', 'id || secret'), ('e.ts', 'id'), ('ts', 'e.id')])
+def test_event_dedup_sql_accepts_only_its_fixed_identifier_pairs(columns):
+    import clawmetry.local_store as ls
+    with pytest.raises(ValueError, match='internal event timestamp identifiers'):
+        ls._event_turn_key_expr_sql(*columns)
 
 
 def test_real_ingest_preserves_epoch_events_and_persistent_rollup_parity(tmp_path, monkeypatch):

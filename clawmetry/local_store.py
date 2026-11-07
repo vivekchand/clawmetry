@@ -673,6 +673,8 @@ from clawmetry.cost_windows import now_local as _cw_now_local  # noqa: E402
 # This is an opaque grouping key, never a source clock. An unknown timestamp
 # cannot prove two events are sibling envelopes, so retain each by its own ID.
 def _event_turn_key_expr_sql(col: str = "ts", id_col: str = "id") -> str:
+    if (col, id_col) not in {("ts", "id"), ("e.ts", "e.id")}:
+        raise ValueError("Unsupported internal event timestamp identifiers")
     return (
         f"COALESCE(CAST(CAST(EXTRACT(EPOCH FROM {_timestamp_expr_sql(col)}) AS BIGINT) AS VARCHAR),"
         f" 'event:' || {id_col})"
@@ -4269,6 +4271,7 @@ def heal_index_corruption() -> int:
 # model.completed sibling is dropped only when a richer assistant/message row
 # shares its (session_id, ts-rounded-to-second) bucket. This mirrors the
 # canonical dedup in query_sessions/query_aggregates so all cost surfaces agree.
+# Fixed CTE: its only interpolation is built from allowlisted internal identifiers.
 _DEDUPED_EVENTS_CTE = f"""
   _ranked AS (
     SELECT session_id, ts, cost_usd, token_count, model, event_type,
@@ -4290,7 +4293,7 @@ _DEDUPED_EVENTS_CTE = f"""
     JOIN _bucket_max bm USING (session_id, _ts_sec)
     WHERE NOT (r._envelope_rank = 1 AND bm._max_rank = 2)
   )
-"""
+"""  # nosec B608
 
 
 def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:

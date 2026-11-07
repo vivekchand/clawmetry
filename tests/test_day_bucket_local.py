@@ -25,6 +25,7 @@ Acceptance criteria proven here (docs/acceptance_criteria.json):
 from __future__ import annotations
 
 import importlib
+import os
 
 import pytest
 
@@ -49,7 +50,12 @@ _SHAPES = [
 
 def _duck():
     duckdb = pytest.importorskip("duckdb")
-    return duckdb.connect()
+    conn = duckdb.connect()
+    # Match Python's test clock after la_timezone changes TZ in this process.
+    # Production startup and older ICU caches do not have the same lifecycle.
+    if os.environ.get("TZ"):
+        conn.execute("SET TimeZone = ?", [os.environ["TZ"]])
+    return conn
 
 
 def _sql_day(conn, ts):
