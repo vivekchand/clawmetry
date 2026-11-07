@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: event storage and cost totals for numeric timestamps (#6584)
+
+- Numeric event times no longer prevent a batch from saving. Unix seconds and milliseconds use the same local calendar as ISO timestamps.
+- Unknown event times stay unknown. Their costs remain separate instead of disappearing or being treated as duplicate turns.
+- Verified event storage, persistent cost totals, local day buckets and session costs with 285 checks. The feature passed all required CI checks before this release.
+
 ### Fixed: saved robot sessions through the installed daemon (#6580)
 
 - Saved robot sessions can load through the daemon's existing private plugin query.
