@@ -3,7 +3,7 @@ import pytest
 
 
 @pytest.mark.parametrize('operation', ['runs', 'events', 'snapshot', 'inventory', 'guard_ack', 'guard_incidents', 'set_observation_only',
-    'trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts', 'trace_notes', 'trace_guard_get', 'trace_jobs',
+    'trace_runs', 'trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts', 'trace_notes', 'trace_guard_get', 'trace_jobs',
     'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share'])
 def test_robotics_operation_dispatches_to_private_plugin(monkeypatch, operation):
     from clawmetry import extensions
@@ -44,14 +44,14 @@ def test_incident_read_shape_preserves_cursor_precision_and_clamps_page():
         _coerce_args('robotics_incidents', {'run_id': '../untrusted'})
 
 
-@pytest.mark.parametrize('operation', ['trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts',
+@pytest.mark.parametrize('operation', ['trace_runs', 'trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts',
     'trace_notes', 'trace_guard_get', 'trace_jobs', 'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share'])
 def test_private_trace_operations_are_not_cloud_relay_shapes(operation):
     from clawmetry.query_contract import QUERY_CONTRACT
     assert operation not in QUERY_CONTRACT
 
 
-@pytest.mark.parametrize('operation', ['trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts',
+@pytest.mark.parametrize('operation', ['trace_runs', 'trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts',
     'trace_notes', 'trace_guard_get', 'trace_jobs', 'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share'])
 def test_private_trace_unavailable_and_denied_results_stay_owned_by_plugin(monkeypatch, operation):
     from clawmetry import extensions
