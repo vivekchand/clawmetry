@@ -142,7 +142,7 @@ def test_utc_and_offset_spellings_of_one_instant_bucket_identically():
 
 # ── never crash on the input we do not control ──────────────────────────
 
-@pytest.mark.parametrize("bad", [None, "", "   ", "garbage", "not-a-date", 0, []])
+@pytest.mark.parametrize("bad", [None, "", "   ", "garbage", "not-a-date", True, []])
 def test_unparseable_input_yields_no_bucket_rather_than_today(bad):
     """An underivable bucket must not become today, or every unparsed row
     would pile onto whatever day the code happened to run."""
