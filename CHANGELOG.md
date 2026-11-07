@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: saved robot sessions through the installed daemon (#6580)
+
+- Saved robot sessions can load through the daemon's existing private plugin query.
+- Existing daemon authentication, owner access and license checks remain unchanged. No robot command path was added.
+- Verified with dispatch, authentication and entitlement regression tests, including tests that failed before the fix.
+
+
 ### Improved: compact trial dialogs and optional recovery (#6575)
 
 - Plan dialogs fit ordinary laptop screens, show prices in each plan row, and use a readable green action. License entry opens only when requested.
