@@ -53,8 +53,10 @@ permissions:
 jobs:
   pseudolocale-e2e:
     name: Pseudolocale machinery is live (en-XA)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    # APT font installation alone took nine minutes on a hosted runner.
+    # Keep the real browser assertions gated while allowing setup to finish.
+    timeout-minutes: 15
     # Same rationale as zero-click-auth-e2e.yml: the trial hard block is
     # default-ON in code, and this job tests the unrelated locale surface,
     # so opt out to get a dashboard shell without a license.

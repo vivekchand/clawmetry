@@ -1,13 +1,11 @@
 name: Auto-quarantine (C7)
 
-# Runs daily at 04:15 UTC (1h after quarantine-sweep.yml at 02:23 UTC).
+# Manual flake triage; quarantine changes still require a reviewed PR.
 # Detects tests that failed in an OSS Golden Path run then passed on a
 # re-run (= flaky). Opens a PR to add them to tests/quarantine.txt.
 # Tracking: vivekchand/clawmetry#3730 (C7)
 
 on:
-  schedule:
-    - cron: "15 4 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -30,8 +28,8 @@ permissions:
 
 jobs:
   detect-and-quarantine:
-    name: Detect flaky tests and quarantine within 24h
-    runs-on: ubuntu-latest
+    name: Review flaky-test quarantine candidates
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write

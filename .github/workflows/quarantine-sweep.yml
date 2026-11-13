@@ -28,7 +28,7 @@ permissions:
 jobs:
   quarantine-sweep:
     name: Quarantine sweep (daily)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     continue-on-error: true
 

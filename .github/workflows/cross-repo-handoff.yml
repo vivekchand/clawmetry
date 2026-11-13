@@ -21,7 +21,7 @@ permissions:
 jobs:
   cross-repo-handoff:
     name: Cross-repo handoff (C4)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:

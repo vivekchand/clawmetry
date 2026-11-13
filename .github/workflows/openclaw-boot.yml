@@ -39,7 +39,7 @@ permissions:
 jobs:
   boot:
     name: Install + boot + health-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
