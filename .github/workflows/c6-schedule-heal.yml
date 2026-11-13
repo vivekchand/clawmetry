@@ -1,75 +1,10 @@
 name: C6 auto-heal (required-checks application)
 
-# Applies required E2E status checks to main branch protection.
-# Runs every 2 hours and once daily at 10:15am UTC.
-# Self-heals C6 within 2 hours after E2E_ADMIN_PAT secret is added.
-#
-# NOTE: Push trigger scoped to this file only (paths: c6-schedule-heal.yml,
-# 2026-08-05). A push trigger is required for the job-level `if` guard to
-# take effect: without a push trigger in `on:`, GitHub creates a phantom
-# 0-job run on any push that touches this file, and that run concludes as
-# "failure". With the push trigger defined AND the job-level `if` guard
-# (schedule|workflow_dispatch only), the job is SKIPPED on push events and
-# the run concludes as "success" (skipped). The paths filter limits trigger
-# scope to modifications of this file only -- no queue pressure from normal
-# code pushes. See PR #4553 and issue #4029.
-#
-# Schedule paused: 2026-07-20 (GitHub auto-paused after consecutive failures
-# that predated C6 branch protection being configured on 2026-07-31).
-# Schedule re-enabled: 2026-08-06 (this push re-enables it; per GitHub docs,
-# any push that modifies a workflow file un-pauses a paused schedule).
-#
-# When E2E_ADMIN_PAT is NOT set:
-#   - reads current branch protection state (read-only, no admin needed)
-#   - if clawmetry/main checks already configured: exits 0 (C6 green)
-#   - if checks not yet configured on schedule: emits ::error:: annotation and exits 1
-#     (red badge acts as a forcing signal until the admin acts)
-#
-# When E2E_ADMIN_PAT IS set:
-#   - runs scripts/apply_required_status_checks.py to configure checks
-#   - writes a post-apply summary
-#
-# Cross-repo reads (clawmetry-cloud, clawmetry-landing):
-#   GITHUB_TOKEN returns 403 for private cross-repo reads. This is expected,
-#   NOT a bug. Those repos are shown as "cannot verify" in the summary and
-#   do NOT affect the ALL_OK gate. Only clawmetry/main (same-repo, readable)
-#   drives the pass/fail decision. Mirrors c6-health.yml read_protection().
-#
-# Fastest close paths (no waiting for this schedule):
-#
-#   Option A (Settings UI, 60 s, browser only):
-#     https://github.com/vivekchand/clawmetry/settings/branches
-#     > edit main > Require status checks > add:
-#       E2E Gate (required)
-#     Also update clawmetry-cloud/main and clawmetry-landing/main.
-#
-#   Option B (Actions one-shot, PAT paste):
-#     Actions > "Apply required E2E status checks (C6 -- one-shot)"
-#     confirm=APPLY, pat_token=<PAT> > Run workflow
-#     PAT creation: https://github.com/settings/personal-access-tokens/new?name=clawmetry-c6
-#     Permissions: Administration read+write on clawmetry/clawmetry-cloud/clawmetry-landing
-#
-#   Option C (terminal, 30 s, now zero-prerequisites):
-#     bash scripts/close-c6.sh
-#     (auto-installs gh CLI on macOS/Ubuntu if needed)
-#
-#   Option D (set-and-forget -- this workflow does the rest):
-#     Settings > Secrets > Actions > New secret: E2E_ADMIN_PAT
-#     Value: same PAT from Option B
-#     This workflow picks it up within 2 hours and closes C6.
-#
-# Tracking: vivekchand/clawmetry#4552
+# Manual repository-settings maintenance. Functional required checks remain active.
 
 on:
-  schedule:
-    - cron: '0 */2 * * *'   # every 2 hours -- heals within 2h of E2E_ADMIN_PAT being set
-    - cron: '15 10 * * *'   # 10:15am UTC daily (kept for predictability)
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/c6-schedule-heal.yml'
 
-# Prevent two schedule/dispatch runs from overlapping.
 concurrency:
   group: c6-schedule-heal-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
@@ -80,7 +15,7 @@ permissions:
 jobs:
   c6-auto-heal:
     name: C6 auto-heal (apply required checks if E2E_ADMIN_PAT is set)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

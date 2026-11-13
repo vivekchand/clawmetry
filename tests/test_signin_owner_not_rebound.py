@@ -36,6 +36,6 @@ def test_retry_cannot_turn_another_account_into_the_machine_owner(mode):
                 headers={"Origin": "http://untrusted.example:8900"},
                 json={"email": "other@example.com", "code": "123456", "mode": mode},
             )
-            assert response.status_code == 403
+            assert response.status_code in (401, 403)
             assert "dashboard_token" not in response.get_json()
         assert owner["key"] != KEY

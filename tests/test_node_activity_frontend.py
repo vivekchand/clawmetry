@@ -1,5 +1,6 @@
 """Node activity preserves unknown attribution and scopes request lifetimes.
 
+AC-OBS-NODE-SEARCH-003.3: live frames preserve search and distinguish freshness.
 AC-OBS-NODE-006.3: obsolete requests cannot paint or restart stopped pollers.
 AC-OBS-NODE-007.1: selection uses chronological events and preceding measurements.
 AC-OBS-NODE-007.2: reduced motion disables travel and hidden pages stop replay.

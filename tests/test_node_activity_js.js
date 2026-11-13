@@ -269,6 +269,75 @@ async function run() {
   assert.match(emptyPorts.innerHTML,/macOS did not allow/);
   assert.match(emptyPorts.innerHTML,/View coverage/);
   assert.doesNotMatch(emptyPorts.innerHTML,/No TCP listening ports were observed/,'denial is not a complete measured zero');
+
+  h=harness();c=h.context;
+  const handlers={},root={addEventListener:(name,fn)=>{handlers[name]=fn;}};
+  h.nodes.set('page-node-activity',root);
+  for(const id of ['na-processes','na-process-results','na-clawmetry-processes','na-clawmetry-note'])h.nodes.set(id,{innerHTML:'',textContent:''});
+  const input={id:'na-process-search',value:'',focus:()=>{}};
+  h.nodes.set(input.id,input);
+  for(const id of ['na-process-clear','na-process-prev','na-process-next'])h.nodes.set(id,{id,disabled:true,hasAttribute:()=>false,dataset:{}});
+  function click(id){handlers.click({target:{closest:()=>h.nodes.get(id)}});}
+  function search(value){input.value=value;handlers.input({target:input});}
+  const inventory=h.payload('search-node');
+  inventory.processes=Array.from({length:205},(_,i)=>({name:'worker-'+i,pid:i+1,cpu_percent:205-i,stale:false,observed_at:inventory.collected_at}));
+  inventory.processes.push({name:'python3.12',pid:9876,clawmetry_role:'collector',cpu_percent:0,cpu_interval_seconds:30,memory_bytes:1048576,observed_at:inventory.collected_at,stale:false});
+  const read=c.loadNodeActivity();h.answer(h.requests[0],inventory);await read;
+  const searchTable=h.nodes.get('na-processes'),selfTable=h.nodes.get('na-clawmetry-processes');
+  assert.doesNotMatch(searchTable.innerHTML,/worker-204/);
+  assert.match(h.nodes.get('na-process-results').textContent,/1 to 100 of 206/);
+  assert.match(selfTable.innerHTML,/ClawMetry Collector/,'own usage is independent of the visible process page');
+  assert.match(selfTable.innerHTML,/>0%</,'zero CPU is measured, not missing');
+  assert.match(selfTable.innerHTML,/1 MB/);
+  click('na-process-next');click('na-process-next');
+  assert.match(searchTable.innerHTML,/worker-204/,'pagination exposes rows beyond the first hundred');
+  assert.equal(h.nodes.get('na-process-next').disabled,true);
+  search('WORKER-204');
+  assert.match(searchTable.innerHTML,/worker-204/,'case-insensitive search happens before the page cap');
+  assert.match(h.nodes.get('na-process-results').textContent,/1 to 1 of 1/);
+  search('9876');assert.match(searchTable.innerHTML,/ClawMetry Collector/);
+  search('clawmetry');assert.match(searchTable.innerHTML,/python3.12/);
+  const refreshed=c.cmNodeActivity.getState().timer;h.timers.get(refreshed)();
+  const reloading=c.cmNodeActivity.getState().pending;h.answer(h.requests[1],inventory);await reloading;
+  assert.equal(input.value,'clawmetry','refresh preserves the focused search field');
+  assert.match(searchTable.innerHTML,/ClawMetry Collector/);
+  assert.doesNotMatch(searchTable.innerHTML,/worker-/,'refresh reapplies the search');
+  search('<img src=x onerror=alert(1)>');
+  assert.match(searchTable.innerHTML,/No matching processes/);
+  assert.doesNotMatch(searchTable.innerHTML,/<img/);
+  assert.equal(h.requests.length,2,'all searches and pagination use cached observations');
+  click('na-process-clear');
+  assert.equal(input.value,'');assert.match(h.nodes.get('na-process-results').textContent,/1 to 100 of 206/);
+  inventory.processes[205].stale=true;
+  h.timers.get(c.cmNodeActivity.getState().timer)();
+  const staleRead=c.cmNodeActivity.getState().pending;h.answer(h.requests[2],inventory);await staleRead;
+  assert.match(h.nodes.get('na-clawmetry-note').textContent,/stale/);
+  assert.match(selfTable.innerHTML,/Stale observation/);
+  search('clawmetry');c.CLOUD_MODE=true;c.CLOUD_NODE_ID='another';
+  const newNode=c.loadNodeActivity();
+  assert.equal(input.value,'','switching nodes clears the old search');
+  h.answer(h.requests[3],h.payload('old-collector'));await newNode;
+  assert.match(selfTable.innerHTML,/updated collector/,'old snapshots provide upgrade guidance without an invented total');
+  assert.doesNotMatch(selfTable.innerHTML,/0%/);
+  h=harness();c=h.context;
+  h.nodes.set('na-live-state',{textContent:'',dataset:{}});
+  h.nodes.set('na-processes',{innerHTML:''});
+  const fullRead=c.loadNodeActivity();h.answer(h.requests[0],h.payload('live-node'));await fullRead;
+  assert.equal(h.delays.get(c.cmNodeActivity.getState().timer),2000,'live refresh uses one two-second timer');
+  const savedFull=c.cmNodeActivity.getState().data;
+  c.cmNodeActivity.getState().processQuery='clawmetry';
+  for(let i=0;i<2;i++){
+    h.advance(2000);h.timers.get(c.cmNodeActivity.getState().timer)();
+    assert.equal(h.requests[i+1].url,'/api/node-activity?live=1');
+    const frame=Object.assign(h.payload('live-node'),{live:true,processes:[{pid:99,name:'python3',clawmetry_role:'collector',cpu_percent:12+i,memory_bytes:1048576,observed_at:c.Date.now()}]});
+    const pending=c.cmNodeActivity.getState().pending;h.answer(h.requests[i+1],frame);await pending;
+    assert.equal(c.cmNodeActivity.getState().data,savedFull,'live frames do not refetch or replace event history');
+    assert.match(h.nodes.get('na-processes').innerHTML,new RegExp((12+i)+'%'));
+    assert.equal(c.cmNodeActivity.getState().processQuery,'clawmetry');
+  }
+  assert.match(h.nodes.get('na-live-state').textContent,/Live/);
+  assert.equal(h.nodes.get('na-live-state').dataset.live,'true');
+  c.document.hidden=true;h.listeners.visibilitychange();assert.equal(h.timers.size,0,'hidden pages stop the live loop');
   console.log('Node activity JS contracts and lifecycle passed.');
 }
 run().catch(error => {console.error(error); process.exit(1);});
