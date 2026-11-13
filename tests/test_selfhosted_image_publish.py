@@ -361,7 +361,7 @@ def test_pin_runs_only_after_verification(image_wf) -> None:
     assert set(job["needs"]) == {"publish", "verify"}
     run = next(s["run"] for s in _steps(job) if _runs(s, "pin_selfhosted_compose.py"))
     assert run.index("pin_selfhosted_compose.py pin") < run.index("pin_selfhosted_compose.py check")
-    assert "factory.8090.ai/project/" in run, "the pin pull request must cite its product record"
+    assert "github.com/vivekchand/clawmetry-cloud/blob/main/docs/product-records/requirements/" in run, "the pin pull request must cite its versioned product record"
 
 
 def test_pin_replaces_the_source_build_with_version_and_digest() -> None:

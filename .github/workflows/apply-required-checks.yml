@@ -54,19 +54,14 @@ on:
           Leave blank to use E2E_ADMIN_PAT secret (or GITHUB_TOKEN read-only).
         required: false
         default: ""
-  push:
-    branches: [main]
 
-# contents:read is required for actions/checkout.
-# issues:write is required for the C6 gap notification step.
-# administration:write is intentionally absent (see note above).
 permissions:
   contents: read
 
 jobs:
   apply-required-checks:
     name: Apply required E2E status checks (C6)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

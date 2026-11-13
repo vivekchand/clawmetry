@@ -51,7 +51,7 @@ concurrency:
 jobs:
   guard:
     name: Runtime selection and confidentiality guards
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -66,7 +66,7 @@ jobs:
   plan:
     if: github.repository == 'vivekchand/clawmetry' && github.event_name != 'pull_request'
     needs: guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       pro_sha: ${{ steps.pro.outputs.sha }}
@@ -149,7 +149,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.runtimes != '[]'
     name: Runtime fixture and adapter tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 45
     defaults:
       run:
@@ -222,7 +222,7 @@ jobs:
     name: OSS runtime compatibility
     if: always() && github.event_name != 'pull_request'
     needs: [plan, compatibility]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
       - name: Record the result on the exact Pro candidate

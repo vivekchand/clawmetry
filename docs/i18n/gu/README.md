@@ -16,7 +16,7 @@
 ટૂલ કોલ્સ, અને રનટાઇમ જે પણ ટોકન અને ખર્ચનો ડેટા ઉજાગર કરે છે તે બધું એક
 વ્યૂમાં મૂકે છે — જેથી તમે કહી શકો કે કયો લાંબો રન કામ કરી રહ્યો છે અને કયો અટકી ગયો છે.
 
-**33 AI એજન્ટ રનટાઇમ્સ** સાથે કામ કરે છે — Claude Code, OpenAI Codex, Hermes, OpenClaw અને બીજા 29. તમારા આખા એજન્ટ ફ્લીટ માટે એક ડેશબોર્ડ. ([સંપૂર્ણ યાદી](SUPPORTED_RUNTIMES.txt), કેટેલોગમાંથી જનરેટ કરવામાં આવી છે.)
+**32 AI એજન્ટ રનટાઇમ્સ** સાથે કામ કરે છે — Claude Code, OpenAI Codex, Hermes, OpenClaw અને બીજા 28. તમારા આખા એજન્ટ ફ્લીટ માટે એક ડેશબોર્ડ. ([સંપૂર્ણ યાદી](SUPPORTED_RUNTIMES.txt), કેટેલોગમાંથી જનરેટ કરવામાં આવી છે.)
 
 > 🌐 **આ વાંચો:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [વધુ →](docs/i18n/)
 
@@ -48,11 +48,11 @@ pip install clawmetry && clawmetry
 બ્લોક કરવામાં સક્ષમ થવા બરાબર નથી ([કયા નિયંત્રણો વાસ્તવિક છે, દરેક રનટાઇમ પ્રમાણે](docs/APPROVALS.md)).
 
 
-## 33 એજન્ટ રનટાઇમ્સ સાથે કામ કરે છે
+## 32 એજન્ટ રનટાઇમ્સ સાથે કામ કરે છે
 
 **ઓપન સોર્સ એપમાં મફત:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**પેઇડ પ્લાન પર:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**પેઇડ પ્લાન પર:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 દરેક રનટાઇમને એક જ ડેશબોર્ડ મળે છે. એકસાથે ઘણા ચલાવો અને હેડર
 સ્વિચર દરેક ટેબને તેમાંથી એક પર ફરીથી સ્કોપ કરે છે.
@@ -81,7 +81,7 @@ pip install clawmetry && clawmetry
 યુટિલાઇઝેશન પર્સન્ટેજ એટલું જ પ્રામાણિક છે જેટલું તે શેના વડે ભાગે છે. ClawMetry
 [તમે વાંચી શકો અને PR કરી શકો તેવા ટેબલ](clawmetry/context_windows.py)માંથી દરેક
 પ્રોવાઇડર પ્રમાણે વિન્ડો સાઈઝ કરે છે, જેમાં Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama અને GLM સામેલ છે. તે બધા 33
+DeepSeek, Kimi, Qwen, Mistral, Llama અને GLM સામેલ છે. તે બધા 32
 રનટાઇમને એક જ વેન્ડરના સ્કેલથી માપતું નથી. આ મહત્વનું છે: Anthropicના
 200Kની સામે માપેલો 300K GPT-5 ટર્ન ">100%, બ્લોન" વાંચે છે જ્યારે તે ખરેખર
 GPT-5ના 400Kના 75% પર છે. એ જ સ્કેલ ખરેખર ઓવરફ્લો થયેલા 130K DeepSeek
@@ -101,7 +101,7 @@ ClawMetry કેટલાક રનટાઇમ્સ પર જ કોમ્પ
 
 | પાથ | તમારા એજન્ટમાં ઉમેરાયેલું | ડિફોલ્ટ? |
 |---|---|---|
-| સેશન-ફાઇલ ટેઇલિંગ (બધા 33 રનટાઇમ્સ) | **0**. અલગ પ્રોસેસ, તમારા એજન્ટમાં કોઈ ClawMetry કોડ નથી | ચાલુ |
+| સેશન-ફાઇલ ટેઇલિંગ (બધા 32 રનટાઇમ્સ) | **0**. અલગ પ્રોસેસ, તમારા એજન્ટમાં કોઈ ClawMetry કોડ નથી | ચાલુ |
 | HTTP ઇન્ટરસેપ્ટર (`CLAWMETRY_INTERCEPT=1`) | દરેક LLM કોલ દીઠ **+0.44 ms**, અથવા 5s કોલના 0.009% | બંધ |
 | પ્રી-ટૂલ હુક ગેટ (ગરમ કેશ) | 36 ms ઇન્ટરપ્રિટર ફ્લોર ઉપર, દરેક ગેટેડ ટૂલ કોલ દીઠ **+44 ms** | બંધ |
 | એન્ફોર્સમેન્ટ પ્રોક્સી | દરેક LLM કોલ દીઠ **+9.7 ms** | બંધ |
