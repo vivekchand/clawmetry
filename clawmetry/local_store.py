@@ -665,11 +665,24 @@ _HEARTBEAT_DATA_MAX_VALUE_BYTES = 64 * 1024
 # input or the rollups and the live aggregate part ways — which is the bug
 # class ADR-046 exists to close, so a test pins them against each other.
 from clawmetry.cost_windows import day_expr_sql as _day_expr_sql  # noqa: E402
+from clawmetry.cost_windows import timestamp_expr_sql as _timestamp_expr_sql  # noqa: E402
 from clawmetry.cost_windows import local_day as _local_day  # noqa: E402
 from clawmetry.cost_windows import hour_expr_sql as _hour_expr_sql  # noqa: E402
 from clawmetry.cost_windows import now_local as _cw_now_local  # noqa: E402
 
+# This is an opaque grouping key, never a source clock. An unknown timestamp
+# cannot prove two events are sibling envelopes, so retain each by its own ID.
+def _event_turn_key_expr_sql(col: str = "ts", id_col: str = "id") -> str:
+    if (col, id_col) not in {("ts", "id"), ("e.ts", "e.id")}:
+        raise ValueError("Unsupported internal event timestamp identifiers")
+    return (
+        f"COALESCE(CAST(CAST(EXTRACT(EPOCH FROM {_timestamp_expr_sql(col)}) AS BIGINT) AS VARCHAR),"
+        f" 'event:' || {id_col})"
+    )
+
+
 _DAY_EXPR = _day_expr_sql("ts")
+_EVENT_TURN_KEY_EXPR = _event_turn_key_expr_sql()
 _HOUR_EXPR = _hour_expr_sql("ts")
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
@@ -4258,7 +4271,8 @@ def heal_index_corruption() -> int:
 # model.completed sibling is dropped only when a richer assistant/message row
 # shares its (session_id, ts-rounded-to-second) bucket. This mirrors the
 # canonical dedup in query_sessions/query_aggregates so all cost surfaces agree.
-_DEDUPED_EVENTS_CTE = """
+# Fixed CTE: its only interpolation is built from allowlisted internal identifiers.
+_DEDUPED_EVENTS_CTE = f"""
   _ranked AS (
     SELECT session_id, ts, cost_usd, token_count, model, event_type,
       CASE event_type
@@ -4267,7 +4281,7 @@ _DEDUPED_EVENTS_CTE = """
         WHEN 'model.completed' THEN 1
         ELSE 0
       END AS _envelope_rank,
-      CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT) AS _ts_sec
+      {_EVENT_TURN_KEY_EXPR} AS _ts_sec
     FROM events
   ),
   _bucket_max AS (
@@ -4279,7 +4293,7 @@ _DEDUPED_EVENTS_CTE = """
     JOIN _bucket_max bm USING (session_id, _ts_sec)
     WHERE NOT (r._envelope_rank = 1 AND bm._max_rank = 2)
   )
-"""
+"""  # nosec B608
 
 
 def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:
@@ -4340,7 +4354,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         """Private plugin query on the daemon-owned connection. No raw SQL RPC."""
         from clawmetry.extensions import call
         if operation not in {"runs", "events", "snapshot", "inventory", "guard_ack", "guard_incidents", "set_observation_only",
-                             "trace_detail", "trace_events", "trace_spans", "trace_artifact", "trace_artifacts", "trace_notes", "trace_guard_get", "trace_jobs",
+                             "trace_runs", "trace_detail", "trace_events", "trace_spans", "trace_artifact", "trace_artifacts", "trace_notes", "trace_guard_get", "trace_jobs",
                              "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share"}:
             raise ValueError("Unsupported robotics query")
         return call("robotics.query", {"store": self, "operation": operation, "args": args or {}},
@@ -15037,8 +15051,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                   WHEN 'model.completed'  THEN 1
                   ELSE 0
                 END AS envelope_rank,
-                CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT)
-                                                 AS ts_sec
+                {_EVENT_TURN_KEY_EXPR} AS ts_sec
               FROM events
               {where}
             ),
@@ -15962,12 +15975,9 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                   WHEN 'model.completed'  THEN 1
                   ELSE 0
                 END AS envelope_rank,
-                CAST(EXTRACT(EPOCH FROM CAST(e.ts AS TIMESTAMP)) AS BIGINT)
-                                                 AS ts_sec
+                {_event_turn_key_expr_sql('e.ts', 'e.id')} AS ts_sec
               FROM events e
-              -- Scope to subagent sessions only: avoids a full events table
-              -- scan and shields against CAST(ts AS TIMESTAMP) errors on
-              -- session events that use millis-epoch ts strings.
+              -- Scope to subagent sessions only: avoids a full events table scan.
               WHERE e.session_id IN (SELECT subagent_id FROM subagents)
             ),
             bucket_max AS (
@@ -18378,7 +18388,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                         WHEN 'model.completed' THEN 1
                         ELSE 0
                     END AS _er,
-                    CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT) AS _tsec
+                    {_EVENT_TURN_KEY_EXPR} AS _tsec
                 FROM events
             ),
             _ev_bmax AS (
@@ -20153,8 +20163,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                   WHEN 'model.completed'  THEN 1
                   ELSE 0
                 END AS envelope_rank,
-                CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT)
-                                                 AS ts_sec
+                {_EVENT_TURN_KEY_EXPR} AS ts_sec
               FROM events
               {where}
             ),
