@@ -2,8 +2,6 @@ name: BrowserStack
 
 on:
   workflow_dispatch:  # Manual trigger only
-  push:
-    branches: [main]  # Run on merge to main
   pull_request:
     branches: [main]
     types: [labeled]  # Trigger by adding label 'browserstack'
@@ -19,7 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Dependabot PRs run without repo secrets; skip rather than fail.
-    if: github.actor != 'dependabot[bot]'
+    if: github.actor != 'dependabot[bot]' && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'browserstack')
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -7,11 +7,10 @@
 #
 #   1. clear-queue  — on every push to main, cancel all *queued* (never
 #      in-progress) runs on non-main refs so main's jobs take the runners next.
-#   2. requeue      — once main is quiet again (Auto-deploy Cloud completed, or
-#      the half-hourly sweep finds main idle), re-run the latest cancelled run
-#      of each workflow for every open PR whose drift-bot commit status is
-#      green. Red-drift PRs stay parked until their drift is fixed and
-#      re-reported.
+#   2. requeue      — once main is quiet again (a main workflow or product-record
+#      check completes), re-run the latest cancelled run
+#      of each workflow for every open PR whose product-record check is
+#      successful. PRs with failing product-record checks stay parked.
 #
 # No third-party actions on purpose: every step is `gh api` against
 # GITHUB_TOKEN, so there is nothing to SHA-pin and no checkout needed.
@@ -28,17 +27,15 @@ on:
   # from that upstream run. This workflow has no checkout at all: as the header
   # above records, every step is `gh api` against GITHUB_TOKEN, so there is no
   # attacker-controlled code path to reach. The only thing it reads from the
-  # event is `github.event_name`, to decide which of the two jobs runs.
+  # event is workflow metadata, to decide which of the two jobs runs.
   #
-  # The `requeue` job does re-run parked runs for open PRs, forks included, but
+  # The `requeue` job only re-runs parked runs for same-repository open PRs; a
   # a re-run replays that run in its ORIGINAL pull_request context — the same
   # restricted token it had the first time. It cannot borrow this workflow's
   # scopes, which is why re-running is safe to automate here.
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: ["Auto-deploy Cloud on OSS update"]
+    workflows: ["*", "!Queue priority (main first)"]
     types: [completed]
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 # Nothing at the workflow level: each job below declares exactly the scopes it
@@ -67,17 +64,20 @@ jobs:
     steps:
       - name: Cancel every queued run not on main
         run: |
-          set -u
+          set -euo pipefail
           ok=0; fail=0
-          for id in $(gh api "/repos/$REPO/actions/runs?status=queued&per_page=100" --paginate \
-                        --jq '.workflow_runs[]
+          ids=$(gh api "/repos/$REPO/actions/runs?status=queued&per_page=100" --paginate --slurp \
+                        --jq '.[].workflow_runs[]
                               | select(.head_branch != "main")
                               # The PyPI publish fires on pull_request:closed, so its
                               # head branch is the merged PR branch, not main. Cancelling
                               # it left a [RELEASE] commit on main with nothing
                               # published (2026-09-03, #5464 vs #5455). Never park it.
                               | select(.name != "Auto-release on [RELEASE] merge")
-                              | .id'); do
+                              | select(.name != "Product record (requirements before code)")
+                              | select(.path != ".github/workflows/product-record-gate.yml")
+                              | .id')
+          for id in $ids; do
             if gh api -X POST "/repos/$REPO/actions/runs/$id/cancel" >/dev/null 2>&1; then
               ok=$((ok+1))
             else
@@ -88,19 +88,19 @@ jobs:
           echo "cancelled=$ok not-cancellable=$fail"
 
   requeue:
-    name: Re-run green-drift PRs once main is idle
-    if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Re-run reviewed-record PRs once main is idle
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        github.event.workflow_run.name == 'Product record (requirements before code)'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # actions: re-run parked runs; statuses: read drift-bot's commit status;
-    # pull-requests: list the open PRs to consider.
-    #
-    # `statuses: read` rather than `checks: read`: drift-bot is a commit
-    # status, not a check run (see the step below), and the two surfaces are
-    # governed by different scopes. Nothing here reads /check-runs any more.
+    # Requeue cancelled PR validation after the portable record check succeeds.
+    # Merge safety is still enforced by the required E2E aggregate.
     permissions:
       actions: write
-      statuses: read
+      checks: read
       pull-requests: read
     steps:
       - name: Skip while main still has queued or running jobs
@@ -112,54 +112,47 @@ jobs:
         env:
           SELF: ${{ github.workflow }}
         run: |
-          set -u
-          busy=$(gh api "/repos/$REPO/actions/runs?branch=main&per_page=100" \
-                   --jq '[.workflow_runs[]
+          set -euo pipefail
+          busy=$(gh api "/repos/$REPO/actions/runs?branch=main&per_page=100" --paginate --slurp \
+                   --jq '[.[].workflow_runs[]
                           | select(.status == "queued" or .status == "in_progress")
                           | select(.name != env.SELF)] | length')
           echo "main busy runs: $busy"
           echo "idle=$([ "$busy" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
-      - name: Re-run cancelled runs for open PRs with green drift-bot
+      - name: Re-run cancelled runs for open PRs with a valid product record
         if: steps.gate.outputs.idle == 'true'
         run: |
-          set -u
+          set -euo pipefail
           CUTOFF=$(date -u -d '48 hours ago' +%Y-%m-%dT%H:%M:%SZ)
           export CUTOFF
-          gh api "/repos/$REPO/pulls?state=open&per_page=100" --paginate \
-            --jq '.[] | select(.head.repo.full_name == env.REPO) | "\(.number)\t\(.head.ref)\t\(.head.sha)"' |
+          pulls=$(gh api "/repos/$REPO/pulls?state=open&per_page=100" --paginate --slurp \
+            --jq '.[][] | select(.head.repo.full_name == env.REPO) | "\(.number)\t\(.head.ref)\t\(.head.sha)"')
+          rerun_failures=0
           while IFS=$'\t' read -r pr branch sha; do
-            # drift-bot is a COMMIT STATUS posted by the 8090-software-factory
-            # App, not an Actions check run. It never appears in /check-runs --
-            # scripts/e2e_gate.py grew list_commit_statuses() for exactly this
-            # reason. Reading the wrong surface returned "missing" for every
-            # PR, so the guard below rejected all of them and this job has
-            # re-run nothing since it landed: every run clear-queue cancelled
-            # stayed cancelled. /commits/<sha>/status already collapses to the
-            # latest status per context.
-            drift=$(gh api "/repos/$REPO/commits/$sha/status" \
-                      --jq '[.statuses[] | select(.context == "drift-bot") | .state]
-                            | first // "unreported"')
-            # Success-only, exactly as the Main-First Runner Queue Priority
-            # requirement states. "unreported" is its own case and is NOT
-            # treated as green here: the App only posts on PRs touching Python
-            # or product-record files, so a frontend-only Dependabot npm bump
-            # never receives a status and stays parked. Widening the condition
-            # to cover it is a change to the requirement, not to this file --
-            # see the PR discussion. Kept distinct from "missing" only so the
-            # log says which of the two happened.
-            [ "$drift" = "success" ] || { echo "PR #$pr: drift=$drift, parked"; continue; }
-            # Latest run per workflow on this head branch; re-run it only if it
+            [ -n "$pr" ] || continue
+            # Requeue only after the portable product-record check has passed.
+            # This schedules work; the required E2E aggregate still gates merging.
+            record=$(gh api "/repos/$REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp \
+                       --jq '[.[].check_runs[] | select(.name == "PR cites the product record that justified it")]
+                             | max_by(.id) | .conclusion // "unreported"')
+            [ "$record" = "success" ] || { echo "PR #$pr: product-record=$record, parked"; continue; }
+            # Latest run per workflow on this exact head; re-run it only if it
             # ended cancelled (i.e. we parked it) and recently.
-            gh api "/repos/$REPO/actions/runs?branch=$branch&event=pull_request&per_page=100" \
-              --jq '[.workflow_runs[] | select(.created_at > env.CUTOFF)]
+            export CANDIDATE_SHA="$sha"
+            branch_query=$(jq -nr --arg ref "$branch" '$ref | @uri')
+            ids=$(gh api "/repos/$REPO/actions/runs?branch=$branch_query&event=pull_request&per_page=100" --paginate --slurp \
+              --jq '[.[].workflow_runs[] | select(.head_sha == env.CANDIDATE_SHA and .created_at > env.CUTOFF)]
                    | group_by(.workflow_id) | .[] | max_by(.created_at)
-                   | select(.conclusion == "cancelled") | .id' |
+                   | select(.conclusion == "cancelled") | .id')
             while read -r id; do
+              [ -n "$id" ] || continue
               if gh api -X POST "/repos/$REPO/actions/runs/$id/rerun" >/dev/null 2>&1; then
                 echo "PR #$pr: re-ran $id"
               else
                 echo "PR #$pr: could not re-run $id"
+                rerun_failures=$((rerun_failures+1))
               fi
-            done
-          done
+            done <<< "$ids"
+          done <<< "$pulls"
+          [ "$rerun_failures" -eq 0 ]

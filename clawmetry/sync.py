@@ -2340,15 +2340,9 @@ def _maybe_install_license_from_heartbeat(resp: dict) -> None:
                 existing = ""
         if existing == key:
             return
-        os.makedirs(os.path.dirname(lic_path), exist_ok=True)
-        tmp = lic_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(key)
-        os.replace(tmp, lic_path)
-        try:
-            os.chmod(lic_path, 0o600)
-        except Exception:
-            pass
+        from clawmetry.license import _store_license_key
+        if not _store_license_key(key, path=lic_path):
+            return
         log.info(
             "✓ ClawMetry license installed from cloud — dashboard will unlock "
             "on the next resolver refresh (up to 60s)."

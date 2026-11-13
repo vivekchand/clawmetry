@@ -3175,6 +3175,54 @@
       "doc": "Guard security boundaries and timely incident handling",
       "doc_id": "96f8c30c-8789-49e8-8ebf-2a36536094a9",
       "text": "When these protections are validated, the system shall retain regression evidence for denied action substitution, service interruption, completed-session attacks, scope escapes and ordinary allowed work."
+    },
+    {
+      "id": "AC-GUX-TRR-001.1",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The expired-trial plan dialog shall fit a 1280 by 720 CSS viewport and keep actions reachable without horizontal overflow at narrow viewports."
+    },
+    {
+      "id": "AC-GUX-TRR-001.2",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The plan dialog shall show the selected billing period and per-node price, preserving the chosen tier when the billing period changes."
+    },
+    {
+      "id": "AC-GUX-TRR-001.3",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The primary action shall provide at least 4.5 to 1 text contrast."
+    },
+    {
+      "id": "AC-GUX-TRR-001.4",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The dialog shall preserve translated controls and offer optional feedback only after the user declines subscribing."
+    },
+    {
+      "id": "AC-GUX-TRR-001.5",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The dialog shall contain keyboard focus, support dismissal when optional, and keep license entry collapsed until requested."
+    },
+    {
+      "id": "AC-GUX-TRR-001.6",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The recovery flow shall request eligibility only on user intent and display the confirmed end date only after a successful claim."
+    },
+    {
+      "id": "AC-GUX-TRR-001.7",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The local recovery endpoint shall keep credentials private, reject cross-site or identity-changing requests and confirm only successfully applied licenses."
+    },
+    {
+      "id": "AC-GUX-TRR-001.8",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "A trial license refresh shall never replace a current paid license or shorten a longer current trial, including concurrent processes."
     }
   ]
 }

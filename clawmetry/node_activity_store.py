@@ -205,17 +205,27 @@ class NodeActivityStoreMixin:
         self._conn.execute("DELETE FROM node_activity_reviews WHERE id IN (SELECT id FROM node_activity_reviews ORDER BY reviewed_at DESC,id DESC OFFSET ?)", [MAX_REVIEWS])
 
     def get_node_activity_state(self):
-        """Private daemon state. Never add this method to an HTTP allowlist."""
-        with self._write_lock:
-            prefs = dict(DEFAULT_PREFERENCES)
-            prefs.update(self._node_meta_locked("preferences", {}))
-            key = self._node_meta_locked("fingerprint_key")
-            if key is None:
-                if self._read_only:
-                    raise RuntimeError("Node comparison key requires the daemon writer")
-                key = os.urandom(32).hex()
-                self._node_put_locked("fingerprint_key", key)
-            return {"preferences": prefs, "fingerprint_key": bytes.fromhex(key)}
+        """Private daemon state. Never add this method to an HTTP allowlist.
+
+        Read initialized values through the concurrent per-thread cursor.
+        """
+        values = {key: json.loads(value) for key, value in self._fetch(
+            "SELECT key,value FROM node_activity_meta WHERE key IN (?,?)",
+            ["preferences", "fingerprint_key"])}
+        prefs = dict(DEFAULT_PREFERENCES)
+        prefs.update(values.get("preferences", {}))
+        key = values.get("fingerprint_key")
+        if key is None:
+            if self._read_only:
+                raise RuntimeError("Node comparison key requires the daemon writer")
+            with self._write_lock:
+                # Another first collection may have initialized it while this
+                # reader waited for an unrelated ingestion transaction.
+                key = self._node_meta_locked("fingerprint_key")
+                if key is None:
+                    key = os.urandom(32).hex()
+                    self._node_put_locked("fingerprint_key", key)
+        return {"preferences": prefs, "fingerprint_key": bytes.fromhex(key)}
 
     def record_node_activity(self, observation, *, retention_hours=24, max_events=2000):
         if self._read_only:
@@ -317,7 +327,8 @@ class NodeActivityStoreMixin:
         touch_node_activity_view()
         rows = self._fetch("SELECT value FROM node_activity_meta WHERE key='live'", [])
         body = json.loads(rows[0][0]) if rows else dict(unavailable("Waiting for the first live measurement."), live=True)
-        prefs = self.get_node_activity_state()["preferences"]
+        prefs_rows = self._fetch("SELECT value FROM node_activity_meta WHERE key='preferences'", [])
+        prefs = dict(DEFAULT_PREFERENCES, **(json.loads(prefs_rows[0][0]) if prefs_rows else {}))
         body["preferences"] = prefs
         if not prefs["enabled"] or not prefs["processes"]:
             body["processes"] = []

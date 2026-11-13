@@ -216,7 +216,8 @@ def test_shutdown_during_collection_does_not_start_a_late_write(tmp_path,monkeyp
     import threading
     from clawmetry import node_activity_service as service
     from tests.test_node_activity import Store
-    store=Store();stopping=threading.Event()
+    store = Store()
+    stopping = threading.Event()
     def collect(**kwargs):
         stopping.set()
         return collector.collect_node_activity(psutil_module=Sensor(),home=tmp_path,**kwargs)
@@ -225,4 +226,111 @@ def test_shutdown_during_collection_does_not_start_a_late_write(tmp_path,monkeyp
     try:
         assert service.tick_node_activity(store,stop_event=stopping) is None
         assert not store.query_node_activity()['available']
-    finally:store._conn.close()
+    finally:
+        store._conn.close()
+
+
+def _concurrent_node_store():
+    from tests.test_node_activity import Store
+    class ConcurrentStore(Store):
+        def _fetch(self, sql, params):
+            cursor = self._conn.cursor()
+            try:
+                return cursor.execute(sql, params).fetchall()
+            finally:
+                cursor.close()
+    return ConcurrentStore()
+
+
+def test_initialized_live_reads_complete_while_ingestion_holds_writer():
+    """AC-OBS-NODE-SEARCH-003.1: read-only preferences cannot queue behind ingest."""
+    import threading
+    store = _concurrent_node_store()
+    expected = store.get_node_activity_state()
+    store.record_node_activity_live({'live': True, 'available': True, 'processes': [], 'summary': {}})
+    done = threading.Event()
+    values, errors = [], []
+    def read():
+        try:
+            values.append(store.get_node_activity_state())
+            values.append(store.query_node_activity_live())
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+    store._write_lock.acquire()
+    thread = threading.Thread(target=read, daemon=True)
+    try:
+        thread.start()
+        assert done.wait(2), 'Live reads waited for an unrelated writer transaction'
+        assert not errors
+        assert values[0] == expected
+        assert values[1]['preferences']['enabled'] is True
+    finally:
+        store._write_lock.release()
+        thread.join(2)
+        store._conn.close()
+
+
+def test_live_read_does_not_initialize_a_private_comparison_key():
+    import threading
+    store = _concurrent_node_store()
+    done = threading.Event()
+    errors = []
+    def read():
+        try:
+            assert store.query_node_activity_live()['preferences']['enabled'] is True
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+    store._write_lock.acquire()
+    thread = threading.Thread(target=read, daemon=True)
+    try:
+        thread.start()
+        assert done.wait(2), 'A frame read attempted comparison-key initialization'
+        assert not errors
+    finally:
+        store._write_lock.release()
+        thread.join(2)
+    try:
+        assert not store._fetch("SELECT value FROM node_activity_meta WHERE key='fingerprint_key'", [])
+    finally:
+        store._conn.close()
+
+
+def test_initial_comparison_key_creation_remains_serialized():
+    import threading
+    store = _concurrent_node_store()
+    observed_missing = threading.Barrier(3)
+    fetch = store._fetch
+    def read(sql, params):
+        rows = fetch(sql, params)
+        if 'WHERE key IN' in sql and not any(row[0] == 'fingerprint_key' for row in rows):
+            observed_missing.wait(timeout=2)
+        return rows
+    store._fetch = read
+    results, errors = [], []
+    def initialize():
+        try:
+            results.append(store.get_node_activity_state()['fingerprint_key'])
+        except Exception as exc:
+            errors.append(exc)
+    store._write_lock.acquire()
+    threads = [threading.Thread(target=initialize, daemon=True) for _ in range(2)]
+    try:
+        for thread in threads:
+            thread.start()
+        observed_missing.wait(timeout=2)
+        assert not results, 'Missing comparison keys require the daemon writer'
+    finally:
+        store._write_lock.release()
+        for thread in threads:
+            thread.join(2)
+    try:
+        assert not errors and len(results) == 2
+        assert len(results[0]) == 32 and results[0] == results[1]
+        assert store.get_node_activity_state()['fingerprint_key'] == results[0]
+        assert len(store._fetch("SELECT value FROM node_activity_meta WHERE key='fingerprint_key'", [])) == 1
+    finally:
+        store._conn.close()

@@ -1,11 +1,11 @@
 <!--
-FLYWHEEL.md section 0c: write the product record in 8090 BEFORE the code.
-Software Factory is the product reviewer -- a requirement written after the
+FLYWHEEL.md section 0c: write and review the versioned product record BEFORE the code.
+An independent reviewer reads the record -- a requirement written after the
 fact reviews nothing. Link what justified this change, or say why it needs
 nothing. CI checks that one of the two is present, never which one is right.
 -->
 
-**Product record:** <!-- https://factory.8090.ai/project/<uuid>/requirements/<uuid> -->
+**Product record:** <!-- docs/product-records/<name>.md or a private GitHub record/issue URL -->
 
 <!-- For a change that genuinely needs none, delete the line above and keep a
      real reason instead:   No-PRD: typo in a log string -->
