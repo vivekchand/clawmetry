@@ -680,6 +680,11 @@ jobs:
       - name: Runtime memory catalog
         run: python3 -m pytest tests/test_runtime_memory_catalog.py -q
 
+      - name: Setup file previews preserve bytes and reject binary text
+        run: |
+          python3 -m pytest tests/test_setup_file_preview.py -q
+          node --test tests/test_setup_file_preview.js
+
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) -- the
       # 2026-08-29 Windows "PyPI install failed" brick. Runs here because
@@ -884,6 +889,13 @@ jobs:
       - name: File containment and direct loopback authentication
         run: python3 -m pytest tests/test_file_boundaries.py -q --tb=short
 
+      # The reporter of GHSA-6r57-3vhv-2wpf emailed because SECURITY.md's
+      # private-advisory link 404s: that form is not enabled on this repo.
+      # A security policy whose reporting channel is dead costs reports that
+      # are never sent, so the wording is held, not trusted.
+      - name: Security policy names a reporting channel that works
+        run: python3 -m pytest tests/test_security_policy_report_channel.py -q --tb=short
+
       - name: Email sign-in preserves the linked account and opens the dashboard
         run: python3 -m pytest tests/test_signin_owner_not_rebound.py tests/test_verify_otp_opens_dashboard.py tests/test_verify_otp_rail_selection.py tests/test_auth_detected_token.py tests/test_login_overlay_fetches_real_routes.py -q
 
@@ -963,6 +975,12 @@ jobs:
       # one thing standing between a Windows user and no alert at all.
       # Running the same file on all three runners costs a second and is the
       # only place this code ever executes natively on Windows or macOS.
+      - name: Trial recovery and license writer races (native, all three OS)
+        timeout-minutes: 3
+        run: |
+          pip install --require-hashes -r .github/requirements/ci-trial-recovery.txt
+          python3 -m pytest tests/test_trial_extension.py tests/test_license_write_races.py -q --tb=short
+
       - name: Desktop notification backends (native, all three OS)
         timeout-minutes: 3
         run: python3 -m pytest tests/test_desktop_notify_clickable.py -q --tb=short
@@ -1051,6 +1069,9 @@ jobs:
           pip install --require-hashes
           -r .github/requirements/ci-tests.txt
           -r .github/requirements/ci-assistant-tls.txt
+      - name: Epoch ingestion and local-calendar cost queries
+        timeout-minutes: 3
+        run: python3 -m pytest tests/test_epoch_day_bucket.py tests/test_day_bucket_local.py -q --tb=short
       - name: Verify assistant analytics and dashboard persistence
         run: >-
           python3 -m pytest -q --tb=short
@@ -1495,7 +1516,7 @@ jobs:
           python3 scripts/gen_atlas_openclaw_scorecard.py --bundle "$RUNNER_TEMP/atlas-openclaw-evidence.json"
       - name: Upload the ATLAS OpenClaw evidence bundle
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: atlas-openclaw-evidence
           path: ${{ runner.temp }}/atlas-openclaw-evidence.json
@@ -1850,12 +1871,13 @@ jobs:
             tests/test_e2e_oss_all_tabs.py \
             tests/test_assistant_evidence_browser.py \
             tests/test_node_activity_browser.py \
+            tests/test_trial_offer_browser.py \
             -v --tb=short -m 'not quarantine' \
             --junitxml=/tmp/junit-e2e-critical.xml
 
       - name: Upload JUnit test report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: junit-e2e-critical-${{ github.run_id }}
           path: /tmp/junit-e2e-critical.xml
@@ -2118,7 +2140,7 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
         run: |
           clawmetry eval --suite tests/data/golden_ci.yaml --no-persist --json > eval-result.json || true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() && steps.gate.outputs.skip != '1' && steps.keycheck.outputs.skip != '1'
         with:
           name: clawmetry-ci-eval-result
@@ -2195,7 +2217,7 @@ jobs:
         run: python3 -m pytest tests/test_moat_live_openclaw_e2e.py tests/test_e2e_real_openclaw_pipeline.py -v --tb=short
       - name: Upload gateway logs on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: moat-live-e2e-logs
           path: |

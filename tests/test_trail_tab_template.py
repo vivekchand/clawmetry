@@ -153,7 +153,7 @@ def test_default_landing_is_the_conversational_assistant():
     mon = nav.index('data-i18n="nav.section_monitoring"')
     ana = nav.index('data-i18n="nav.section_analyze"')
     assert re.findall(r'data-tab="([a-z-]+)"', nav[mon:ana]) == [
-        "overview", "inventory", "node-activity", "setup", "improve", "transcripts", "brain", "usage", "delivery",
+        "overview", "inventory", "transcripts", "node-activity", "setup", "improve", "brain", "usage", "delivery",
         "models", "context-economics",
     ]
     # Nothing lost.
