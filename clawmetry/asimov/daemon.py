@@ -23,6 +23,23 @@ def journal_directory():
                 Path.home() / ".clawmetry" / "robotics" / "journal").expanduser()
 
 
+def daemon_writer(store):
+    """Return a handle that can actually write, asking again when it cannot.
+
+    The daemon warms ``local_store.get_store`` up before ``local_server``
+    marks this process the writer owner, so the handle captured at that
+    moment can be the read-only proxy the dashboard uses. Collection is
+    started with that captured handle and refused forever, while every later
+    caller in the same process is handed the real writer. Resolve it here
+    instead of trusting the handle the caller happened to hold.
+    """
+    if store is not None and not getattr(store, "_read_only", True):
+        return store
+    from clawmetry import local_store
+
+    return local_store.get_store(read_only=False)
+
+
 def start(store):
     """Start local journal ingestion once; replace a previously ended worker.
 
@@ -33,7 +50,7 @@ def start(store):
     with _lock:
         if _worker is not None and _worker.is_alive():
             return
-        reader = AsimovLocalStore(store, initialize=True)
+        reader = AsimovLocalStore(daemon_writer(store), initialize=True)
         _stop.clear()
 
         def collect():

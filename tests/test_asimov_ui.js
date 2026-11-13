@@ -140,11 +140,52 @@ async function run(){
   assert.equal(h.c.cmAsimov.getState().loading,null,'a hung shared snapshot cannot hold the renderer forever');
   assert.equal([...h.timers.values()].some(timer=>timer.delay===3000),true,'polling recovers after provider timeout');
   const navigation=fs.readFileSync(path.join(__dirname,'../clawmetry/static/js/nav-dropdown.js'),'utf8');
+  // A rail that can hold the link, remove it again, and answer for what it holds.
+  function railContext(cloud) {
+    const callbacks={}, rail=new Element();
+    rail.removeChild=child=>{rail.children=rail.children.filter(node=>node!==child);};
+    const byId=()=>rail.children.find(child=>child.id==='cm-asimov-link')||null;
+    const context={window:{CLOUD_MODE:cloud},document:{addEventListener:(name,fn)=>{callbacks[name]=fn;},
+      getElementById:id=>id==='cm-asimov-link'?byId():null,
+      querySelector:selector=>selector==='#left-nav .left-nav-section'?rail:null,createElement:tag=>{const el=new Element(tag);el.parentNode=rail;return el;}}};
+    context.window.document=context.document;
+    vm.createContext(context);vm.runInContext(navigation,context);
+    return {context,callbacks,rail};
+  }
   for(const cloud of [false,true]) {
-    const callbacks={}, rail=new Element(), context={window:{CLOUD_MODE:cloud},document:{addEventListener:(name,fn)=>{callbacks[name]=fn;},getElementById:()=>null,querySelector:selector=>selector==='#left-nav .left-nav-section'?rail:null,createElement:tag=>new Element(tag)}};
-    vm.createContext(context);vm.runInContext(navigation,context);callbacks.DOMContentLoaded();
+    const {callbacks,rail}=railContext(cloud);callbacks.DOMContentLoaded();
     assert.equal(rail.children.length,cloud?0:1,'local navigation stays available without a private package');
     if(!cloud){assert.equal(rail.children[0].href,'/asimov');assert.match(rail.children[0].textContent,/Asimov 1/);}
+  }
+  // The Physical AI workbench owns Asimov 1, so the digital rail hands it over.
+  // The workbench is discovered after DOMContentLoaded, so BOTH orders must hold.
+  {
+    const late=railContext(false);late.callbacks.DOMContentLoaded();
+    assert.equal(late.rail.children.length,1,'the link exists before the workbench answers');
+    late.context.window.cmPhysicalAiWorkbenchPresent();
+    assert.equal(late.rail.children.length,0,'an installed workbench retires the rail link');
+    const early=railContext(false);
+    early.context.window.cmPhysicalAiWorkbenchPresent();early.callbacks.DOMContentLoaded();
+    assert.equal(early.rail.children.length,0,'a known workbench is never given a second home');
+  }
+  // The shipped installer must actually call the handoff for a physical_ai entry.
+  {
+    const appSource=fs.readFileSync(path.join(__dirname,'../clawmetry/static/js/app.js'),'utf8');
+    const begin=appSource.indexOf('window.cmInstallWorkbenchNavigation = function');
+    assert.ok(begin>0,'the workbench installer is still in the shipped bundle');
+    const end=appSource.indexOf('\n};',begin);
+    assert.ok(end>begin,'the workbench installer ends where expected');
+    const installer=appSource.slice(begin,end+3);
+    let retired=false;
+    const nodes=new Map(), top=new Element();
+    const context={CLOUD_MODE:false,CLOUD_NODE_ID:'node',
+      cmPhysicalAiWorkbenchPresent:()=>{retired=true;},
+      document:{getElementById:id=>nodes.get(id)||null,querySelector:()=>top,createElement:tag=>new Element(tag)}};
+    context.window=context;context.document.createElement=tag=>new Element(tag);
+    vm.createContext(context);vm.runInContext(installer,context);
+    context.window.cmInstallWorkbenchNavigation([{href:'/robotics',label:'Physical AI',view_group:'physical_ai'}]);
+    assert.equal(retired,true,'a physical_ai entry hands Asimov 1 to the workbench');
+    assert.equal(top.children.length,1,'the AI view switch is still installed');
   }
   if(process.argv[2]) {
     const persisted=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));

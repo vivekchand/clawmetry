@@ -17,8 +17,19 @@ document.addEventListener('click', function(e) {
 
 // The free Asimov view stays discoverable when the private workbench is absent.
 // Its stored-evidence page has no background fetch on the digital dashboard.
+//
+// When the Physical AI workbench IS installed it owns Asimov 1 outright, as an
+// entry in its own Hardware list, so the digital rail must not offer a second
+// home for the same robot. The workbench is discovered asynchronously, after
+// this handler has already run, so the handoff both clears a link already added
+// and blocks a later one.
+window.cmPhysicalAiWorkbenchPresent = function () {
+  window.CM_PHYSICAL_AI_WORKBENCH = true;
+  var existing = document.getElementById('cm-asimov-link');
+  if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+};
 document.addEventListener('DOMContentLoaded', function () {
-  if (window.CLOUD_MODE || document.getElementById('cm-asimov-link')) return;
+  if (window.CLOUD_MODE || window.CM_PHYSICAL_AI_WORKBENCH || document.getElementById('cm-asimov-link')) return;
   var monitoring = document.querySelector('#left-nav .left-nav-section');
   var legacy = document.querySelector('.nav-tabs');
   if (!monitoring && !legacy) return;

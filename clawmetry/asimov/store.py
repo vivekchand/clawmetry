@@ -14,7 +14,9 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 RUN_ID = re.compile(r"[0-9a-f]{32}\Z")
 JOURNAL = re.compile(r"([0-9a-f]{32})(?:\.([0-9]{8}))?\.jsonl\Z")
-SOURCES = frozenset({"asimov_sdk", "asimov_recording"})
+ASIMOV_SOURCES = frozenset({"asimov_sdk", "asimov_recording"})
+JUMPER_SOURCES = frozenset({"jumper_native", "jumper_app", "jumper_recording"})
+SOURCES = ASIMOV_SOURCES | JUMPER_SOURCES
 MAX_LINE = 65536
 DDL = (
     """CREATE TABLE IF NOT EXISTS asimov_events (
@@ -30,6 +32,8 @@ DDL = (
     """CREATE TABLE IF NOT EXISTS asimov_cursors (
         source VARCHAR PRIMARY KEY, identity VARCHAR, byte_offset BIGINT,
         discarding BOOLEAN, invalid_count BIGINT)""",
+    """CREATE TABLE IF NOT EXISTS asimov_source_support (
+        source VARCHAR PRIMARY KEY, registry VARCHAR, ignored BOOLEAN)""",
     "CREATE INDEX IF NOT EXISTS asimov_runs_updated ON asimov_runs(updated_ns, run_id)",
 )
 
@@ -69,6 +73,7 @@ class AsimovLocalStore:
         self.store = store
         self._scan_cursor = 0
         self._health_seen = {}
+        self._source_registry = json.dumps(sorted(SOURCES), separators=(",", ":"))
         if initialize:
             if getattr(store, "_read_only", True):
                 raise RuntimeError("Asimov ingestion requires the daemon writer")
@@ -115,16 +120,34 @@ class AsimovLocalStore:
 
     def _tail(self, path, run_id, *, max_lines, max_bytes):
         from clawmetry.local_store import _txn
+        alerts = []
         stat = path.stat()
         identity = str(stat.st_dev) + ":" + str(stat.st_ino)
         with self.store._write_lock:
             conn = self.store._conn
             row = conn.execute("SELECT identity,byte_offset,discarding,invalid_count "
                                "FROM asimov_cursors WHERE source=?", [str(path)]).fetchone()
+            support = conn.execute("SELECT registry,ignored FROM asimov_source_support WHERE source=?",
+                                   [str(path)]).fetchone()
+            reclassify = row is None or support is None or support[0] != self._source_registry
             offset, discarding, invalid = (row[1], row[2], row[3]) if row else (0, False, 0)
+            ignored = bool(support[1]) if support and not reclassify else False
             if row and (row[0] != identity or stat.st_size < offset):
                 offset, discarding = 0, False
-            if offset == stat.st_size:
+                ignored = False
+            if reclassify:
+                # Older collectors consumed unsupported headers to EOF. A
+                # durable registry marker makes a support change replay once,
+                # across bounded passes and restarts, without losing evidence.
+                offset, discarding, invalid = 0, False, 0
+            if offset == stat.st_size and not reclassify:
+                return 0, 0, 0
+            if ignored:
+                # Already classified for this inode and support registry.
+                # Appending to an unrelated source must not parse its body.
+                with _txn(conn):
+                    conn.execute("UPDATE asimov_cursors SET byte_offset=? WHERE source=?",
+                                 [stat.st_size, str(path)])
                 return 0, 0, 0
             count, used, lines = 0, 0, 0
             with path.open("rb") as source, _txn(conn):
@@ -161,15 +184,26 @@ class AsimovLocalStore:
                             # A run cannot switch platforms later. Do not parse an
                             # unrelated SO-101 or simulator history on every pass.
                             offset = stat.st_size
+                            ignored = True
                             break
-                        count += self._insert(conn, event)
+                        inserted = self._insert(conn, event)
+                        count += inserted
+                        if inserted and event["kind"] == "guard.incident":
+                            alerts.append(event)
                     except (ValueError, TypeError, UnicodeError, OverflowError, RecursionError):
                         invalid += 1
                 conn.execute("INSERT OR REPLACE INTO asimov_cursors VALUES (?,?,?,?,?)",
                              [str(path), identity, offset, discarding, invalid])
+                conn.execute("INSERT OR REPLACE INTO asimov_source_support VALUES (?,?,?)",
+                             [str(path), self._source_registry, ignored])
             if invalid > (row[3] if row else 0):
                 log.warning("Skipped invalid Asimov journal records")
-            return count, used, lines
+        # Network notification work must not hold the DuckDB transaction/lock.
+        if alerts:
+            from clawmetry.physical_ai.alerts import dispatch
+            for event in alerts:
+                dispatch(self.store, event)
+        return count, used, lines
 
     def _insert(self, conn, event):
         run_id, data = event["run_id"], event["data"]
@@ -246,11 +280,14 @@ class AsimovLocalStore:
             except (ValueError, OSError, TypeError, RecursionError):
                 log.warning("Could not read Asimov recorder health")
 
-    def runs(self, *, limit=20, robot_id=None, before_ns=None, before_run_id=None):
+    def runs(self, *, limit=20, robot_id=None, before_ns=None, before_run_id=None, sources=ASIMOV_SOURCES):
         limit = max(1, min(100, int(limit)))
         if not self._exists():
             return {"runs": [], "has_more": False, "next_cursor": None}
-        where, args = [], []
+        selected = sorted(sources & SOURCES)
+        if not selected:
+            return {"runs": [], "has_more": False, "next_cursor": None}
+        where, args = ["source_kind IN (" + ",".join("?" for _ in selected) + ")"], list(selected)
         if robot_id is not None:
             if not isinstance(robot_id, str) or len(robot_id) > 200:
                 raise ValueError("Invalid robot identifier")
@@ -274,7 +311,7 @@ class AsimovLocalStore:
         for row in rows[:limit]:
             observation = json.loads(row[10]) if row[10] else None
             age = max(0, (now - row[11]) / 1e9) if row[11] else None
-            status = "recorded" if row[2] == "asimov_recording" else (
+            status = "recorded" if row[2].endswith("_recording") else (
                 "ended" if row[13] == "run.ended" else
                 "disconnected" if row[13] == "telemetry.lost" else
                 "live" if age is not None and 0 <= now - row[11] < 5_000_000_000 else "stale")
@@ -293,11 +330,16 @@ class AsimovLocalStore:
         cursor = {"before_ns": str(rows[limit-1][5]), "before_run_id": rows[limit-1][0]} if len(rows) > limit else None
         return {"runs": result, "has_more": len(rows) > limit, "next_cursor": cursor}
 
-    def events(self, *, run_id, after=0, limit=200):
+    def events(self, *, run_id, after=0, limit=200, sources=ASIMOV_SOURCES):
         if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
             raise ValueError("Invalid Asimov run identifier")
         after, limit = _integer(after), max(1, min(500, int(limit)))
         if not self._exists():
+            return {"events": [], "has_more": False, "next_after": after}
+        selected = sorted(sources & SOURCES)
+        if not selected or not self.store._fetch(
+                "SELECT 1 FROM asimov_runs WHERE run_id=? AND source_kind=ANY(?)",
+                [run_id, selected]):
             return {"events": [], "has_more": False, "next_after": after}
         rows = self.store._fetch("SELECT sequence,event_json FROM asimov_events "
                                  "WHERE run_id=? AND sequence>? ORDER BY sequence LIMIT ?",
@@ -306,10 +348,12 @@ class AsimovLocalStore:
                 "has_more": len(rows) > limit,
                 "next_after": rows[min(limit, len(rows))-1][0] if rows else after}
 
-    def snapshot(self):
+    def snapshot(self, *, sources=ASIMOV_SOURCES):
         # No raw journal scans or full-history replay in the snapshot builder.
-        result = self.runs(limit=8)
-        result["schema"] = "clawmetry.asimov.snapshot.v1"
+        result = self.runs(limit=8, sources=sources)
+        result["schema"] = "clawmetry.asimov.snapshot.v1" if sources == ASIMOV_SOURCES else "clawmetry.physical_ai.snapshot.v1"
+        if sources != ASIMOV_SOURCES:
+            result["navigation"] = [{"label": "Physical AI", "href": "/physical-ai", "view_group": "physical_ai"}]
         result["generated_at_ns"] = str(time.time_ns())
         result["observation_only"] = True
         result["events"] = {}
@@ -353,3 +397,15 @@ def runs(store, **kwargs):
 
 def events(store, **kwargs):
     return AsimovLocalStore(store).events(**kwargs)
+
+
+def physical_ai_runs(store, **kwargs):
+    return AsimovLocalStore(store).runs(sources=SOURCES, **kwargs)
+
+
+def physical_ai_events(store, **kwargs):
+    return AsimovLocalStore(store).events(sources=SOURCES, **kwargs)
+
+
+def physical_ai_snapshot(store):
+    return AsimovLocalStore(store).snapshot(sources=SOURCES)

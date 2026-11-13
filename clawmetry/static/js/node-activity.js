@@ -3,7 +3,8 @@
   'use strict';
   var state = {data:null, scope:null, generation:0, pending:null, controller:null, timer:null,
     replay:null, selected:null, view:'observe', lastLoaded:0, bound:false, mutation:false,
-    mutationRequest:null, unconfirmed:null, readRequest:null};
+    mutationRequest:null, unconfirmed:null, readRequest:null, processQuery:'', processPage:0, liveData:null, liveUnsupported:false, liveMisses:0, liveStarted:Date.now()};
+  var PROCESS_ROLES={collector:'Collector',dashboard:'Dashboard',desktop:'Desktop app',cli:'CLI'};
   var UNCONFIRMED='Save not confirmed. The change may still apply. Refresh this node before you retry.';
   var PREFS = [
     ['enabled','Node monitoring','Collect node observations. Turn this off to stop all collection.'],
@@ -51,18 +52,54 @@
     return '<div class="na-resource-history"><strong>Resource history at this event</strong><p>'+esc(epoch(sample.observed_at)===epoch(event.observed_at)?'Measured with this event':'Last retained measurement before this event')+'<br>'+esc(when(sample.observed_at))+'</p><div><span>CPU <b>'+esc(number(sample.cpu_percent,'%'))+'</b></span><span>Memory <b>'+esc(bytes(sample.memory_used_bytes))+'</b></span></div><small>Recorded measurement. Values between collections are unknown.</small></div>';
   }
   function status(message,tone) { text('na-status',message); if(el('na-status'))el('na-status').dataset.tone=tone||''; }
+  function observedCount(data,source,totalKey) {
+    var coverage=(data.coverage||{})[source]||{}, rows=Array.isArray(data[source])?data[source]:[];
+    var label=source==='processes'?'processes':'listening ports', count=null;
+    if(data.available===false)return {value:'No data',note:'No recorded collection is available.'};
+    if(coverage.state==='disabled')return {value:'Off',note:'Collection is turned off in Govern.'};
+    if(coverage.state==='unsupported')return {value:'Not supported',note:'This source is not supported on this system.'};
+    if(coverage.state==='unavailable')return {value:'Unavailable',note:sourceReason(data,source)};
+    function validCount(n){return Number.isSafeInteger(n)&&n>=0;}
+    if(['complete','partial'].includes(coverage.state)&&validCount(coverage.count))count=coverage.count;
+    else if(coverage.state==='complete'&&validCount((data.summary||{})[totalKey]))count=data.summary[totalKey];
+    else {
+      var at=epoch(data.collected_at), current=rows.filter(function(r){return r.stale===false&&at!=null&&epoch(r.observed_at)===at;});
+      if(current.length)count=current.length;
+    }
+    if(count==null)return {value:'Not measured',note:'No current '+label+' count was recorded.'};
+    var exact=coverage.state==='complete'&&(data.summary||{})[totalKey]===count;
+    var stale=epoch(data.collected_at)==null||Date.now()-epoch(data.collected_at)>(data.stale_after_seconds||120)*1000;
+    return {value:count.toLocaleString(),note:stale?'Last recorded count. This observation is stale.':
+      exact?'At the last collection.':'Observed in this scan; total is not known.'};
+  }
+  function sourceReason(data,source) {
+    var c=(data.coverage||{})[source]||{}, reason=c.reason||c.detail||'';
+    if(/permission|denied/i.test(reason))return (data.node||{}).platform==='Darwin'?
+      'macOS did not allow this collector to read this source.':'The operating system did not permit this collection.';
+    if(c.state==='disabled')return 'Collection is turned off. You can change this in Govern.';
+    if(c.state==='unsupported')return 'This collection is not supported on this system.';
+    return reason||'The collector has not reported this source yet.';
+  }
+  function emptyInventory(data,source) {
+    var c=(data.coverage||{})[source]||{}, name=source==='processes'?'processes':'TCP listening ports', message;
+    if(c.state==='complete')message='No '+name+' were observed at the last collection.';
+    else if(c.state==='partial')message='No '+name+' were visible in this scan. Others may still exist.';
+    else if(c.state==='disabled')message='Collection is turned off for '+name+'.';
+    else message='There are no recorded '+name+' to show.';
+    return '<div class="na-empty"><p>'+esc(message)+'</p><p>'+esc(sourceReason(data,source))+'</p><button type="button" data-na-coverage>View coverage</button></div>';
+  }
   function summary(data) {
     var s=data.summary||{}, at=epoch(data.collected_at), stale=at==null||Date.now()-at>(data.stale_after_seconds||120)*1000;
     text('na-node-name',(data.node||{}).hostname||(data.node||{}).id||'This node');
-    text('na-map-host',(data.node||{}).hostname||'This node');
     text('na-freshness',age(data.collected_at)+(stale?' (stale)':''));
     var freshness=el('na-freshness'); if(freshness&&freshness.parentNode)freshness.parentNode.dataset.fresh=String(!stale);
     text('na-cpu',number(s.cpu_percent,'%')); text('na-memory',bytes(s.memory_used_bytes));
     var samples=data.samples||[], cpuGap=samples.some(function(v){return !finite(v.cpu_percent);}), memoryGap=samples.some(function(v){return !finite(v.memory_used_bytes);});
     text('na-cpu-note','Node total'+(cpuGap?'. History has gaps.':''));
     text('na-memory-note',(finite(s.memory_total_bytes)?'Of '+bytes(s.memory_total_bytes)+' on this node':'Resource usage only, without memory contents')+(memoryGap?'. History has gaps.':''));
-    text('na-process-count',number(s.process_count)); text('na-listener-count',number(s.listening_port_count));
-    text('na-process-note',data.truncated?'Collection is bounded. More processes may exist.':'Observed at the last collection');
+    var processCount=observedCount(data,'processes','process_count'), listenerCount=observedCount(data,'listeners','listening_port_count');
+    text('na-process-count',processCount.value);text('na-process-note',processCount.note);
+    text('na-listener-count',listenerCount.value);text('na-listener-note',listenerCount.note);
     var cov=data.coverage||{}, incomplete=Object.keys(cov).filter(function(k){return !['complete','available','collecting','ok'].includes(cov[k].state);});
     if(data.available===false)status(data.detail||data.message||data.reason||'Node observations are not available. Check that this node has an updated collector.','warning');
     else if((data.preferences||{}).enabled===false)status('Node monitoring is off. Historical observations remain available. Turn monitoring on in Govern to collect again.','warning');
@@ -96,7 +133,7 @@
     if(!rows.some(function(e){return String(e.id)===String(state.selected);}))state.selected=rows.length?rows[rows.length-1].id:null;
     var idx=rows.findIndex(function(e){return String(e.id)===String(state.selected);});
     var preview=rows.slice(-100);if(idx>=0&&idx<rows.length-100)preview.unshift(rows[idx]);
-    if(list)list.innerHTML=rows.length?preview.map(function(e){return '<button type="button" class="na-event" data-na-event="'+esc(e.id)+'" aria-current="'+(String(e.id)===String(state.selected)?'step':'false')+'"><small>'+esc(when(e.observed_at))+'</small><strong>'+esc(e.title||'Recorded event')+'</strong><small>'+esc(actor(e.actor).label)+'</small></button>';}).join(''):'<p class="na-empty">No events were recorded in this history window. This does not establish that no activity occurred.</p>';
+    if(list)list.innerHTML=rows.length?preview.map(function(e){return '<button type="button" class="na-event" data-na-event="'+esc(e.id)+'" aria-current="'+(String(e.id)===String(state.selected)?'step':'false')+'"><small>'+esc(when(e.observed_at))+'</small><strong>'+esc(eventStory(e).title)+'</strong><small>'+esc(attributed(e).label)+'</small></button>';}).join(''):'<p class="na-empty">No events were recorded in this history window. This does not establish that no activity occurred.</p>';
     if(scrub){scrub.max=Math.max(0,rows.length-1);scrub.value=Math.max(0,idx);scrub.disabled=!rows.length;scrub.setAttribute('aria-valuetext',rows[idx]?when(rows[idx].observed_at)+': '+(rows[idx].title||'Recorded event'):'No recorded events');}
     if(play)play.disabled=rows.length<2;
     text('na-step',rows.length?(idx+1)+' / '+rows.length: '0 events');
@@ -104,22 +141,56 @@
     renderEvidence(false);
   }
   function pretty(value) { if(value==null)return 'Not recorded';if(typeof value==='string')return value;try{return JSON.stringify(value,null,2);}catch(e){return 'Not available';} }
+  function eventStory(event) {
+    var process=event.process||{}, target=event.target||{}, row=event.after||event.before||{};
+    var name=typeof process==='string'?process:(process.name||row.name||target.label||'A process');
+    var title=event.title||'A recorded observation', meaning=event.detail||'Review the recorded details below.', limit='';
+    if(event.kind==='process_observed'){
+      title=name+' was seen running';meaning='This is its first retained sighting in a partial scan.';
+      limit='It may have started earlier. This observation alone does not indicate an attack.';
+    }else if(event.kind==='process_added'){
+      title=name+' was seen running';meaning='This process was present in a later scan and absent from an earlier comparable scan.';
+      limit='This does not tell us its exact start time or why it ran.';
+    }else if(event.kind==='process_removed'){
+      title=name+' was no longer seen';meaning='This process was absent from a later comparable scan.';
+      limit='The scan does not tell us why it disappeared.';
+    }else if(event.kind==='process_changed'){
+      title=name+' had different recorded details';meaning='Comparable scans recorded a difference in the process details.';
+    }else if(/^listener_/.test(event.kind||'')){
+      title=event.kind==='listener_removed'?'A listening port was no longer seen':'A listening port was observed';
+      meaning='The recorded address was '+(target.label||'a TCP endpoint')+'.';
+      limit='A listening port accepts connections. This does not prove that it can be reached from the Internet.';
+    }
+    return {title:title,meaning:meaning,limit:limit};
+  }
+  function attributed(event) {
+    var a=actor(event.actor);
+    return a.kind!=='unattributed'&&a.evidence?{label:a.label,detail:a.evidence}:{label:'Not identified',
+      detail:'This scan does not link the observation to you, an AI agent, or a remote session.'};
+  }
   function renderEvidence(animate) {
-    var event=selected(), box=el('na-evidence'), map=el('na-map');
-    if(!box)return;
-    if(!event){box.innerHTML='<p class="na-empty">Select a recorded event to see its actor, change and source evidence. Collection starts with a baseline before it can show differences.</p>';text('na-map-target','Select an event');text('na-map-target-kind','A resource it affected');}
-    else {
-      var a=actor(event.actor), target=event.target||{}, process=event.process||{}, evidence=Array.isArray(event.evidence)?event.evidence:[], review=event.review;
-      var reason=el('na-review-reason'), draft=reason&&box.dataset.eventId===String(event.id)?reason.value:null;
+    var event=selected(), box=el('na-evidence');if(!box)return;
+    if(!event){
+      delete box.dataset.eventId;
+      box.innerHTML='<p class="na-empty">No observation is selected. Collection starts with a baseline before it can show changes.</p>';
+    }else{
+      var a=attributed(event), story=eventStory(event), target=event.target||{}, process=event.process||{}, review=event.review;
+      var reason=el('na-review-reason'), same=box.dataset.eventId===String(event.id), draft=reason&&same?reason.value:null;
       var focused=reason&&document.activeElement===reason, selection=focused?[reason.selectionStart,reason.selectionEnd]:null;
+      var details=box.querySelector?box.querySelector('.na-technical'):null, keepOpen=same&&details&&details.open;
       box.dataset.eventId=String(event.id);
       var processLabel=typeof process==='string'?process:[process.name,process.pid!=null?'PID '+process.pid:''].filter(Boolean).join(' ');
-      box.innerHTML='<div class="na-event-time">'+esc(when(event.observed_at))+'</div><h3>'+esc(event.title||'Recorded change')+'</h3><p>'+esc(event.detail||'Review the recorded evidence below.')+'</p><dl class="na-facts"><div><dt>Actor</dt><dd>'+esc(a.label)+(a.runtime?' / '+esc(a.runtime):'')+'</dd></div><div><dt>Attribution evidence</dt><dd>'+esc(a.evidence||'Identity is not established by this observation.')+'</dd></div><div><dt>Process</dt><dd>'+esc(processLabel||'Not attributed')+'</dd></div><div><dt>Affected resource</dt><dd>'+esc(target.label||target.id||'Not recorded')+'</dd></div></dl>'+resourceEvidence(event)+'<div class="na-diff"><div><small>Before</small><pre>'+esc(pretty(event.before))+'</pre></div><div><small>After</small><pre>'+esc(pretty(event.after))+'</pre></div></div><div class="na-source">'+(evidence.length?evidence.map(function(e){return esc(typeof e==='string'?e:pretty(e));}).join('<br>'):'No additional source evidence was recorded.')+'</div><form id="na-review-form" class="na-review-form"><label for="na-review-reason">Add context for this past event</label><textarea id="na-review-reason" maxlength="300" placeholder="What you know about this change">'+esc(review&&review.reason||'')+'</textarea><div class="na-review-buttons"><button type="button" data-na-decision="expected">Mark expected</button><button type="button" data-na-decision="investigate">Investigate</button></div><div id="na-review-message" role="status" class="na-review-note">'+esc(review?'Reviewed: '+review.decision+'. This does not authorize future actions.':'A review adds historical context. It does not authorize future actions.')+'</div></form>';
+      var resource=processLabel||target.label||'Resource not recorded', evidence=Array.isArray(event.evidence)?event.evidence:[];
+      var who=/^process_/.test(event.kind||'')?'Who started it':'Who was responsible';
+      box.innerHTML='<div class="na-story-heading"><div><p class="na-observation-label">'+esc(event.finding===true?'Change to review':'Recorded observation')+'</p><h3>'+esc(story.title)+'</h3></div><time class="na-event-time">'+esc(when(event.observed_at))+'</time></div>'+
+        '<p class="na-story-meaning">'+esc(story.meaning)+'</p><dl class="na-facts"><div><dt>Program or resource</dt><dd>'+esc(resource)+'</dd></div><div><dt>Observed on</dt><dd>'+esc((state.data.node||{}).hostname||'This node')+'</dd></div><div><dt>'+esc(who)+'</dt><dd>'+esc(a.label)+'</dd></div></dl>'+
+        '<div class="na-observation-grid"><div><div class="na-identity-note"><strong>'+esc(a.label==='Not identified'?'Why we cannot identify who acted':'Recorded attribution evidence')+'</strong><p>'+esc(a.detail)+'</p>'+(story.limit?'<p>'+esc(story.limit)+'</p>':'')+'</div>'+resourceEvidence(event)+'</div>'+
+        '<form id="na-review-form" class="na-review-form"><label for="na-review-reason">Add context for this past event</label><textarea id="na-review-reason" maxlength="300" placeholder="What you know about this change">'+esc(review&&review.reason||'')+'</textarea><div class="na-review-buttons"><button type="button" data-na-decision="expected">Mark expected</button><button type="button" data-na-decision="investigate">Investigate</button></div><div id="na-review-message" role="status" class="na-review-note">'+esc(review?'Reviewed: '+review.decision+'. This does not authorize future actions.':'A review adds historical context. It does not authorize future actions.')+'</div></form></div>'+
+        '<details class="na-technical"'+(keepOpen?' open':'')+'><summary>Technical details and original evidence</summary><p>'+esc(event.title||'Recorded change')+'</p><p>'+esc(event.detail||'No additional description recorded.')+'</p><div class="na-diff"><div><small>Before</small><pre>'+esc(pretty(event.before))+'</pre></div><div><small>After</small><pre>'+esc(pretty(event.after))+'</pre></div></div><div class="na-source">'+(evidence.length?evidence.map(function(e){return esc(typeof e==='string'?e:pretty(e));}).join('<br>'):'No additional source evidence was recorded.')+'</div></details>';
       if(draft!=null&&el('na-review-reason')){el('na-review-reason').value=draft;if(focused){el('na-review-reason').focus({preventScroll:true});if(selection)el('na-review-reason').setSelectionRange(selection[0],selection[1]);}}
-      if(!writable('reviews_writable')) {box.querySelectorAll('[data-na-decision],textarea').forEach(function(n){n.disabled=true;});text('na-review-message',state.data.write_reason||'Reviews are unavailable here. Open this node’s local dashboard.');}
-      text('na-map-target',target.label||target.id||'Recorded resource');text('na-map-target-kind',target.kind||'Resource');
+      if(!writable('reviews_writable')){box.querySelectorAll('[data-na-decision],textarea').forEach(function(n){n.disabled=true;});text('na-review-message',state.data.write_reason||'Reviews are unavailable here. Open this node’s local dashboard.');}
     }
-    if(map){map.dataset.event=String(!!event);map.dataset.eventId=event?String(event.id):'';map.querySelectorAll('[data-na-actor]').forEach(function(node){node.classList.toggle('na-selected',!!event&&node.dataset.naActor===actor(event.actor).kind);});map.querySelectorAll('.na-map-host,.na-map-target').forEach(function(node){node.classList.toggle('na-selected',!!event);});map.classList.remove('na-animate');if(animate&&!reducedMotion()){void map.offsetWidth;map.classList.add('na-animate');}}
+    if(box.classList){box.classList.remove('na-animate');if(animate&&!reducedMotion()){void box.offsetWidth;box.classList.add('na-animate');}}
   }
   function chooseEvent(id,animate) {
     state.selected=id;renderEvents();if(animate)renderEvidence(true);
@@ -128,13 +199,64 @@
     if(!rows.length)return '<p class="na-empty">'+esc(empty)+'</p>';
     return (rows.length>100?'<p class="na-table-limit">Showing 100 of '+rows.length+' retained rows.</p>':'')+'<table><thead><tr>'+cols.map(function(c){return '<th scope="col">'+esc(c[0])+'</th>';}).join('')+'</tr></thead><tbody>'+rows.slice(0,100).map(function(row){return '<tr>'+cols.map(function(c){return '<td>'+c[1](row)+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table>';
   }
+  function cpuCell(row) {
+    if(finite(row.cpu_percent)&&row.cpu_percent>=0){
+      return '<span class="na-cpu-meter" style="--na-cpu-fill:'+Math.min(100,row.cpu_percent)+'%">'+esc(number(row.cpu_percent,'%'))+'</span><small>'+esc(finite(row.cpu_interval_seconds)&&row.cpu_interval_seconds>0?
+        'Over '+number(row.cpu_interval_seconds)+'s':'Measurement interval not recorded')+'</small>';
+    }
+    return '<span class="na-not-measured">Not measured</span><small>'+esc(row.cpu_reason||'No comparable CPU samples were recorded.')+'</small>';
+  }
+  function processRole(row){return Object.prototype.hasOwnProperty.call(PROCESS_ROLES,row.clawmetry_role)?PROCESS_ROLES[row.clawmetry_role]:'';}
+  function observed(row){var at=epoch(row.observed_at);return row.stale?'Stale observation; '+(at==null?'Observation time unknown':'last observed '+when(row.observed_at)):(at==null?'Observation time unknown':'Observed '+when(row.observed_at));}
+  function processColumns(){return [['Process',function(p){var a=actor(p.actor), role=processRole(p);return (role?'<strong class="na-process-role">ClawMetry '+esc(role)+'</strong><small>'+esc(p.name||'Unnamed process')+'</small>':esc(p.name||'Unnamed process'))+'<small>PID '+esc(p.pid)+(a.kind!=='unattributed'&&a.evidence?' / '+esc(a.label):'')+'</small><small class="na-row-age">'+esc(observed(p))+'</small>';}],['CPU between scans',cpuCell],['Memory',function(p){return finite(p.memory_bytes)?esc(bytes(p.memory_bytes)):'<span class="na-not-measured">Not measured</span>';}]];}
+  function renderProcesses(data){
+    var processes=Array.isArray(data.processes)?data.processes:[], query=state.processQuery.trim().toLowerCase();
+    var ranked=processes.filter(function(p){return !query||[p.name,p.pid,processRole(p)?'ClawMetry '+processRole(p):''].join(' ').toLowerCase().indexOf(query)>=0;}).sort(function(a,b){
+      return Number(!!a.stale)-Number(!!b.stale)||Number(finite(b.cpu_percent))-Number(finite(a.cpu_percent))||
+        (finite(b.cpu_percent)&&finite(a.cpu_percent)?b.cpu_percent-a.cpu_percent:0);
+    });
+    state.processPage=Math.max(0,Math.min(state.processPage,Math.ceil(ranked.length/100)-1));
+    var start=state.processPage*100;
+    text('na-process-results',ranked.length?(start+1)+' to '+Math.min(start+100,ranked.length)+' of '+ranked.length+(query?' matches':' retained processes'):
+      query?'No matching processes in '+processes.length+' retained observations.':'No retained processes.');
+    if(el('na-process-prev'))el('na-process-prev').disabled=state.processPage===0;
+    if(el('na-process-next'))el('na-process-next').disabled=start+100>=ranked.length;
+    if(el('na-process-clear'))el('na-process-clear').disabled=!state.processQuery;
+    if(el('na-processes'))el('na-processes').innerHTML=ranked.length?table(ranked.slice(start,start+100),processColumns()):
+      query?'<p class="na-empty">No matching processes were recorded. Clear the search or check collection coverage.</p>':emptyInventory(data,'processes');
+  }
+  function renderClawmetry(data){
+    var rows=(Array.isArray(data.processes)?data.processes:[]).filter(function(p){return !!processRole(p);});
+    var coverage=(data.coverage||{}).processes||{}, at=epoch(data.collected_at);
+    var stale=at==null||Date.now()-at>(data.stale_after_seconds||120)*1000||rows.some(function(p){return p.stale;});
+    text('na-clawmetry-note',rows.length?'Identified processes on this node'+(coverage.state==='disabled'?'. Collection is off.':stale?'. These observations are stale.':'.'):
+      'ClawMetry may appear under a Python process name.');
+    if(el('na-clawmetry-processes'))el('na-clawmetry-processes').innerHTML=rows.length?table(rows,processColumns()):
+      '<p class="na-empty">'+esc(coverage.state==='disabled'?'Process collection is off. Turn it on in Govern to measure ClawMetry usage.':
+        coverage.state==='unavailable'||coverage.state==='unsupported'?sourceReason(data,'processes')+' Check process coverage in Govern.':
+        'No ClawMetry process was identified in these observations. An updated collector is required. Check process coverage in Govern.')+'</p>';
+  }
+  function inventoryData() {
+    var base=state.data||{}, live=state.liveData;
+    if(!live||epoch(live.collected_at)<epoch(base.collected_at))return base;
+    var coverage=Object.assign({},base.coverage||{});
+    ['resources','processes'].forEach(function(k){coverage[k]=Object.assign({},coverage[k]||{},(live.coverage||{})[k]||{});});
+    return Object.assign({},base,{collected_at:live.collected_at,stale_after_seconds:8,summary:live.summary,processes:live.processes,coverage:coverage,preferences:live.preferences||base.preferences});
+  }
+  function liveStatus() {
+    var data=state.liveData, at=data&&epoch(data.collected_at), measured=data&&(data.processes||[]).some(function(p){return finite(p.cpu_percent);});
+    var fresh=at!=null&&Date.now()-at<8000;
+    text('na-live-state',state.liveUnsupported?'Snapshot updates':!data?(Date.now()-state.liveStarted>10000?'Waiting for live data':'Starting live measurements'):!fresh?'Live updates delayed':measured?'Live · every 2 seconds':'Sampling CPU');
+    if(el('na-live-state'))el('na-live-state').dataset.live=String(!!(fresh&&measured));
+  }
   function renderInventory(data) {
     var processes=Array.isArray(data.processes)?data.processes:[], listeners=Array.isArray(data.listeners)?data.listeners:[];
-    function observed(row){var at=epoch(row.observed_at);return row.stale?'Stale observation; '+(at==null?'Observation time unknown':'last observed '+when(row.observed_at)):(at==null?'Observation time unknown':'Observed '+when(row.observed_at));}
     function note(rows){return rows.some(function(r){return r.stale;})?'Includes stale observations':rows.some(function(r){return epoch(r.observed_at)==null;})?'Some observation times are unknown':'From the latest collection';}
     text('na-process-observation-note',note(processes));text('na-listener-observation-note',note(listeners));
-    if(el('na-processes'))el('na-processes').innerHTML=table(processes,[['Process',function(p){return esc(p.name||'Unnamed process')+'<small>PID '+esc(p.pid)+' / '+esc(actor(p.actor).label)+'</small><small class="na-row-age">'+esc(observed(p))+'</small>';}],['CPU',function(p){return esc(number(p.cpu_percent,'%'));}],['Memory',function(p){return esc(bytes(p.memory_bytes));}]],'No process rows are available. Check collection coverage in Govern.');
-    if(el('na-listeners'))el('na-listeners').innerHTML=table(listeners,[['Listener',function(l){return esc(l.address||'Unknown address')+':'+esc(l.port)+'<small>'+esc(l.protocol||'Protocol unknown')+'</small><small class="na-row-age">'+esc(observed(l))+'</small>';}],['Process',function(l){return l.pid!=null?'PID '+esc(l.pid):'Unattributed';}],['Scope',function(l){return esc(l.exposure==='loopback'?'Local only':l.exposure==='nonloopback'?'Nonlocal bind':'Unknown');}]],'No listener rows are available. Check collection coverage in Govern.');
+    text('na-process-coverage-note','Names identify programs, not who started them. CPU is measured between scans; 100% means one CPU core. '+sourceReason(data,'processes'));
+    text('na-listener-coverage-note',sourceReason(data,'listeners')+' A listening port does not prove Internet access.');
+    renderProcesses(data);renderClawmetry(data);
+    if(el('na-listeners'))el('na-listeners').innerHTML=listeners.length?table(listeners,[['Listening address',function(l){var address=l.address||'Address not recorded';if(address.indexOf(':')>=0&&address[0]!=='[')address='['+address+']';return esc(address)+':'+esc(l.port)+'<small>'+esc(l.protocol||'Protocol not recorded')+'</small><small class="na-row-age">'+esc(observed(l))+'</small>';}],['Reported process',function(l){return l.pid!=null?'PID '+esc(l.pid):'Not identified';}],['Connections accepted from',function(l){return esc(l.exposure==='loopback'?'This machine only':l.exposure==='nonloopback'?'Other network interfaces':'Scope not established');}]]):emptyInventory(data,'listeners');
   }
   function coverageHtml(data) {
     var coverage=data.coverage||{}, rows=Array.isArray(coverage)?coverage.map(function(r){return [r.id,r];}):Object.keys(coverage).map(function(k){return [k,coverage[k]];});
@@ -171,7 +293,7 @@
     if(String(state.selected)===String(rows[rows.length-1].id))chooseEvent(rows[0].id,true);
     text('na-play','Pause replay');state.replay=setTimeout(replayStep,1200);
   }
-  function schedule() {clearTimeout(state.timer);state.timer=null;if(active())state.timer=setTimeout(function(){load(true);},window.CLOUD_MODE?15000:10000);}
+  function schedule() {clearTimeout(state.timer);state.timer=null;if(active())state.timer=setTimeout(function(){load(true,!!state.data&&!state.liveUnsupported&&Date.now()-state.lastLoaded<30000);},state.liveUnsupported?(window.CLOUD_MODE?15000:10000):2000);}
   function invalidate() {
     state.generation++;if(state.controller)state.controller.abort();state.controller=null;state.pending=null;
     if(state.readRequest){clearTimeout(state.readRequest.timeout);state.readRequest=null;}
@@ -185,10 +307,11 @@
   }
   function resetScope(key) {
     invalidate();state.scope=key;state.data=null;state.selected=null;state.lastLoaded=0;
+    state.liveData=null;state.liveUnsupported=false;state.liveMisses=0;state.liveStarted=Date.now();liveStatus();state.processQuery='';state.processPage=0;if(el('na-process-search'))el('na-process-search').value='';
     render({available:false,reason:'Reading this node’s recorded observations.',summary:{},coverage:{},events:[],preferences:{}});
     text('na-preference-message','');
   }
-  async function load(force) {
+  async function load(force,live) {
     if(!active())return;
     var key=scope();if(state.scope!==key)resetScope(key);
     if(state.pending)return state.pending;
@@ -197,7 +320,7 @@
     var read={controller:controller,timeout:null,timedOut:false};state.readRequest=read;
     function readError(message){
       if(!valid(generation,key))return;
-      if(state.data)summary(state.data);
+      if(state.data)summary(inventoryData());liveStatus();
       status(message,'warning');
     }
     read.timeout=setTimeout(function(){
@@ -207,12 +330,22 @@
     },15000);
     var pending=(async function(){
       try {
-        var response=await fetch('/api/node-activity?limit=100',{signal:controller.signal}),data=await response.json();
+        var response=await fetch(live?'/api/node-activity?live=1':'/api/node-activity?limit=100',{signal:controller.signal}),data=await response.json();
         if(!valid(generation,key))return;
         if(controller.signal.aborted)return;
         if(!response.ok)throw new Error(data.detail||data.message||data.error||data.reason||'The recorded observations could not be loaded.');
         if(!data||typeof data!=='object')throw new Error('The node returned an unreadable observation.');
-        state.data=data;state.lastLoaded=Date.now();render(data);
+        if(live&&data.live===true){
+          if(data.available!==false&&(!state.liveData||epoch(data.collected_at)>=epoch(state.liveData.collected_at))){state.liveData=data;state.liveMisses=0;var display=inventoryData();summary(display);renderInventory(display);}
+          else if(++state.liveMisses>=5&&!((state.data.capabilities||{}).live_metrics)){state.liveUnsupported=true;}
+          liveStatus();
+        }else{
+          if(live)state.liveUnsupported=true;
+          else if((data.capabilities||{}).live_metrics)state.liveUnsupported=false;
+          state.data=data;state.lastLoaded=Date.now();render(data);
+          if(state.liveData){summary(inventoryData());renderInventory(inventoryData());}
+          liveStatus();
+        }
       } catch(error) {
         if(read.timedOut)readError('The node did not respond in time. Current activity cannot be verified. Refresh to try again.');
         else if(error.name!=='AbortError')readError(error.message||'The node did not return observations. Try Refresh.');
@@ -257,19 +390,23 @@
     var root=el('page-node-activity');if(!root||state.bound)return;state.bound=true;
     root.addEventListener('click',function(event){
       var button=event.target.closest('button');if(!button)return;
-      if(button.dataset.naView)showView(button.dataset.naView);
+      if(button.hasAttribute('data-na-coverage'))showView('govern');
+      else if(button.dataset.naView)showView(button.dataset.naView);
       else if(button.dataset.naEvent!=null){stopReplay();chooseEvent(button.dataset.naEvent,true);}
       else if(button.dataset.naOpen!=null){stopReplay();showView('observe');chooseEvent(button.dataset.naOpen,true);if(el('na-evidence'))el('na-evidence').scrollIntoView({block:'nearest',behavior:reducedMotion()?'auto':'smooth'});}
       else if(button.id==='na-refresh')load(true);
+      else if(button.id==='na-process-clear'){state.processQuery='';state.processPage=0;if(el('na-process-search')){el('na-process-search').value='';el('na-process-search').focus();}renderProcesses(inventoryData());}
+      else if(button.id==='na-process-prev'||button.id==='na-process-next'){state.processPage+=button.id==='na-process-next'?1:-1;renderProcesses(inventoryData());if(el('na-processes'))el('na-processes').scrollTop=0;}
       else if(button.id==='na-play')startReplay();
       else if(button.id==='na-open-guard'&&typeof window.switchTab==='function'){window.switchTab('guard');if(window.guardShowView)window.guardShowView('checks');}
       else if(button.dataset.naDecision){var e=selected();if(e)mutate('reviews',{event_id:e.id,decision:button.dataset.naDecision,reason:el('na-review-reason')?el('na-review-reason').value.replace(/[\r\n\t]/g,' ').trim():''},'na-review-message');}
     });
     root.addEventListener('submit',function(event){event.preventDefault();if(event.target.id!=='na-preferences')return;var body={};PREFS.forEach(function(p){var input=event.target.elements.namedItem(p[0]);if(input&&!input.disabled)body[p[0]]=input.checked;});mutate('preferences',body,'na-preference-message');});
+    root.addEventListener('input',function(event){if(event.target.id==='na-process-search'){state.processQuery=event.target.value;state.processPage=0;renderProcesses(inventoryData());if(el('na-processes'))el('na-processes').scrollTop=0;}});
     if(el('na-scrub'))el('na-scrub').addEventListener('input',function(){stopReplay();var e=events()[Number(this.value)];if(e)chooseEvent(e.id,true);});
   }
   window.loadNodeActivity=function(){bind();return load(false);};
-  window.nodeActivityStop=function(){invalidate();var map=el('na-map');if(map)map.classList.remove('na-animate');};
+  window.nodeActivityStop=function(){invalidate();var box=el('na-evidence');if(box)box.classList.remove('na-animate');};
   document.addEventListener('visibilitychange',function(){if(document.hidden)window.nodeActivityStop();else if(active())window.loadNodeActivity();});
   window.addEventListener('cm:node-change',function(){if(active())window.loadNodeActivity();else{invalidate();state.scope=null;}});
   // Small pure helpers and lifecycle state exposed for focused offline tests.

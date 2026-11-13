@@ -26,8 +26,8 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 > - **Before adding any poller/fetch, ask:** does this need to run on *every* tab? every *N* seconds? can it reuse an existing fetch or the snapshot?
 > - **Measure before shipping:** open the Network panel / Resource Timing and confirm no endpoint is fetched N× per cycle and no background poller fires off its own screen. "It works" is not enough — "it works without a request storm" is the bar.
 
-> ## Multi-runtime: ClawMetry observes 33 agent runtimes, not just OpenClaw (non-negotiable)
-> **ClawMetry is runtime-neutral. It observes 33 AI agent runtimes, not OpenClaw alone.**
+> ## Multi-runtime: ClawMetry observes 32 agent runtimes, not just OpenClaw (non-negotiable)
+> **ClawMetry is runtime-neutral. It observes 32 AI agent runtimes, not OpenClaw alone.**
 > **[`SUPPORTED_RUNTIMES.txt`](./SUPPORTED_RUNTIMES.txt) is the one list — do not type a second one.**
 > It is generated from `FREE_RUNTIMES | PAID_RUNTIMES` in `clawmetry/entitlements.py` and carries every
 > runtime's id, display label, free/paid tier and clawmetry.com path, plus the derived count and the
@@ -47,7 +47,7 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 > clawmetry-pro's FLYWHEEL said 22, clawmetry-landing's said 21 and clawmetry-cloud's said 14 — four
 > hand-maintained lists, four different numbers, none of them visible to the others' CI.
 > - **User-facing copy and UI must never imply OpenClaw-only.** Framing like "designed for OpenClaw agents", "your OpenClaw machine", "No OpenClaw detected", or "Looking for OpenClaw activity" is a bug. Use runtime-neutral language ("your AI agent", "the machine your agent runs on") or name the runtimes ("OpenClaw, NVIDIA NemoClaw + 10 more runtimes", matching the homepage install card). Naming runtimes is public; pricing and tier internals stay private.
-> - **Verify across all 33 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
+> - **Verify across all 32 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
 > Burned 2026-06-01: the docs FAQ said "ClawMetry is designed for OpenClaw agents" and the cloud empty-states plus the radar assumed OpenClaw-only. Many surfaces still need this sweep; when you touch a screen, fix its runtime framing.
 
 ---
@@ -55,11 +55,19 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 ## 0. Before you touch anything
 
 1. **Scan open issues/PRs for human claims.** If a human said "picking this up" / "working on" / "I'll take" in the last 7 days, do NOT open a competing PR. Automation is the night-shift janitor, not the day-shift engineer.
+   **Your own open PRs count as claims.** `gh pr list --search "<module>"` for the file or tab you are about
+   to touch, BEFORE cutting the worktree, and read the ones that match. Twice in three days a session wrote a
+   feature that was already sitting in a PR of its own making: ~400 lines duplicating a green PR two days old,
+   and then the Improve-to-Assistant handoff, built browser-side while draft #6351 had been carrying a
+   server-side version of the same handoff since 2026-10-05. Both times the overlap was found AFTER CI went
+   green, which is the most expensive moment to find it. A draft PR with every check red is still a claim, and
+   it is often the half you are missing: #6351 ran the candidate excerpts through `clawmetry/redaction.py`
+   first, and the version that shipped does not.
 2. **Scan the user's recent comments** on open PRs/issues and address them first.
 3. **Re-read the goal.** If invoked via `/goal`, the goal persists until the *outcome* is achieved and verified — not until the code is written.
 4. **Work in an isolated worktree.** Multiple Claude Code agents and crons run against this repo at the same time. Editing the main checkout is unsafe: another process can switch branches mid-edit and clobber uncommitted changes (burned 2026-05-28 — `feat/asset-registry` working-tree wiped when a concurrent agent checked out `release/hash-chain-2210` in the same checkout). Always start with `EnterWorktree`, or `git worktree add .claude/worktrees/<slug> -b feat/<slug> origin/main`. The worktree gives you your own branch + working tree; the shared checkout is for the human, not for parallel automation. Use `ExitWorktree` (or `git worktree remove`) once the PR is merged.
 5. **Survey what exists, then deep-research the robust way — never reinvent or ship a hack.** Before building detection/integration work (especially anything OS- or runtime-specific), first check for a proven open-source solution and reuse/reference it (e.g. **ccusage** already maps 15+ AI-CLI runtimes' local-data paths cross-platform — reference its source, don't re-derive). When you genuinely must build, deep-research the *authoritative* cross-platform approach — macOS **and** Windows **and** Linux, with cited sources — and design for an `unknown` fallback. A single-platform hack (e.g. a macOS-Keychain-only check) or a fragile heuristic that breaks on another OS/version is **not "done"** — it's a regression waiting to ship. Order of preference: **reuse a maintained project > documented robust cross-platform build > hack (never)**.
-6. **Write the PRD in 8090 before you write code.** See [§0c](#0c-write-the-prd-in-8090-first--software-factory-is-the-pm-not-a-lint-gate-hard-gate) — Software Factory is the product reviewer, and a requirement written after the fact reviews nothing.
+6. **Write and review the product record before code.** See §0c and [docs/PRODUCT_RECORDS.md](docs/PRODUCT_RECORDS.md). Versioned records and independent review do not require a hosted planning service.
 
 ## 0a. The bug-free bar: the hosted trial IS the product (HARD GATES)
 
@@ -82,9 +90,9 @@ Founder call 2026-08-08: the desktop app (`desktop/`) is one of the highest-ROI 
 4. **Stability over speed.** These installers are a stranger's first impression of the product on a machine you don't control — antivirus-flagged, SmartScreen-warned, or "app can't be opened because it is from an unidentified developer" all read as "this is a scam," not "unsigned OSS binary." Code-signing (Windows Authenticode, macOS Developer ID notarization — the pipeline is wired for BOTH; Windows activates when the `WINDOWS_CERT_PFX_BASE64`/`WINDOWS_CERT_PASSWORD` secrets are set) closes that gap; until a cert exists, the installer copy must say so honestly rather than pretend it's signed. On Windows the stakes are higher than a SmartScreen warning: Smart App Control in enforce mode blocks the unsigned NSIS uninstaller's `%TEMP%` relaunch, so the app cannot be uninstalled from Settings > Apps (lab repro 2026-08-10) — and the uninstaller can ONLY be signed at makensis time (`!uninstfinalize`), because `WriteUninstaller` regenerates `Uninstall.exe` from the embedded stub on every (re)install.
 5. **Verify the artifact, not the build log.** "CI went green" is not "the installer works" — actually download the produced `.exe`/`.dmg`/`.AppImage` from the release URL and confirm its byte size and (where testable) that it runs, same evidentiary bar as §0a.5.
 
-## 0c. Write the PRD in 8090 FIRST — Software Factory is the PM, not a lint gate (HARD GATE)
+## 0c. Write and review the product record first (HARD GATE)
 
-**8090 Software Factory is a product reviewer. Treat it as the PM/product engineer on this work, not as a checkbox drift-bot enforces after the fact.** The requirement is where a change is *justified*; the blueprint is where it is *designed*; the code is where it is *built*. In that order.
+**An independent reviewer reads the requirement before implementation.** Use versioned records and the process in [docs/PRODUCT_RECORDS.md](docs/PRODUCT_RECORDS.md). The requirement is where a change is *justified*; the blueprint is where it is *designed*; the code is where it is *built*. In that order.
 
 Burned 2026-08-25 (the Observe-pillar gaps, #5163/#5165/#5167/#5172): all four were implemented first, then Factory records were written to turn drift-bot green. Six rounds of edits produced accurate mechanism — component blocks, contracts, ADRs — and **zero product context**. Nobody reviewing those records could have told you who was hurt, what was out of scope, what was risked, or what we would have shipped instead. Three defects a PM would have caught went in with them:
 - a one-click, irreversible data-deletion control with no confirmation (retention),
@@ -101,12 +109,12 @@ None of those are documentation problems. They are what you get when the reviewe
 
 **Say the risk out loud in the record.** A requirement that lists only what improves is half a requirement. State what could break, who notices, and how it is undone: data that changes retroactively, migrations that rebuild derived tables, controls that delete, anything a second feature might collide with.
 
-**Check what else is in flight before you design.** `GET /blueprints/<id>` on the feature you are touching, and scan open PRs for the same noun. Two ownership models merged a day apart is a review failure, not a merge conflict.
+**Check what else is in flight before you design.** Read the feature's versioned blueprint and scan open PRs for the same noun. Two ownership models merged a day apart is a review failure, not a merge conflict.
 
-**This is enforced, not advisory.** `scripts/check_product_record.py` fails any PR touching product code whose body cites neither a Factory record nor an explicit `No-PRD: <reason>`. It cannot judge whether the record is any good -- it cannot, and pretending otherwise would be theatre. What it does is make skipping the review a sentence somebody typed rather than a step that quietly did not happen. Docs, tests, CI and scripts are exempt, so writing the record is never itself gated on citing one. The gate's own tests run inside its workflow, because a gate whose tests only run in the main suite can rot while still reporting green.
+**This is enforced, not advisory.** `scripts/check_product_record.py` fails any PR touching product code whose body cites neither a versioned local record, a private GitHub record/issue, a historical Factory record nor an explicit `No-PRD: <reason>`. It cannot judge whether the record is any good -- it cannot, and pretending otherwise would be theatre. What it does is make skipping the review a sentence somebody typed rather than a step that quietly did not happen. Docs, tests, CI and scripts are exempt, so writing the record is never itself gated on citing one. The gate's own tests run inside its workflow, because a gate whose tests only run in the main suite can rot while still reporting green.
 
-**Practical notes** (see [[reference_software_factory_external_api]] for the API):
-- Records live at `factory.8090.ai`, project `b415065f-ab2f-4f53-8864-0c009fd098cb`. `.claude/sf_client.py` does GET/PATCH with the keychain key.
+**Practical notes:**
+- Internal records live in the private `clawmetry-cloud/docs/product-records/` archive and active work orders in private GitHub issues. Historical Factory IDs and source links are preserved there. Public records may live under this repo's `docs/product-records/`.
 - Mirror any new acceptance criteria into `docs/acceptance_criteria.json` and cite them from tests, then tighten `docs/ac_coverage_baseline.json`. An AC nothing tests is a claim nothing holds you to.
 - **Do not write that a drift finding is "expected".** Burned 2026-08-25 on #5168: the status banner on every in-flight section said, in those words, that a finding against it was correct and expected. A reviewer that reads its own instructions produced them. Say which PR delivers the section and to assess it against that PR's head instead.
 - **Name files, never functions.** The rule above is about location; this one is about what you assert. A blueprint that says "`run_all()` accepts these parameters" or "`_incident()` returns these fields" has made a claim about a symbol, and the reviewer answers symbol questions from the code on `main`, where a symbol this PR introduces does not exist. Every finding on #5168 that survived four rounds of restructuring mapped to one of eight function names sitting in the blueprint. State the contract at the surface a consumer actually touches instead: the API response, the stored row, the observable behaviour. Those are verifiable, they are what a contract is for, and they do not go stale when the code moves.
@@ -156,6 +164,14 @@ ClawMetry is open-core. There are **four repos**, each with a clear remit; agent
 
 ### Hard rules that fall out of the split
 
+- **Physical robot evidence is a separate adapter seam.** The free Asimov
+  connector and built-in Jumper adapter (`clawmetry/physical_ai/`) share the
+  public robotics journal, daemon-owned DuckDB and Physical AI view. Jumper is
+  explicitly OSS by the founder's direction. Its scene/skills/simulator demo may
+  be separate, but its observer must ship in ordinary `pip install clawmetry`.
+  Do not count robot adapters as LLM transcript runtimes or move their shared
+  core into a demo plugin. Other paid adapter entitlements remain unchanged.
+
 - **OSS routes for gated features must call `entitlements.allows_feature(...)`** and return HTTP 402 (`upgrade_required`) when blocked. Never silently disable — the upgrade prompt is the conversion moment.
 - **Plugin override seam.** `dashboard.py` family-adapter loop must skip when `registry.get(name) is not None` (clawmetry-pro registered it first). Tested by `tests/test_adapter_registry_override.py`. Don't reintroduce a clobber.
 - **`load_plugins()` is already wired at `dashboard.py:162`** (import time) and works on Python 3.9+ via `_select_entry_points` — don't roll your own.
@@ -190,31 +206,39 @@ Hold the line with:
 - **Poll in seconds-to-minutes, never sub-second.** The daemon wakes, works, then sleeps.
 - **Profile before shipping anything on the ingest / query / snapshot path.** `sample <pid> 4` (macOS) or py-spy. If it sustains more than ~1 core, it does not ship. Guard the caps + cache with a regression test so it stays mechanical.
 
-## 1f. Keep Software Factory in sync (Drift Bot)
+## 1f. Keep versioned product records in sync
 
-This repo (and `clawmetry-cloud` / `clawmetry-pro` / `clawmetry-mac` / `clawmetry-railway`) is tracked in [8090 Software Factory](https://factory.8090.ai) as the "ClawMetry" project: Requirements and Blueprints describing what the product does and how. A `drift-bot` GitHub status check runs on every PR and posts an inline comment when the code says something the Blueprints/Requirements don't. Real example: PR #4599 shipped the installer's stale-duplicate sweep and documented it in `CHANGELOG.md`, but no Blueprint said the installers clean up other Python interpreters on PATH, so Drift Bot failed the PR.
+Use [docs/PRODUCT_RECORDS.md](docs/PRODUCT_RECORDS.md). Requirements explain the
+problem and acceptance criteria; blueprints explain contracts and architecture.
+A changelog is not a substitute for either. Before merging a behavior change:
 
-**`CHANGELOG.md` is not enough.** Drift Bot reads Blueprints/Requirements, not the changelog. Before merging a change that alters documented (or should-be-documented) product behavior:
-- Check whether an existing Blueprint covers the area you touched; if your change makes it wrong or incomplete, update it.
-- If no Blueprint or Requirement covers it yet, **write one** (§1f0). Noting the gap in the PR description is what this rule used to say and it is how PR #5168 came to be built with no specification at all: the note is written, the PR merges, and nobody ever creates the document. Mentioning a gap is not closing it.
-- The dashboard's "Sync Blueprint with Code" agent action (or the Software Factory MCP skill, `npx skills add 8090-inc/software-factory-plugin`) can do this for you; point it at the specific PR/CHANGELOG entry rather than asking for a blanket sync of everything.
-- A red `drift-bot` check is a real signal like any other CI failure (§4) — fix the documentation gap, don't merge past it.
-- **You cannot make it green after the merge.** `drift-bot` is a *commit status* posted by the `8090-software-factory` GitHub App against the PR head SHA, not a GitHub Actions workflow: there is no re-run button and no run to re-trigger. Merging red leaves that PR permanently red even once the Blueprint is fixed. Note it does not appear in `gh api .../check-runs` at all, and `gh pr checks` shows it with an empty `details_url` — `gh pr checks <N> | awk -F'\t' '$2!="pass"'` is how you see it.
-- **"It's only a docs finding" is the failure mode, not the exception.** Next to a wall of green functional tests a drift finding reads as a chore to file afterwards. It usually isn't. `clawmetry-cloud` PR #2089 (2026-08-23) merged past one on that reasoning; the finding was that a cloud always-on monitor had shipped with no consent flag, no operator mute and an 8-minute threshold, while the Blueprint it belonged to already required always-on monitors to be visible, mutable and honestly resolved. The bot was flagging a contract violation, not missing prose. `clawmetry-cloud/FLYWHEEL.md` §2b carries the same rule for that repo.
+- Read the relevant record and follow linked context. If no record exists, write
+  it before implementing the feature; do not leave a promise to document it later.
+- Update records and acceptance-test mappings with the code. Keep IDs stable.
+- Obtain independent review against the exact candidate SHA. Record findings,
+  resolutions and approval in the PR or private work order. Fix blocking findings.
+- Use existing agent capacity for focused reviews. Do not launch a paid external
+  reviewer on every push. Never forge a green status for the retired service.
 
-**Work Orders are a strategic backlog, not the work queue.** The factory holds 23 of them. As of 2026-08-22, zero are completed and zero of the last 60 commits reference one; what actually ships is cost fixes, compat fixes and signing guards that nobody wrote a ticket for. That is not a discipline failure to correct, it is how a solo repo with a fast flywheel really works, and this file used to instruct you to "check Pending Work Orders regularly" which nobody did and nothing broke.
+The portable product-record citation check is aggregated by `E2E Gate (required)`.
+It verifies the reference, not the quality of the requirement or its review.
+Historical vendor findings remain useful evidence; resolve the underlying contract
+violation rather than discarding a finding because its reporter was retired.
 
-So: read the board when you want to know what the product is *supposed* to become next. Do not treat it as a queue you are behind on, and do not open a Work Order for routine work. Open one when a piece of work is genuinely the next thing you intend to build and you want it specified before you start. Requirements and Blueprints are the parts of the factory that carry their weight (see §1f and §1g); the ticket layer is optional and currently unused.
+Work orders are the private strategic backlog. Import original WO numbers,
+statuses, linked records and PR evidence into private GitHub issues. Start new
+work deliberately; an imported stale status is not proof the implementation is
+complete or incomplete. Verify the merged code before updating that status.
 
 ## 1g. Every acceptance criterion is traceable to a test
 
-Drift Bot (§1f) answers one question: *does this PR's diff contradict a Blueprint?* It is a changed-code check, it runs in 30s, and it is good at its job. It has no opinion on the opposite failure, which is the one that actually bites us: **code nobody touched quietly stops satisfying a criterion that was written months ago.**
+Independent review (§1f) answers one question: *does this PR's diff contradict a Blueprint?* It is a changed-code check, it runs in 30s, and it is good at its job. It has no opinion on the opposite failure, which is the one that actually bites us: **code nobody touched quietly stops satisfying a criterion that was written months ago.**
 
 That is not hypothetical. `AC-OBS-CEA-001.2` has said "when a cost value cannot be determined, the system shall identify it as unavailable rather than report a zero value" since the Cost and Efficiency Analytics requirement was written. PR #5079, "a failed DuckDB read is not a window that cost $0.00", shipped in August 2026 violating it word for word. Drift Bot passed the PR, correctly: the diff contradicted nothing. The bug was found by a founder report in production. `AC-OBS-002.3` and `AC-GOV-001.3` forbid the same class in different words, and we have shipped that class at least eleven times (ghost sessions, false SILENT heartbeat banner, "waiting on you" with no evidence, stale runtime counts, a wedged Alerts tab).
 
 So: **an acceptance criterion that no test references is prose, not a guard.**
 
-`docs/acceptance_criteria.json` mirrors every criterion this repo implements out of the factory. `scripts/check_ac_coverage.py --check` runs in CI (`Acceptance criteria are traceable to tests`) and requires each one to be *declared* by at least one test under `tests/`:
+`docs/acceptance_criteria.json` mirrors every criterion this repo implements from the versioned product records. `scripts/check_ac_coverage.py --check` runs in CI (`Acceptance criteria are traceable to tests`) and requires each one to be *declared* by at least one test under `tests/`:
 
 ```
 * AC-OBS-LADC-001.2 -- an unexpected record change is reported as failure:
@@ -231,7 +255,11 @@ The id must be the first token on its line. A passing mention in prose does not 
 
 The number only ever goes down. `make ac-report` shows where you stand.
 
-**When you add or change a criterion in the factory, re-sync the mirror.** The manifest cannot be generated in CI (the factory is reachable only over MCP, which GitHub Actions has no credentials for), so it is refreshed by an agent session with the Software Factory MCP server attached. Never hand-edit a criterion's text to make a check pass; that is forging the spec to match the code, which is the exact failure this gate exists to catch.
+**When a criterion changes, update its versioned source and re-sync the mirror.**
+Preserve its ID and text, the test references and the ratchet in the same change.
+Private source records cannot be downloaded by a public CI token; an authorized
+agent reads the private record and commits only the public criteria this repo
+implements. Never rewrite a criterion merely to make a failing test pass.
 
 **Scope.** Only the `AC-OBS-*`, `AC-RSO-*` and `AC-GOV-*` families are gated here, because only those are implemented in this repo. `AC-CLOUD-*`, `AC-BUILD-*`, `AC-DEVICE-*` and `AC-WEB-*` belong to `clawmetry-cloud`, the hosted builder, `clawmetry-mac`/firmware, and the marketing site. They are listed under `external_prefixes` so a stray reference to one is not misread as a typo.
 
@@ -383,6 +411,24 @@ EVERY change:
   once against data that SHOULD trip it, and seen to trip. The same shape bit a CI waiter that anchored
   on `^\S+\s+pending` while the check names contain spaces: it reported "settled, 0 failures" over a
   run in which every check was still pending.
+- **A waiter that swallows its errors cannot succeed.** The twin of the rule above. A poller written as
+  `try: ... except Exception: sleep(); continue` turns a transport failure into "not ready yet": one run
+  polled PyPI with `urllib` for a full hour and printed nothing but `timed out`, while the wheel it was
+  waiting for had been published 50 minutes earlier (`urllib` uses the system trust store, which on a
+  dev box can fail every HTTPS handshake; `curl` and `pip` carry their own CA bundle and worked in the
+  same shell). A waiter must say WHY it retried, and the thing it waits for is worth checking once by
+  hand before trusting a long wait.
+- **An action that only changes tabs is a dead end, and the reader will say so.** Improve shipped with one
+  button per candidate, "Open Setup". It switched to the Setup tab and stopped, landing the reader in front of
+  an unfiltered file list with nothing tying it to the card they had just pressed. It passed every test,
+  because switching tabs is exactly what it was asked to do. The founder's words were "i've no idea what to do
+  either". Walk the surface you shipped as a reader who has not read the diff: press the primary button and ask
+  what question it just answered. If the answer is "it moved you somewhere", the feature is the screen you
+  arrived at, and it is not built yet.
+- **A fold that runs per item leaves the cross-item case.** `_fold_repo_case` makes one repository
+  spelled two ways one row inside a session, and the live tab still showed both spellings, because they
+  came from two different sessions and the read query grouped on the exact text. Ask where the rows
+  finally meet, and put the rule there.
 
 ## 4. PR → green CI → merge
 
@@ -420,7 +466,7 @@ gh pr create --title "feat: …" --body "…"    # explain WHY + the verificatio
 
 - **Never push directly to `main`. No exceptions.** Not for empty re-trigger commits. Not for `Dockerfile` cache-bust comments. Not for one-line CI tweaks. Not for typo fixes. Not even for reverts. Every change goes through a branch + PR + CI, including changes whose only purpose is to nudge CI itself. The 30 seconds a one-line PR costs is the price of every other agent and human being able to trust `main`. If a deploy is stuck and you think the fix is "obvious," that means it is a perfect 1-line PR, not a justification to bypass review. Burned 2026-05-28 on `clawmetry-landing`: I pushed two commits straight to `main` (`a2cfb7b` empty re-trigger and `acfa10e` 2-line Dockerfile cache-bust) framing the urgency of a stuck Cloud Run deploy as license to skip the rule. Both would have taken 30 seconds as PRs. The user rightly called it out.
 - End commit messages with the `Co-Authored-By` trailer; end PR bodies with the Claude Code footer.
-- **CI must be 100% green before merge — red means it will not deploy.** The matrix includes: Syntax & Lint, API Tests (3 OS), E2E Browser Tests, **Live OpenClaw E2E (real gateway)**, MOAT Verifier + Keystone, Eval Suite Gate, Sync matrix (3 OS × 3 Py), Install/boot/health, wheel/asset presence, pip install, and **`drift-bot`** (Software Factory blueprint/requirement sync, §1f — fix the doc gap, it is not a flaky check to retry).
+- **CI must be 100% green before merge — red means it will not deploy.** The matrix includes: Syntax & Lint, API Tests (3 OS), E2E Browser Tests, **Live OpenClaw E2E (real gateway)**, MOAT Verifier + Keystone, Eval Suite Gate, Sync matrix (3 OS × 3 Py), Install/boot/health, wheel/asset presence, pip install, and **the portable product-record check**, plus independent exact-candidate review (§1f).
 - A red check is a real signal. **Fix the cause — code or test — never skip or `xfail` to get green.** If a test encodes the wrong expectation (e.g. an IA-v2 rename), fix the test to match reality; read the *rendered* HTML before "fixing" a selector so you don't fix half of it. **§4a is the full triage: which of the four causes it is, how to decide, and why weakening the check is never one of them.**
 - Merge with `gh pr merge <n> --squash --delete-branch`.
 - After any cross-cutting fix on main, **rebase every open PR** (`gh pr update-branch`) — "main green" ≠ "PRs green." This is the same rule as the rebase-before-PR one above, applied to PRs that were already open when `main` moved.
@@ -447,7 +493,7 @@ SAME PR (§3 ruthless-verify).
 Only when a HIGHER AUTHORITY says the code is right. The order of authority,
 highest first:
 
-1. the Requirement's acceptance criteria in Software Factory,
+1. the versioned Requirement's acceptance criteria,
 2. the Blueprint's `System Contracts`,
 3. the declared behaviour in the code (docstring, type, documented contract),
 4. the test's expectation.
@@ -499,45 +545,17 @@ build goes red, with no human needing to spot the diff.
 If a ratchet genuinely must come down, that is an explicit edit to the baseline
 file plus a stated reason in the PR description. Visible, reviewable, deliberate.
 
-### Drift is cause 3's sibling: fix Software Factory, not the code
+### Contract drift: fix the record or the implementation
 
-**`drift-bot` red means the code now says something the Blueprints and
-Requirements do not.** When the change is legitimate new behaviour, the
-resolution is to update Software Factory so the records describe reality. Do not
-contort the code to fit a stale document, and do not merge past the check
-(§1f).
+An independent review finding that code contradicts a requirement or blueprint
+is a real blocker. Read the authoritative acceptance criteria and inspect the
+exact candidate before deciding which side is wrong. Legitimate new behavior
+requires updating the versioned record; a regression requires fixing code.
+Neither a changelog entry nor an abandoned external status is approval.
 
-Before writing anything, VERIFY the drift is real rather than assuming:
-
-```
-list_blueprints(content_pattern="<the capability you added>")
-list_requirements(content_pattern="<the behaviour you changed>")
-```
-
-Worked example, 2026-08-22: #5082 added a six-layer verification architecture
-and drift-bot reported 8 findings with no readable detail. A regex sweep across
-all 36 Blueprints for merge gating, required checks, mutation testing and
-release gating returned exactly one hit, and it was the word "mutation" used in
-an unrelated sense. The drift was real, so a Component Blueprint (`Release
-Verification and Merge Gating`) was written per the 8090 blueprint guide, and
-the next PR touching that area went green.
-
-Which record to write follows the 8090 taxonomy, and the skill is the reference,
-not guesswork:
-
-```
-npx skills add 8090-inc/software-factory-plugin
-```
-
-then read `guides/blueprint-writing-guide.md` before creating anything. Container
-for a deployable or runnable unit; Component for a reusable capability that spans
-containers; Feature for a composition satisfying one FRD. Required sections and
-`component` / `model` block syntax are non-negotiable, and every Blueprint needs
-`System Contracts` and numbered ADRs.
-
-Blueprint-to-code links only resolve for files already on `main`, because the
-index is built from the default branch. Create the Blueprint with the PR, link
-the code after the merge.
+Use the requirements and blueprint templates in the local execution skill or
+`docs/PRODUCT_RECORDS.md`. Review only relevant records and source sections,
+and keep a concise decision trail linked to the candidate SHA.
 
 ### Escalate only when the fix is genuinely not yours
 

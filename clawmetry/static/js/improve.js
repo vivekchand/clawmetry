@@ -118,7 +118,7 @@ function sameScope(left, right) {
       + '<div class="cm-improve-card-heading"><strong>' + escapeHtml(kindLabel(signal.kind)) + '</strong><span>' + escapeHtml(formatWhen(signal.last_seen)) + '</span></div>'
       + '<span class="cm-improve-confidence">' + escapeHtml(signal.confidence || 'medium') + '</span></div>'
       + '<p class="cm-improve-excerpt">' + escapeHtml(signal.excerpt || '') + '</p>'
-      + '<div class="cm-improve-card-meta"><span>' + escapeHtml(details.join(' · ')) + '</span><span class="cm-improve-card-actions"><span class="cm-improve-card-profile">' + escapeHtml(scope) + (pain ? ' · pain ' + pain + '/5' : '') + '</span><button type="button" onclick="improveToggleEvidence(\'' + escapeHtml(signal.id) + '\')">View evidence</button><button type="button" onclick="improveOpenReview(\'' + escapeHtml(signal.id) + '\')">Review candidate</button></span></div>'
+      + '<div class="cm-improve-card-meta"><span>' + escapeHtml(details.join(' · ')) + '</span><span class="cm-improve-card-actions"><span class="cm-improve-card-profile">' + escapeHtml(scope) + (pain ? ' · pain ' + pain + '/5' : '') + '</span><button type="button" onclick="improveToggleEvidence(\'' + escapeHtml(signal.id) + '\')">View evidence</button><button type="button" onclick="improveOpenReview(\'' + escapeHtml(signal.id) + '\')">Review candidate</button><button type="button" class="cm-improve-card-investigate" onclick="improveInvestigate(\'' + escapeHtml(signal.id) + '\')">Investigate</button></span></div>'
       + '<div class="cm-improve-evidence-list" id="improve-evidence-' + escapeHtml(signal.id) + '" hidden>' + evidence
       + (projects ? '<small class="cm-improve-scope">Projects: ' + escapeHtml(projects) + '</small>' : '')
       + (runtimes ? '<small class="cm-improve-scope">Runtimes: ' + escapeHtml(runtimes) + '</small>' : '')
@@ -196,6 +196,7 @@ function sameScope(left, right) {
     var signal = findSignal(id);
     var modal = document.getElementById('improve-review-modal');
     if (!signal || !modal) return;
+    _cmImproveState.reviewId = signal.id;
     var title = document.getElementById('improve-review-title');
     var summary = document.getElementById('improve-review-summary');
     var evidence = document.getElementById('improve-review-evidence');
@@ -210,9 +211,72 @@ function sameScope(left, right) {
     modal.setAttribute('aria-hidden', 'false');
   }
 
+  function clip(value, limit) {
+    var text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+    return text.length > limit ? text.slice(0, limit - 1) + '\u2026' : text;
+  }
+
+  // The question we hand the Assistant. It carries the evidence the card is
+  // built from, so the investigation starts from what we actually observed
+  // rather than from the one sentence the reader can see.
+  function investigationPrompt(signal) {
+    var kinds = {
+      preference: 'preference I keep repeating',
+      correction: 'correction I had to make',
+      frustration: 'friction I keep hitting'
+    };
+    var lines = ['Investigate this ' + (kinds[signal.kind] || 'signal') +
+      '. ClawMetry found it in my own messages to my agents.', ''];
+    lines.push('What I said: "' + clip(signal.excerpt, 600) + '"');
+    var facts = [];
+    if (signal.seen_count) facts.push(signal.seen_count + ' observed turn' + (signal.seen_count === 1 ? '' : 's'));
+    if (signal.conversation_count) facts.push(signal.conversation_count + ' conversation' + (signal.conversation_count === 1 ? '' : 's'));
+    if (signal.project_count) facts.push(signal.project_count + ' project' + (signal.project_count === 1 ? '' : 's'));
+    if (signal.last_seen) facts.push('last seen ' + formatWhen(signal.last_seen));
+    facts.push('scope ' + (signal.scope || (signal.project_count === 1 ? 'project' : 'workspace')));
+    if (signal.pain_score != null) facts.push('pain ' + signal.pain_score + '/5');
+    lines.push('Where it comes from: ' + facts.join(' \u00b7 ') + '.');
+    var runtimes = signal.harness_applicability || signal.runtimes || [];
+    if (runtimes.length) lines.push('Runtimes: ' + runtimes.slice(0, 8).join(', ') + '.');
+    var projects = signal.projects || [];
+    if (projects.length) lines.push('Projects: ' + projects.slice(0, 6).join(', ') + '.');
+    var evidence = (signal.evidence || []).slice(0, 5).map(function(item, index) {
+      return (index + 1) + '. "' + clip(item.excerpt, 300) + '" \u2014 ' +
+        (item.workspace || 'local workspace') + ', ' + formatWhen(item.ts);
+    });
+    if (evidence.length) {
+      lines.push('', 'Evidence from my conversations:');
+      lines = lines.concat(evidence);
+    }
+    lines.push('', 'Find the sessions this came from and tell me: what actually went wrong, ' +
+      'whether it is still happening, and which single instruction, skill, agent or hook I should ' +
+      'change - name the file and the exact wording to add. If the evidence does not support a ' +
+      'change, say so.');
+    return lines.join('\n').slice(0, 3800);
+  }
+
+  function improveInvestigate(id) {
+    var signal = findSignal(id);
+    if (!signal) return;
+    if (typeof window.assistantAsk !== 'function') {
+      // Assistant ships in the same page as this tab. Missing means the page
+      // is broken, not that the feature is absent - say so, do not navigate
+      // to a screen that will sit there empty.
+      setText('improve-source-note', 'Assistant did not load on this page. Reload, then investigate this signal.');
+      return;
+    }
+    improveCloseReview();
+    window.assistantAsk(investigationPrompt(signal));
+  }
+
+  function improveInvestigateReviewed() {
+    improveInvestigate(_cmImproveState.reviewId);
+  }
+
   function improveCloseReview() {
     var modal = document.getElementById('improve-review-modal');
     if (!modal) return;
+    _cmImproveState.reviewId = null;
     modal.hidden = true;
     modal.setAttribute('aria-hidden', 'true');
   }
@@ -370,5 +434,7 @@ window.improveToggleEvidence = improveToggleEvidence;
 window.improveOpenReview = improveOpenReview;
 window.improveCloseReview = improveCloseReview;
 window.improveOpenSetup = improveOpenSetup;
+window.improveInvestigate = improveInvestigate;
+window.improveInvestigateReviewed = improveInvestigateReviewed;
 window.loadImprove = loadImprove;
 }());

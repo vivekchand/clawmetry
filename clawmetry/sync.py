@@ -598,6 +598,9 @@ def _graceful_shutdown(reason: str, *, force_exit: bool) -> None:
     from clawmetry.assistant_relay import stop_delivery
     stop_delivery()
 
+    from clawmetry.node_activity_service import stop_node_activity
+    stop_node_activity(timeout=0.2)
+
     # Finish the journal tail before tearing down its shared writer connection.
     from clawmetry.asimov.daemon import stop as _stop_asimov
     _stop_asimov()
@@ -2337,15 +2340,9 @@ def _maybe_install_license_from_heartbeat(resp: dict) -> None:
                 existing = ""
         if existing == key:
             return
-        os.makedirs(os.path.dirname(lic_path), exist_ok=True)
-        tmp = lic_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(key)
-        os.replace(tmp, lic_path)
-        try:
-            os.chmod(lic_path, 0o600)
-        except Exception:
-            pass
+        from clawmetry.license import _store_license_key
+        if not _store_license_key(key, path=lic_path):
+            return
         log.info(
             "✓ ClawMetry license installed from cloud — dashboard will unlock "
             "on the next resolver refresh (up to 60s)."
@@ -9701,6 +9698,7 @@ def send_heartbeat(config: dict) -> bool:
 _PENDING_SHAPES = {
     "incidents", "investigation", "activity", "error_groups", "session_catalog",
     "robotics_runs", "robotics_events",
+    "physical_ai_runs", "physical_ai_events",
     "events", "sessions", "aggregates", "health", "transcript",
     # Added in P4 (#2990): new live shapes from P2 materialized rollups.
     "runtimes", "models", "rollup_sessions",
@@ -9733,6 +9731,9 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     nodes, but the local DuckDB IS a single-node store). Filter to a
     per-shape allowlist so those extras don't surface as TypeErrors.
     """
+    if shape in ("physical_ai_runs", "physical_ai_events"):
+        from clawmetry.physical_ai.query_args import coerce_query_args
+        args = coerce_query_args(shape, args or {})
     from clawmetry import local_store
     store = local_store.get_store(read_only=True)
     if shape == "health":
@@ -9745,6 +9746,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
         "activity": "query_activity",
         "robotics_runs": "robotics_runs",
         "robotics_events": "robotics_events",
+        "physical_ai_runs": "query_physical_ai_runs",
+        "physical_ai_events": "query_physical_ai_events",
         "events":     "query_events",
         "sessions":   "query_sessions",
         "aggregates": "query_aggregates",
@@ -9786,6 +9789,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
 # but defined here so the daemon-only fallback path doesn't need the
 # routes package on sys.path.
 _SHAPE_ALLOWED_KWARGS = {
+    "physical_ai_runs": {"limit", "robot_id", "before_ns", "before_run_id"},
+    "physical_ai_events": {"run_id", "after", "limit"},
     "robotics_runs": {"limit", "before_ns", "before_run_id"},
     "robotics_events": {"run_id", "after", "limit", "before", "tail"},
     "events":     {"session_id", "agent_id", "event_type", "since", "until", "limit"},
@@ -11213,12 +11218,21 @@ def _action_node_activity(config: dict, action: dict) -> None:
             elif operation == "review":
                 if not binding | {"event_id", "decision"} <= set(body) or not set(body) <= binding | {"event_id", "decision", "reason"}:
                     raise ValueError("unsupported request fields")
+            elif operation == "live" and set(body) == binding:
+                pass
             else:
                 raise ValueError("unsupported operation")
             if len(ledger) >= 512:
                 raise ValueError("too many monitoring updates; retry later")
             ledger[request_id] = time.time()
             store.set_node_setting("node_activity.request_ids", json.dumps(ledger))
+            if operation == "live":
+                from clawmetry.node_activity_service import touch_node_activity_view
+                touch_node_activity_view(remote=True)
+                result.update(ok=True, applied=True, saved=False, live=True)
+                result.pop("message", None)
+                _post_process_control_result(config, action, result)
+                return  # Ephemeral viewing lease, never a saved preference.
             if operation == "preferences":
                 requested = body["preferences"]
                 saved = store.set_node_activity_preferences(requested)
@@ -12714,7 +12728,7 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                 "blob": blob,
                 "shape": shape,
                 "args_hash": _canonical_args_hash(args),
-                "ttl": (5 if shape in {"robotics_runs", "robotics_events"} else
+                "ttl": (5 if shape in {"robotics_runs", "robotics_events", "physical_ai_runs", "physical_ai_events"} else
                         15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600),
             }, api_key)
         except Exception as e:
@@ -15264,7 +15278,6 @@ _FAMILY_ADAPTER_SPECS = (
     # the audit log with per-call usage, and the outbound sends its scheduler
     # has queued. The store has no fixed home, so the adapter discovers it.
     ("clawmetry_pro.adapters.openexecutive", "OpenExecutiveAdapter"),
-    ("clawmetry_pro.adapters.opendots", "OpenDotsAdapter"),
 )
 
 
@@ -17186,9 +17199,11 @@ def _build_runtime_records():
     failure yields ``{}`` and the UI keeps its older, vaguer wording.
     """
     try:
-        from clawmetry.runtime_records import RUNTIME_RECORDS, SIGNALS, coverage_payload
+        from clawmetry.runtime_records import (
+            RUNTIME_RECORDS, HISTORICAL_RUNTIME_RECORDS, SIGNALS, coverage_payload,
+        )
         out = {}
-        for rt in RUNTIME_RECORDS:
+        for rt in RUNTIME_RECORDS.keys() | HISTORICAL_RUNTIME_RECORDS.keys():
             base = coverage_payload(rt, has_data=False)
             out[rt] = {
                 "runtime_label": base["runtime_label"],
@@ -25274,6 +25289,21 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception:
         log.warning("Asimov snapshot could not be read")
 
+    try:
+        from clawmetry.asimov.store import physical_ai_snapshot
+        from clawmetry.local_store import get_store as _physical_ai_store
+        _physical_ai_slice = physical_ai_snapshot(_physical_ai_store())
+        payload["physical_ai"] = _physical_ai_slice
+    except Exception:
+        log.warning("Physical AI snapshot could not be read")
+
+    # UI capability declarations are node-scoped and share the encrypted payload.
+    try:
+        from clawmetry.physical_ai.catalog import snapshot_metadata as _physical_ai_ui
+        payload["ui"] = _physical_ai_ui()
+    except Exception:
+        log.warning("Physical AI navigation metadata could not be read")
+
     # Paid robotics summary shares the normal encrypted envelope.
     try:
         from clawmetry.extensions import call as _robotics_snapshot
@@ -26063,6 +26093,23 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning("local query server: failed to start: %s", _e)
 
+    # Node metrics must not wait for cloud I/O or a long session backfill.
+    try:
+        from clawmetry.node_activity_service import start_node_activity
+        def _publish_node_live(frame):
+            from clawmetry.config import is_cloud_disabled
+            if is_cloud_disabled() or not _sync_allowed() or not config.get("api_key") or not config.get("encryption_key"):
+                return
+            owner = _owner_hash_for_token(config["api_key"])
+            _post("/ingest/cache", {"node_id": config["node_id"],
+                  "cache_key": "node_activity_live:" + owner + ":" + config["node_id"],
+                  "shape": "node_activity_live", "ttl": 12,
+                  "blob": encrypt_payload(frame, config["encryption_key"])}, config["api_key"], timeout=3)
+        from clawmetry import local_store as _node_store
+        start_node_activity(_node_store.get_store(read_only=False), node_id=config.get("node_id", ""), publish=_publish_node_live)
+    except Exception as exc:
+        log.warning("Node measurement worker could not start: %s", type(exc).__name__)
+
     # Tail existing local Asimov journals without a license or private package.
     # SDK tracing and live Observe connections require separate explicit setup.
     try:
@@ -26699,14 +26746,7 @@ def run_daemon() -> None:
                 sync_runtime_memory_files(config, state, paths)
             except Exception as _rme:
                 log.warning("runtime memory/skills sync error: %s", _rme)
-            # Independent of cloud enablement: local-only nodes also collect.
-            # The service rate-caps this work and owns no request-time reads.
-            try:
-                from clawmetry import local_store as _ls_node_activity
-                from clawmetry.node_activity_service import tick_node_activity
-                tick_node_activity(_ls_node_activity.get_store(), node_id=config.get("node_id", ""))
-            except Exception:
-                log.warning("node activity collection unavailable", exc_info=False)
+            # Independent worker persists Node measurements even during this ingest pass.
             snap = 0
             now_snap = time.time()
             if now_snap - last_snapshot > snapshot_interval:

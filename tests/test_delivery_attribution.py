@@ -1621,3 +1621,60 @@ def test_a_json_escaped_newline_still_ends_a_line():
 
 def test_rules_version_moved_to_eight():
     assert int(attribution.RULES_VERSION) >= 8
+
+
+def test_two_sessions_spelling_one_repository_differently_are_one_row(store):
+    """``_fold_repo_case`` folds WITHIN a session; rows must fold across them.
+
+    The live tab listed ``ClawMetry/clawmetry-pro`` beside
+    ``clawmetry/clawmetry-pro``: one repository, two rows, because the two
+    spellings came from two different sessions and the read query grouped on
+    the exact text. GitHub treats an owner and a name case-insensitively, so
+    the spelling the node's sessions used most is the one to show.
+    """
+    _attribute(store, "s1", [_call("gh pr edit 7 --repo nordwind/repo"), _usage(3.0)])
+    _attribute(store, "s2", [_call("gh pr edit 7 --repo nordwind/repo"), _usage(4.0)])
+    _attribute(store, "s3", [_call("gh pr edit 7 --repo NordWind/Repo"), _usage(5.0)])
+    rows = store.query_delivery(kind="pr")["rows"]
+    assert len(rows) == 1, [(r["repo"], r["ref"], r["sessions"]) for r in rows]
+    assert rows[0]["repo"] == "nordwind/repo"
+    assert rows[0]["sessions"] == 3
+    assert rows[0]["cost_usd"] == 12.0
+
+
+def test_a_branch_keeps_its_own_case(store):
+    """git is case-sensitive about refs, so two branches stay two branches.
+
+    The guard on the fix above: lowercasing the whole key would merge
+    ``Feature/Login`` into ``feature/login`` and claim work on a branch that
+    does not exist.
+    """
+    _attribute(store, "s1", [_call("git push origin Feature/Login"), _usage(1.0)])
+    _attribute(store, "s2", [_call("git push origin feature/login"), _usage(1.0)])
+    refs = sorted(r["ref"] for r in store.query_delivery(kind="branch")["rows"])
+    assert refs == ["Feature/Login", "feature/login"], refs
+
+
+def test_a_pull_request_finds_its_title_despite_a_different_case(store):
+    """The title/state/URL join was case-sensitive too.
+
+    A session that typed ``nordwind/repo`` while the local checkout reports
+    ``NordWind/Repo`` got a row with no title and no state, which reads as a
+    pull request nobody can identify.
+    """
+    store.ingest_git_scan({
+        "repo_root": "/tmp/nordwind-repo",
+        "remote_url": "https://github.com/NordWind/Repo.git",
+        "host": "github.com",
+        "owner": "NordWind",
+        "name": "Repo",
+        "pull_requests": [{"number": 7, "state": "merged",
+                           "title": "Add the thing",
+                           "url": "https://github.com/NordWind/Repo/pull/7",
+                           "merged_at": 1760000000}],
+    })
+    _attribute(store, "s1", [_call("gh pr edit 7 --repo nordwind/repo"), _usage(2.0)])
+    row = store.query_delivery(kind="pr")["rows"][0]
+    assert row["title"] == "Add the thing"
+    assert row["state"] == "merged"
+    assert row["url"].endswith("/NordWind/Repo/pull/7")

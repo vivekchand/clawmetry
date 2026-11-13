@@ -665,11 +665,24 @@ _HEARTBEAT_DATA_MAX_VALUE_BYTES = 64 * 1024
 # input or the rollups and the live aggregate part ways — which is the bug
 # class ADR-046 exists to close, so a test pins them against each other.
 from clawmetry.cost_windows import day_expr_sql as _day_expr_sql  # noqa: E402
+from clawmetry.cost_windows import timestamp_expr_sql as _timestamp_expr_sql  # noqa: E402
 from clawmetry.cost_windows import local_day as _local_day  # noqa: E402
 from clawmetry.cost_windows import hour_expr_sql as _hour_expr_sql  # noqa: E402
 from clawmetry.cost_windows import now_local as _cw_now_local  # noqa: E402
 
+# This is an opaque grouping key, never a source clock. An unknown timestamp
+# cannot prove two events are sibling envelopes, so retain each by its own ID.
+def _event_turn_key_expr_sql(col: str = "ts", id_col: str = "id") -> str:
+    if (col, id_col) not in {("ts", "id"), ("e.ts", "e.id")}:
+        raise ValueError("Unsupported internal event timestamp identifiers")
+    return (
+        f"COALESCE(CAST(CAST(EXTRACT(EPOCH FROM {_timestamp_expr_sql(col)}) AS BIGINT) AS VARCHAR),"
+        f" 'event:' || {id_col})"
+    )
+
+
 _DAY_EXPR = _day_expr_sql("ts")
+_EVENT_TURN_KEY_EXPR = _event_turn_key_expr_sql()
 _HOUR_EXPR = _hour_expr_sql("ts")
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
@@ -4258,7 +4271,8 @@ def heal_index_corruption() -> int:
 # model.completed sibling is dropped only when a richer assistant/message row
 # shares its (session_id, ts-rounded-to-second) bucket. This mirrors the
 # canonical dedup in query_sessions/query_aggregates so all cost surfaces agree.
-_DEDUPED_EVENTS_CTE = """
+# Fixed CTE: its only interpolation is built from allowlisted internal identifiers.
+_DEDUPED_EVENTS_CTE = f"""
   _ranked AS (
     SELECT session_id, ts, cost_usd, token_count, model, event_type,
       CASE event_type
@@ -4267,7 +4281,7 @@ _DEDUPED_EVENTS_CTE = """
         WHEN 'model.completed' THEN 1
         ELSE 0
       END AS _envelope_rank,
-      CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT) AS _ts_sec
+      {_EVENT_TURN_KEY_EXPR} AS _ts_sec
     FROM events
   ),
   _bucket_max AS (
@@ -4279,7 +4293,7 @@ _DEDUPED_EVENTS_CTE = """
     JOIN _bucket_max bm USING (session_id, _ts_sec)
     WHERE NOT (r._envelope_rank = 1 AND bm._max_rank = 2)
   )
-"""
+"""  # nosec B608
 
 
 def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:
@@ -4320,6 +4334,14 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         from clawmetry.asimov.store import events
         return events(self, run_id=run_id, after=after, limit=limit)
 
+    def query_physical_ai_runs(self, *, limit=20, robot_id=None, before_ns=None, before_run_id=None) -> dict:
+        from clawmetry.asimov.store import physical_ai_runs
+        return physical_ai_runs(self, limit=limit, robot_id=robot_id, before_ns=before_ns, before_run_id=before_run_id)
+
+    def query_physical_ai_events(self, *, run_id, after=0, limit=200) -> dict:
+        from clawmetry.asimov.store import physical_ai_events
+        return physical_ai_events(self, run_id=run_id, after=after, limit=limit)
+
     def robotics_runs(self, *, limit=50, before_ns=None, before_run_id=None) -> dict:
         return self.robotics_query("runs", {"limit": limit, "before_ns": before_ns,
                                             "before_run_id": before_run_id})
@@ -4331,7 +4353,9 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
     def robotics_query(self, operation: str, args: dict | None = None) -> dict:
         """Private plugin query on the daemon-owned connection. No raw SQL RPC."""
         from clawmetry.extensions import call
-        if operation not in {"runs", "events", "snapshot", "inventory", "guard_ack", "guard_incidents", "set_observation_only"}:
+        if operation not in {"runs", "events", "snapshot", "inventory", "guard_ack", "guard_incidents", "set_observation_only",
+                             "trace_runs", "trace_detail", "trace_events", "trace_spans", "trace_artifact", "trace_artifacts", "trace_notes", "trace_guard_get", "trace_jobs",
+                             "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share"}:
             raise ValueError("Unsupported robotics query")
         return call("robotics.query", {"store": self, "operation": operation, "args": args or {}},
                     default={"error": "unavailable", "message": "Install ClawMetry Pro and restart the collector to view robot traces."})
@@ -9756,6 +9780,12 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         ``runtime`` filters server-side on the session's ``agent_type``,
         which is the runtime-filter contract every view owes the global
         switcher. Returns ``{"rows": [...], "totals": {...}}``; never raises.
+
+        Rows are folded case-insensitively on the repository name, because
+        GitHub is: two sessions that spell one repository differently are
+        one row here, under the spelling the node's sessions used most.
+        A branch name and a file path keep their case, which is theirs to
+        keep.
         """
         want_kind = str(kind or "pr").strip().lower() or "pr"
         try:
@@ -9772,25 +9802,75 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
         params: list[Any] = [want_kind, rt, rt, since_s, since_s, lim]
         try:
             rows = self._fetch("""
-                WITH agg AS (
-                    SELECT sa.repo                        AS repo,
+                WITH base AS (
+                    -- One repository spelled two ways is ONE repository:
+                    -- GitHub treats an owner and a name case-insensitively.
+                    -- attribution._fold_repo_case already does this WITHIN a
+                    -- session; the live tab still listed
+                    -- ``ClawMetry/clawmetry-pro`` beside
+                    -- ``clawmetry/clawmetry-pro`` because the two spellings
+                    -- arrived from two different sessions and nothing folded
+                    -- them once they were rows.
+                    --
+                    -- The fold key lowercases only the field that holds a
+                    -- repository NAME: ``ref`` on a repo row, ``repo`` on
+                    -- every other kind. A branch name and a file path are
+                    -- case-sensitive, so folding those would merge two
+                    -- different branches into one.
+                    SELECT sa.session_id                  AS session_id,
+                           sa.repo                        AS repo,
                            sa.ref                         AS ref,
-                           COUNT(DISTINCT sa.session_id)  AS sessions,
-                           SUM(COALESCE(sa.cost_usd, 0))  AS cost_usd,
-                           MAX(sa.confidence)             AS confidence_max,
-                           MIN(sa.confidence)             AS confidence_min,
-                           MAX(CASE sa.role WHEN 'authored' THEN 2
-                                            WHEN 'reviewed' THEN 1
-                                            ELSE 0 END)   AS role_rank,
-                           MIN(sa.first_ts)               AS first_ts,
-                           MAX(sa.last_ts)                AS last_ts,
-                           MAX(sa.basis)                  AS basis,
-                           MAX(sa.evidence)               AS evidence
+                           lower(COALESCE(sa.repo, ''))   AS repo_key,
+                           CASE WHEN sa.kind = 'repo'
+                                THEN lower(COALESCE(sa.ref, ''))
+                                ELSE COALESCE(sa.ref, '')
+                                END                       AS ref_key,
+                           sa.cost_usd                    AS cost_usd,
+                           sa.confidence                  AS confidence,
+                           sa.role                        AS role_name,
+                           sa.first_ts                    AS first_ts,
+                           sa.last_ts                     AS last_ts,
+                           sa.basis                       AS basis,
+                           sa.evidence                    AS evidence
                       FROM session_artifacts sa
                      WHERE sa.kind = ?
                        AND (? = '' OR sa.agent_type = ?)
                        AND (? = '' OR COALESCE(sa.last_ts, '') >= ?)
-                     GROUP BY sa.repo, sa.ref
+                ), spelling AS (
+                    -- How many sessions used each spelling, so the name on
+                    -- display is the one this node's own agents typed most.
+                    SELECT repo_key, ref_key, repo, ref,
+                           COUNT(DISTINCT session_id)     AS seen
+                      FROM base
+                     GROUP BY 1, 2, 3, 4
+                ), pick AS (
+                    -- A tie falls to the lexicographically smaller spelling
+                    -- rather than to row order, so the same rows always
+                    -- render the same name.
+                    SELECT repo_key, ref_key, repo, ref
+                      FROM (SELECT repo_key, ref_key, repo, ref,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY repo_key, ref_key
+                                       ORDER BY seen DESC, repo ASC, ref ASC
+                                   )                      AS rn
+                              FROM spelling)
+                     WHERE rn = 1
+                ), agg AS (
+                    SELECT repo_key                       AS repo_key,
+                           ref_key                        AS ref_key,
+                           COUNT(DISTINCT session_id)     AS sessions,
+                           SUM(COALESCE(cost_usd, 0))     AS cost_usd,
+                           MAX(confidence)                AS confidence_max,
+                           MIN(confidence)                AS confidence_min,
+                           MAX(CASE role_name WHEN 'authored' THEN 2
+                                              WHEN 'reviewed' THEN 1
+                                              ELSE 0 END) AS role_rank,
+                           MIN(first_ts)                  AS first_ts,
+                           MAX(last_ts)                   AS last_ts,
+                           MAX(basis)                     AS basis,
+                           MAX(evidence)                  AS evidence
+                      FROM base
+                     GROUP BY 1, 2
                 ), pr_meta AS (
                     -- Pre-aggregated to ONE row per (repo, number) before it
                     -- is joined. git_repos is keyed on repo_root, and the same
@@ -9811,15 +9891,20 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                        AND COALESCE(gr.name, '')  <> ''
                      GROUP BY 1, 2
                 )
-                SELECT a.repo, a.ref, a.sessions, a.cost_usd,
+                SELECT p.repo, p.ref, a.sessions, a.cost_usd,
                        a.confidence_max, a.confidence_min, a.role_rank,
                        a.first_ts, a.last_ts, a.basis, a.evidence,
                        pm.title, pm.state, pm.url, pm.merged_at
                   FROM agg a
+                  JOIN pick p ON p.repo_key = a.repo_key
+                             AND p.ref_key  = a.ref_key
                   LEFT JOIN pr_meta pm
-                         ON a.repo <> ''
-                        AND pm.repo = a.repo
-                        AND pm.ref  = a.ref
+                         -- Case-insensitive here too: a pull request whose
+                         -- repo was typed in another case than the local
+                         -- checkout reports lost its title, state and URL.
+                         ON p.repo <> ''
+                        AND lower(pm.repo) = a.repo_key
+                        AND pm.ref  = p.ref
                  ORDER BY a.cost_usd DESC, a.sessions DESC
                  LIMIT ?
             """, params)
@@ -14966,8 +15051,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                   WHEN 'model.completed'  THEN 1
                   ELSE 0
                 END AS envelope_rank,
-                CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT)
-                                                 AS ts_sec
+                {_EVENT_TURN_KEY_EXPR} AS ts_sec
               FROM events
               {where}
             ),
@@ -15891,12 +15975,9 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                   WHEN 'model.completed'  THEN 1
                   ELSE 0
                 END AS envelope_rank,
-                CAST(EXTRACT(EPOCH FROM CAST(e.ts AS TIMESTAMP)) AS BIGINT)
-                                                 AS ts_sec
+                {_event_turn_key_expr_sql('e.ts', 'e.id')} AS ts_sec
               FROM events e
-              -- Scope to subagent sessions only: avoids a full events table
-              -- scan and shields against CAST(ts AS TIMESTAMP) errors on
-              -- session events that use millis-epoch ts strings.
+              -- Scope to subagent sessions only: avoids a full events table scan.
               WHERE e.session_id IN (SELECT subagent_id FROM subagents)
             ),
             bucket_max AS (
@@ -18307,7 +18388,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                         WHEN 'model.completed' THEN 1
                         ELSE 0
                     END AS _er,
-                    CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT) AS _tsec
+                    {_EVENT_TURN_KEY_EXPR} AS _tsec
                 FROM events
             ),
             _ev_bmax AS (
@@ -20082,8 +20163,7 @@ class LocalStore(NodeActivityStoreMixin, AgentMetaMixin, ProjectsMixin, TrailSto
                   WHEN 'model.completed'  THEN 1
                   ELSE 0
                 END AS envelope_rank,
-                CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT)
-                                                 AS ts_sec
+                {_EVENT_TURN_KEY_EXPR} AS ts_sec
               FROM events
               {where}
             ),
@@ -22065,7 +22145,7 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
     "qm", "deepseek_harness", "exo", "kimi", "devin", "gemini_cli",
     "cline", "openhands", "openworker", "grok_bot", "lovable", "replit",
-    "muse_code", "openexecutive",
+    "muse_code", "openexecutive", "opendots",
 )
 
 # Epoch-ms of the outcome-classifier fix (2026-08-15). Any failure label
@@ -22286,7 +22366,7 @@ def _sql_in_clause(values: tuple[str, ...]) -> str:
 # call sites (and tests) have always reached for it via ``local_store``.
 #
 # The old implementation knew exactly two numbers, both Anthropic's, and
-# measured all 33 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
+# measured all 32 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
 # blown" (GPT-5 is 400K, so it was at 75%), and a genuinely blown 130K
 # DeepSeek turn read as a comfortable 65%. See that module's docstring.
 from clawmetry.context_windows import (  # noqa: E402  (kept near its callers)

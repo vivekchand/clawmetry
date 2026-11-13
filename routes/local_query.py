@@ -204,6 +204,9 @@ def _coerce_args(shape: str, raw: dict) -> dict:
                 "node_id": raw["node_id"], "incident_id": raw.get("incident_id") or None,
                 "cursor": raw.get("cursor") or None, "event_id": raw.get("event_id") or None,
                 "limit": _safe_int(raw.get("limit"), default=100, lo=1, hi=200)}
+    if shape in ("physical_ai_runs", "physical_ai_events"):
+        from clawmetry.physical_ai.query_args import coerce_query_args
+        return coerce_query_args(shape, raw)
     if shape == "robotics_runs":
         return {"limit": _safe_int(raw.get("limit"), default=50, lo=1, hi=100),
                 "before_ns": raw.get("before_ns"), "before_run_id": raw.get("before_run_id")}
@@ -437,7 +440,7 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog", "robotics_runs", "robotics_events", "robotics_incidents"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog", "robotics_runs", "robotics_events", "robotics_incidents", "physical_ai_runs", "physical_ai_events"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -765,6 +768,8 @@ def http_query():
 _DAEMON_METHODS = frozenset({
     "query_asimov_runs",
     "query_asimov_events",
+    "query_physical_ai_runs",
+    "query_physical_ai_events",
     "robotics_query",
     "robotics_runs",
     "robotics_events",
@@ -1339,6 +1344,7 @@ _DAEMON_METHODS = frozenset({
     # Agent supply chain inventory (#5947), read by /api/guard/inventory.
     "query_agent_inventory",
     "query_node_activity",
+    "query_node_activity_live",
     "set_node_activity_preferences",
     "review_node_activity_event",
     "query_session_denials",
@@ -1370,9 +1376,15 @@ def http_local_method(method: str):
     operation = kwargs.get("operation")
     if method == "robotics_query" and not isinstance(operation, str):
         return jsonify({"error": "operation must be a string"}), 400
-    if method in {"query_node_activity", "set_node_activity_preferences", "review_node_activity_event",
-                  "query_asimov_runs", "query_asimov_events"} or (
-            method == "robotics_query" and operation in {"guard_ack", "set_observation_only"}):
+    # Every detailed-trace operation is token-gated by its ``trace_`` prefix
+    # rather than by name. Naming them individually made this a second list to
+    # keep in step with the private package's own ``OPERATIONS``, and a read
+    # added there but not here was served without the daemon's private token.
+    # A prefix fails closed: a new trace operation is gated the day it exists.
+    if method in {"query_node_activity", "query_node_activity_live", "set_node_activity_preferences", "review_node_activity_event",
+                  "query_asimov_runs", "query_asimov_events", "query_physical_ai_runs", "query_physical_ai_events"} or (
+            method == "robotics_query" and (operation.startswith("trace_")
+                or operation in {"guard_ack", "set_observation_only"})):
         # This Blueprint also exists on the dashboard. Its internal RPC route
         # must not bypass route authentication or local-origin/CSRF checks. Only
         # the actual daemon owns this private token; the dashboard has none.

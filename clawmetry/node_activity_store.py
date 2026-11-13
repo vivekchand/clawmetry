@@ -8,7 +8,8 @@ import os
 import time
 import uuid
 
-from clawmetry.node_activity import DEFAULT_PREFERENCES, UNKNOWN_ACTOR, identity, unavailable, validate_preferences
+from clawmetry.node_activity import (DEFAULT_PREFERENCES, UNKNOWN_ACTOR, clean, identity, unavailable,
+                                     validate_preferences)
 
 log = logging.getLogger("clawmetry.node_activity_store")
 NODE_ACTIVITY_DDL = [
@@ -20,6 +21,7 @@ NODE_ACTIVITY_DDL = [
 MAX_REVIEWS = 2000
 MAX_REVIEWS_PER_EVENT = 20
 MAX_PROCESS_SIGHTINGS = 16384
+MAX_PROCESS_PROGRAMS = 4096
 
 SOURCE_NAMES = ("processes", "listeners", "sensitive_files", "logins")
 SOURCE_CAPS = {"processes": 512, "listeners": 256, "sensitive_files": 5, "logins": 64}
@@ -49,12 +51,13 @@ def _observed_process(row, now):
     safe = _public_row(row)
     return {"id": "node_evt_" + identity("processes", row["id"], now, "observed"),
             "observed_at": now, "kind": "process_observed", "title": "A process was first observed",
-            "detail": "First observed within retained history under partial collection. This does not prove an actual start, a complete inventory or malicious intent.",
+            "detail": "This program was first observed within retained history under partial collection. This does not prove an actual start, a complete inventory or malicious intent.",
             "actor": dict(UNKNOWN_ACTOR), "target": {"kind": "processes", "id": row["id"],
                                                        "label": row.get("name") or "Process"},
             "process": safe, "before": None, "after": safe,
             "evidence": ["Positive process observation during a partial scan.",
                          "Earlier absence from a partial scan is not evidence that this process did not exist.",
+                         "Later runs of this same program are recorded in the process list, not repeated here.",
                          "A process name does not identify an agent or a person. Activity between scans may be missed."],
             "changed_fields": [], "finding": False, "severity": "info"}
 
@@ -64,15 +67,34 @@ def _readable_source(coverage, source_identity, rows):
                                             (coverage.get("state") == "partial" and bool(rows)))
 
 
+def _program(row):
+    """The program a sighting is about, as a reader would name it.
+
+    A PID plus its start time identifies one *run*. It is the right identity for
+    the inventory and for the comparison baseline, and the wrong one for the
+    sentence "a process was first observed": an OS daemon that respawns all day
+    is not first-observed each time. Keyed by run, one node filled its whole
+    2000-event window with 556 sightings of contactsd and 462 of
+    mdworker_shared. Keyed by program, that is two sentences, both true.
+    """
+    return clean(row.get("name")) or "Process name unavailable"
+
+
 def _process_sightings(previous, source_identity, rows, coverage, now, hours):
     """Bounded positive knowledge, independent of the complete-comparison baseline."""
     state = copy.deepcopy(previous or {})
     readable = _readable_source(coverage, source_identity, rows)
     if readable and state.get("identity") != source_identity:
-        state = {"identity": source_identity, "initialized": False, "history_limited": False, "seen": {}}
+        state = {"identity": source_identity, "initialized": False, "history_limited": False,
+                 "seen": {}, "programs": {}}
     seen = {key: stamp for key, stamp in state.get("seen", {}).items()
             if stamp >= now - hours * 3600 * 1000}
     state["seen"] = seen
+    # Announced programs expire on the same retained window as the runs, so a
+    # program absent all day is news again when it comes back.
+    programs = {name: stamp for name, stamp in (state.get("programs") or {}).items()
+                if stamp >= now - hours * 3600 * 1000}
+    state["programs"] = programs
     current = {row["id"]: row for row in rows}
     limited = bool(state.get("history_limited"))
     quiet = not state.get("initialized", False)
@@ -83,11 +105,16 @@ def _process_sightings(previous, source_identity, rows, coverage, now, hours):
     events = []
     if readable and (current or coverage.get("state") == "complete"):
         for key, row in current.items():
+            program = _program(row)
+            announced = program in programs
+            if program in programs or len(programs) < MAX_PROCESS_PROGRAMS:
+                programs[program] = now
             if key in seen:
                 seen[key] = now
             elif len(seen) < MAX_PROCESS_SIGHTINGS:
                 seen[key] = now
-                if not quiet and not limited and coverage.get("state") == "partial":
+                # A new run of an already-announced program is inventory, not news.
+                if not quiet and not limited and not announced and coverage.get("state") == "partial":
                     events.append(_observed_process(row, now))
             else:
                 limited = True
@@ -178,17 +205,27 @@ class NodeActivityStoreMixin:
         self._conn.execute("DELETE FROM node_activity_reviews WHERE id IN (SELECT id FROM node_activity_reviews ORDER BY reviewed_at DESC,id DESC OFFSET ?)", [MAX_REVIEWS])
 
     def get_node_activity_state(self):
-        """Private daemon state. Never add this method to an HTTP allowlist."""
-        with self._write_lock:
-            prefs = dict(DEFAULT_PREFERENCES)
-            prefs.update(self._node_meta_locked("preferences", {}))
-            key = self._node_meta_locked("fingerprint_key")
-            if key is None:
-                if self._read_only:
-                    raise RuntimeError("Node comparison key requires the daemon writer")
-                key = os.urandom(32).hex()
-                self._node_put_locked("fingerprint_key", key)
-            return {"preferences": prefs, "fingerprint_key": bytes.fromhex(key)}
+        """Private daemon state. Never add this method to an HTTP allowlist.
+
+        Read initialized values through the concurrent per-thread cursor.
+        """
+        values = {key: json.loads(value) for key, value in self._fetch(
+            "SELECT key,value FROM node_activity_meta WHERE key IN (?,?)",
+            ["preferences", "fingerprint_key"])}
+        prefs = dict(DEFAULT_PREFERENCES)
+        prefs.update(values.get("preferences", {}))
+        key = values.get("fingerprint_key")
+        if key is None:
+            if self._read_only:
+                raise RuntimeError("Node comparison key requires the daemon writer")
+            with self._write_lock:
+                # Another first collection may have initialized it while this
+                # reader waited for an unrelated ingestion transaction.
+                key = self._node_meta_locked("fingerprint_key")
+                if key is None:
+                    key = os.urandom(32).hex()
+                    self._node_put_locked("fingerprint_key", key)
+        return {"preferences": prefs, "fingerprint_key": bytes.fromhex(key)}
 
     def record_node_activity(self, observation, *, retention_hours=24, max_events=2000):
         if self._read_only:
@@ -258,8 +295,9 @@ class NodeActivityStoreMixin:
                         next_sources.pop(source, None)
             body["retention"] = {"hours": hours, "event_limit": limit, "sample_limit": 120,
                                  "review_limit": MAX_REVIEWS, "reviews_per_event_limit": MAX_REVIEWS_PER_EVENT,
-                                 "process_sighting_limit": MAX_PROCESS_SIGHTINGS}
-            body["capabilities"] = {"preferences_writable": True, "reviews_writable": True}
+                                 "process_sighting_limit": MAX_PROCESS_SIGHTINGS,
+                                 "process_program_limit": MAX_PROCESS_PROGRAMS}
+            body["capabilities"] = {"preferences_writable": True, "reviews_writable": True, "live_metrics": True}
             # Collector source caps already bound a full pass. Persist every
             # change, with findings first, before advancing comparison state.
             events.sort(key=lambda event: not event.get("finding"))
@@ -278,6 +316,26 @@ class NodeActivityStoreMixin:
             self._prune_node_activity_locked(now, hours, limit)
         return self.query_node_activity()
 
+    def record_node_activity_live(self, frame):
+        if self._read_only:
+            raise RuntimeError("Live measurements require the daemon writer")
+        with self._write_lock:
+            self._node_put_locked("live", frame)
+
+    def query_node_activity_live(self):
+        from clawmetry.node_activity_service import touch_node_activity_view
+        touch_node_activity_view()
+        rows = self._fetch("SELECT value FROM node_activity_meta WHERE key='live'", [])
+        body = json.loads(rows[0][0]) if rows else dict(unavailable("Waiting for the first live measurement."), live=True)
+        prefs_rows = self._fetch("SELECT value FROM node_activity_meta WHERE key='preferences'", [])
+        prefs = dict(DEFAULT_PREFERENCES, **(json.loads(prefs_rows[0][0]) if prefs_rows else {}))
+        body["preferences"] = prefs
+        if not prefs["enabled"] or not prefs["processes"]:
+            body["processes"] = []
+        if not prefs["enabled"]:
+            body.update(available=False, summary={})
+        return body
+
     def query_node_activity(self):
         rows = self._fetch("SELECT value FROM node_activity_meta WHERE key='public'", [])
         body = json.loads(rows[0][0]) if rows else unavailable()
@@ -291,7 +349,7 @@ class NodeActivityStoreMixin:
             if event["id"] in by_id:
                 event["review"] = by_id[event["id"]]
         body["samples"] = [json.loads(r[0]) for r in reversed(self._fetch("SELECT payload FROM node_activity_samples ORDER BY observed_at DESC LIMIT 120", []))]
-        body["capabilities"] = {"preferences_writable": True, "reviews_writable": True}
+        body["capabilities"] = {"preferences_writable": True, "reviews_writable": True, "live_metrics": True}
         for source in ("resources", *SOURCE_NAMES):
             if not body["preferences"]["enabled"] or (source in body["preferences"] and not body["preferences"][source]):
                 body.setdefault("coverage", {}).setdefault(source, {})["state"] = "disabled"

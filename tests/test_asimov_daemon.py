@@ -103,6 +103,65 @@ def test_transient_ingest_failure_retries_on_the_same_live_worker(
     assert "collector will try again" in caplog.text
 
 
+def test_start_resolves_the_writer_when_warm_up_captured_the_read_only_proxy(
+        daemon, writer, monkeypatch):
+    """A handle captured before writer ownership must not disable collection.
+
+    REQ-ASIMOV-001: free local evidence cannot depend on the daemon happening
+    to warm its store up after ``local_server`` marked this process the
+    writer owner. The daemon does it in the other order, so the handle passed
+    in here can be the dashboard's read-only proxy, and the collector refused
+    to start on every boot of an install that had already registered a node.
+    """
+    from clawmetry import local_store
+    from clawmetry.asimov.store import AsimovLocalStore
+
+    class ReadOnlyProxy:
+        _read_only = True
+
+    ingested = threading.Event()
+    ingest = AsimovLocalStore.ingest
+    asked = []
+
+    def observe(self, directory, **kwargs):
+        result = ingest(self, directory, **kwargs)
+        ingested.set()
+        return result
+
+    def get_store(read_only=False):
+        asked.append(read_only)
+        return writer
+
+    monkeypatch.setattr(AsimovLocalStore, "ingest", observe)
+    monkeypatch.setattr(local_store, "get_store", get_store)
+    daemon.start(ReadOnlyProxy())
+    assert ingested.wait(3), "the collector refused a store it could have resolved"
+    assert daemon._worker.is_alive()
+    assert asked == [False], "the collector asks once, for the writer"
+
+
+def test_start_keeps_a_writer_it_was_already_given(daemon, writer, monkeypatch):
+    """Resolving must not churn the store for the ordinary, correct call."""
+    from clawmetry import local_store
+    from clawmetry.asimov.store import AsimovLocalStore
+
+    ingested = threading.Event()
+    ingest = AsimovLocalStore.ingest
+
+    def observe(self, directory, **kwargs):
+        result = ingest(self, directory, **kwargs)
+        ingested.set()
+        return result
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a usable writer was re-resolved")
+
+    monkeypatch.setattr(AsimovLocalStore, "ingest", observe)
+    monkeypatch.setattr(local_store, "get_store", refuse)
+    daemon.start(writer)
+    assert ingested.wait(3)
+
+
 def test_start_replaces_an_actually_terminated_thread(daemon, writer, monkeypatch):
     from clawmetry.asimov.store import AsimovLocalStore
 

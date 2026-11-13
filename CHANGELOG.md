@@ -1,5 +1,160 @@
 ## Unreleased
 
+### Security: publish GHSA-6r57-3vhv-2wpf and close the stale self-hosted pin
+
+- The file-boundary and loopback-authentication fixes released in 0.12.933 (#6511) now carry a published advisory, [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf), CVSS 3.1 `AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H` (7.5). Everything before 0.12.933 is affected. Reported by Wu Jiaxuan (吴嘉炫); a CVE has been requested through GitHub.
+- The advisory records that the **write** endpoint was reachable over DNS rebinding too, which the report had scored as out of reach. Under rebinding the attacker's domain is both `Origin` and `Host`, so the same-origin write guard matches and permits the request. Confirmed by replaying both vectors through the real application from the published 0.12.932 and 0.12.937 wheels.
+- The documented self-hosted Compose deployment was pinned to `0.12.908`, 25 releases behind and short of the fix. Its auto-pin pull requests are opened with the workflow token, so their checks never start on their own and five of them had been parked since 2026-10-24; #6534 carries the verified `0.12.937` digest and was restarted rather than bypassed.
+- `SECURITY.md` no longer sends reporters to GitHub's private advisory form. It is not enabled on this repository, so that link answered 404 for the reporter who followed it; email is named as the private channel and the published-advisory list is linked.
+
+### Improved: Sessions beside Agents (#6598)
+
+- Sessions now sits directly below Agents in the shared dashboard navigation, including local, hosted and mobile views.
+- Verified the rendered sidebar and 30 navigation and session-layout checks. All feature CI checks passed.
+
+### Fixed: event storage and cost totals for numeric timestamps (#6584)
+
+- Numeric event times no longer prevent a batch from saving. Unix seconds and milliseconds use the same local calendar as ISO timestamps.
+- Unknown event times stay unknown. Their costs remain separate instead of disappearing or being treated as duplicate turns.
+- Verified event storage, persistent cost totals, local day buckets and session costs with 285 checks. The feature passed all required CI checks before this release.
+
+### Fixed: saved robot sessions through the installed daemon (#6580)
+
+- Saved robot sessions can load through the daemon's existing private plugin query.
+- Existing daemon authentication, owner access and license checks remain unchanged. No robot command path was added.
+- Verified with dispatch, authentication and entitlement regression tests, including tests that failed before the fix.
+
+
+### Improved: compact trial dialogs and optional recovery (#6575)
+
+- Plan dialogs fit ordinary laptop screens, show prices in each plan row, and use a readable green action. License entry opens only when requested.
+- After an expired trial, users can request an eligible one-time extension with optional feedback. The offer requires no card and carries no automatic charge.
+- Paid licenses remain protected during simultaneous activation and heartbeat updates. Checkout refreshes access automatically after payment is confirmed.
+- Verified desktop and mobile layouts, keyboard access, translated controls, checkout recovery and native license writes on Linux, macOS and Windows.
+
+
+### Fixed: proper Setup image previews (#6568)
+
+- Setup displays supported local images and lets you save the original file. Text files remain readable source.
+- Binary files, damaged images and large images show clear fallback messages. Hosted images without synced original bytes explain how to open the file on the agent machine.
+- Selected files show their folder and size. The Memory and Skills browsers use the same image preview.
+- Verified with 29 focused checks, existing hosted Setup controls, and the real Codex PNG in Chrome. PNG and SVG API responses preserve the original bytes.
+
+
+### Fixed: every detailed-trace query needs the daemon token, by rule not by list (#6549)
+
+- The daemon query route named each detailed-trace operation that requires the private daemon bearer. That was a second list to keep in step with the operations licensed extensions actually expose, with nothing enforcing the two agreed, so a read added on one side and not the other reached dispatch without the bearer.
+- The requirement is now the operation's `trace_` prefix. It fails closed: a detailed-trace read is covered the day it exists rather than the day someone remembers to list it. `guard_ack` and `set_observation_only` keep their explicit names because they are not trace reads.
+- Verified by 96 focused authentication checks covering every declared trace operation plus one that does not exist, each asserting the store is never reached. Restoring the previous named list fails them, as does matching `trace` as a substring rather than a prefix: `retrace_history` must still reach the store.
+
+### Fixed: responsive live measurements during ingestion (#6519)
+
+- Live frame queries and the sampler read existing preferences through DuckDB's concurrent read cursors. Read-only lookups no longer wait for ingestion's exclusive writer lock.
+- Initial comparison-key creation still requires the daemon writer and rechecks the key after acquiring it. Frame reads do not create private comparison state.
+- Regression checks hold the writer lock during reads and race two initial key requests. Real local measurements returned to about two seconds under load, with short read responses.
+
+### Fixed: protect detailed robotics queries with the daemon token (#6523)
+
+- Licensed extensions can use the declared detailed trace, span, artifact, review, guard and offline-evaluation operations through the existing daemon-owned query path.
+- Every new detailed read or mutation requires the private daemon bearer, including the dashboard-mounted internal route. Existing robotics reads keep their behavior. The public package adds no paid implementation or robot command path.
+- Verified 156 focused authentication, dispatch and query-contract checks after rebasing onto current code. The full feature CI, native product review and forged-operator rejection passed before this release carrier.
+
+
+### Added: live Node process monitoring (#6519)
+
+- Search all retained processes by name, PID or ClawMetry role, with clear counts and pagination. A dedicated section identifies the collector and dashboard and shows each process's CPU and resident memory.
+- Process CPU and memory update about every two seconds while the Node view is active. Independent daemon sampling keeps measurements moving during slow ingest and backfill; expensive observations retain their slower cadence. Search persists through updates, and inactive views stop polling.
+- Hosted views use bounded encrypted live frames and existing wake hints. Verified with real local process measurements, responsive browser checks, lifecycle and ownership tests. Public-wheel and hosted deployment verification follow publication.
+
+
+### Added: report bugs with screenshots and direct email (#6369)
+
+- A muted bug-icon button in the sidebar opens a report form with a description, three optional issue types, screenshot upload or paste, and an optional reply email. A compact neutral header control serves smaller screens. Report controls stay clear of the Assistant composer.
+- Reports return a stored ticket and email the founder immediately with the screenshot attached. Report text and app details become a public issue; screenshots and email addresses stay private. Ticket status follows the issue through to resolution.
+- Verified desktop and mobile layouts, 43 focused OSS and bridge checks, 44 cloud intake checks, real Gmail delivery with the original screenshot bytes, private screenshot access, and duplicate request handling. The cloud intake was deployed before this release.
+
+
+### Fixed: enforce local file and request boundaries (#6511)
+
+- Reported by Wu Jiaxuan (吴嘉炫). Tracked as [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf); affects every release before 0.12.933.
+
+- Workspace memory, skill-file and transcript filesystem endpoints compare resolved path components before file access. Workspace checks also run before cached memory reads. Symlinked roots remain supported, and links outside the selected root are refused.
+- Password-free local API access requires a direct loopback peer, a loopback Host and no forwarding headers. Authenticated reverse proxies retain access. Token bootstrap keeps its stricter local-only refusal contract.
+- Regression checks cover file reads and writes, cached reads, symlink boundaries, normal local clients, authenticated proxies and real HTTP Host and Origin requests. The acceptance criteria and architecture records describe the same boundaries.
+
+
+### Fixed: advertise only released runtime adapters (#6501)
+
+- OpenDots is excluded from the supported runtime catalogue and automatic loading while its private adapter remains under review. The existing connected-service and licensed-delivery release gates remain in force.
+- Stored OpenDots observations keep their runtime label, history filtering, receipt revisions and unavailable-usage explanation. The released catalogue and generated copy now cover the available adapters.
+- Hosted Linux verification uses Ubuntu 24.04 so supported Python 3.9 and the pinned Chromium toolchain remain testable. Existing platform coverage, assertions and self-hosted routing remain enabled.
+- The Software Factory acceptance criterion for the deferral is mirrored and linked to its regression test. Coverage checks preserve the existing uncovered-criteria baseline.
+
+### Fixed: restore the Physical AI workbench and Hardware navigation (#6477)
+
+- Physical AI keeps the installed entitled robot workbench as its default. Explicit run and hardware history links remain available, and the free history view uses the existing dark dashboard theme with a working Hardware filter.
+- The shared hardware catalog and the owning node's declared workbench travel inside the existing encrypted snapshot. Hardware switching clears earlier details and never substitutes another robot when the selected family has no loaded history.
+- Verified using the official native Jumper simulation recording through separate daemon-owned storage and the query proxy: 366 events, 22 named joints, correct Hardware switching, dark styles, desktop and mobile layout, and no JavaScript errors. Independent route, snapshot and lifecycle checks passed. This validates recorded simulation evidence, not physical robot performance.
+
+### Fixed: preserve Assistant timeout results during durable failure writes (#6477)
+
+- A renewing status read remains available while the daemon saves a timed-out request's failure receipt, so a deadline no longer appears as an unavailable sync service. The consumer remains responsible for the persisted terminal result.
+- A receipt-completion barrier reproduces the original race and verifies the final timeout, unchanged deadline and lease, and absence of saved conversation history. Original deadline and executor lifecycle checks passed.
+
+### Fixed: keep OpenDots local activity in its runtime filter (#6477)
+
+- Correct the missing classification prefix for the already-declared OpenDots runtime. Its stored local-work records remain visible under OpenDots and are excluded from OpenClaw.
+- Verified persisted content revisions through the real store query and existing runtime isolation checks. This does not add connected Intelligence chat, model, token or cost coverage.
+
+### Added: built-in Jumper observation and shared Physical AI history (#6473)
+
+- Jumper telemetry observation, task checks and desk-monitoring helpers now ship in the normal open-source package. Mizu scene and skills demos import these APIs instead of installing another observer plugin. No Pro or simulator dependency is needed to view evidence.
+- The shared Physical AI view reads persisted named measurements, task decisions, controller receipts and incidents through the existing daemon-owned DuckDB and read-only query proxy. Known incidents use existing notification preferences; encrypted snapshots carry bounded history for the hosted companion. Existing Asimov-specific views remain source-filtered.
+- Verified using an actual official 35-second Jumper simulation: 22 named joints, wave and bow executed, an out-of-task jump declined, all 366 events flushed and displayed through a separate daemon and authenticated query proxy. Desktop/mobile browser and clean-wheel checks passed.
+- An upgrade revisits journals skipped before their robot source was supported, with bounded batches and duplicate-event protection. Verified recovery of the same real 366-event Jumper journal from a reproduced legacy cursor state. Separate regressions cover restart during bounded replay.
+- Observation is read-only by default. Hardware control, physical containment and phone delivery are not established by this simulation. Robot applications must expose supported telemetry.
+
+### Fixed: a respawn is not a first sighting on Node activity (#6463)
+
+- **Why:** on a live macOS node, 1,999 of the 2,000 retained Node activity events were "A process was first observed": contactsd 556 times, mdworker_shared 462, Google Chrome Helper 150. 1,930 of the 1,999 were repeat announcements of 165 programs. The declared 24 hour retention window therefore held 3.1 hours of real history, so a change to a watched settings file or a newly bound port is evicted by operating-system daemon churn long before anyone sees it, and replay, the event list and the Guard view all read as noise. Found by reading the live tab, not the diff.
+- **What:** the sighting ledger was keyed by the run, that is the PID plus its measured start time, so every respawn of a daemon satisfied "a process identity not known in the current retained-history context" and announced itself again. The run is the correct identity for the inventory and for the comparison baseline, and both keep it; it is the wrong identity for the sentence the event states. A program ledger now sits beside the run ledger, bounded at 4,096 programs and expiring on the same retained window, so a program absent for the whole window is news again when it returns. A run of an already-announced program still lands in the process list and in the comparison baseline, without a second announcement.
+- **Verified:** 97 tests across the five node-activity suites. The new guard reproduces the defect rather than restating the fix: against the unfixed ledger it reports 7 sightings for one program where it wants 1, run red then restored green. The six existing sighting tests were kept honest by giving fixture rows distinct program names, because a fixture that shares one name would have measured the dedup instead of the case under test and every count in them would have silently become 1. Installed into the live daemon and restarted: 44 announcements since, none of them a repeat.
+- **Limits:** the identity is the program name, which is what this collector records on purpose, so two different binaries with the same name are one program here. The program ledger starts empty on upgrade and meets each program once, so the announcement rate falls over the first window rather than immediately. The 2,000 churn events already stored age out over 24 hours; nothing is deleted to make the screen look better.
+
+### Fixed: make node observations understandable and measurable (#6445)
+
+- **Why:** the Node activity screen showed an unknown process total while retaining 512 observations, no per-process CPU rate, and an empty port list wherever macOS denied the primary socket API. Its actor-category diagram offered Human and Agent lanes beside Unattributed while every observed event carries the unknown actor, so the diagram did not explain the observation it sat next to.
+- **What:** positive observed counts are shown separately from exact totals, process CPU is measured from comparable cumulative intervals, and permitted macOS TCP listeners are collected through a fixed bounded lsof fallback. The selected view explains what was seen, where and when, with evidenced attribution or a specific uncertainty explanation, and original before/after and source evidence moves under Technical details. Inventories explain their source and keep a direct coverage link, including when only stale retained rows remain. The daemon remains the collector and the DuckDB writer; no request-time host reads, elevated permissions, new dependencies, process controls or additional pollers are added.
+- **Verified:** 96 focused collector, store, frontend, browser and wiring checks, including an actual owned process and loopback listener through the collector and an in-memory DuckDB. The observed-count, malformed-parser and CPU-interval regressions were demonstrated red before correction. A real-data Chrome preview confirmed the event story, positive counts, interval CPU, accessible ports and coverage reasons.
+- **Limits:** CPU 100% means one core, and first or discontinuous samples remain unavailable rather than being reported as zero. Fallback listeners are always partial, and malformed, interrupted or method-changed observations cannot imply removals or ownership.
+
+### Changed: an Improve signal can now be investigated, not just browsed away from (#6462)
+
+- **Why:** every guidance candidate on Improve offered exactly one action, "Open Setup", which switched to the Setup tab and stopped. Setup opens on its own unfiltered list of instruction and memory files with no link back to the card that was pressed. Founder walkthrough of the hosted dashboard: "what is this page supposed to do?? I'm unable to understand ... clicking on Open Setup just opens setup tab, i've no idea what to do either". The screen that finds a signal was handing the reader to a file browser instead of to the surface that can explain it.
+- **What:** every candidate card, and the review dialog's primary action, now offers Investigate. It opens the Assistant on a new conversation with a question built from that candidate's own evidence: what was said, how often and across how many conversations and projects, when it was last seen, scope and pain, the runtimes and projects, and up to five supporting excerpts. The question asks for the cause, whether it is still happening, and the one instruction, skill, agent or hook to change, named as a file. The Assistant gains one entry point, `assistantAsk`, which any screen can call; it submits through the composer's own path, so every guard a typed question meets still applies. Browsing to Setup stays, as a secondary action. The hero and the dialog now say in plain words what a card is and what pressing the action does.
+- **Verified:** on the live local dashboard against this machine's own 28 candidates, pressed from both a card and the review dialog. The Assistant answered from the two real Codex sessions behind the signal, naming the recorded commands, the exit paths and the session IDs. 8 tests, of which 3 are red when the handoff is broken or when an unsendable question is dropped.
+- **Limits:** investigating sends the candidate's excerpts to the engine the Assistant is already configured with, on an explicit press; the Improve screen itself stays read-only and starts no inference on its own. A question that cannot be sent yet, because the computer is unreachable or no engine is connected, stays in the composer with the reason rather than disappearing. The answer is only as good as the recorded evidence, and says so when the evidence is thin.
+
+### Fixed: keep Asimov source alerts visible on small screens (#6452)
+
+- Long source alert text now wraps inside its panel, so the full evidence remains readable on mobile. The measured-joint table keeps its horizontal scroll.
+- Verified before and after in the actual served dashboard using the same persisted official SDK-generated recording, daemon-owned DuckDB and private query service. Inspected mobile and desktop captures; the alert text remains unchanged and fully visible.
+- This is experimental SDK and recording support. Physical Asimov hardware qualification remains pending.
+
+### Added: free experimental Asimov 1 observation (#6442)
+
+- Import official Menlo SDK recordings, explicitly trace application commands, or receive state through an Observe-only collector. Inspect 25 measured joints, battery, orientation, alerts and separate source/receipt clocks in a free local view without Pro.
+- Persist bounded compatible journals through the existing daemon-owned DuckDB and project recent evidence into the existing encrypted cloud snapshot. Missing values and command outcomes remain unknown; no robot control or media subscription path is added.
+- Verified with 83 focused tests against official SDK source and the published Pro parser, isolated wheel commands without optional robot dependencies, and actual authenticated desktop/mobile browser captures. Native tab checks confirm polling stops while hidden and resumes when visible. Full repository CI and native Drift review passed before merge.
+- Physical hardware qualification remains pending. This release is experimental SDK and recording support; SDK fixtures do not establish physical robot validation. Hosted rendering ships through the separately verified cloud companion.
+
+### Fixed: one repository spelled two ways is one repository, across sessions too (#6450)
+
+- **Why:** #6436 folded two spellings of one repository into one row, and that fold runs inside a session. The live node then listed `ClawMetry/clawmetry-pro` beside `clawmetry/clawmetry-pro`, because the two spellings arrived from two different sessions and nothing folded them once they had become rows: the read query grouped on the exact text. GitHub treats an owner and a name case-insensitively, so those are one repository and the tab showed two. Found by auditing the live node after 0.12.924 shipped, which is the sixth time in this effort that reading the live tab after a fix found the next defect. The same case sensitivity sat on the join that fetches a pull request's title, state and URL from the local repository scan, so a session that typed one case while the checkout reported another got a row with no title and no state, which reads as a pull request nobody can identify.
+- **What:** the delivery read folds its rows on a case-insensitive key and shows the spelling the node's own sessions used most, with a tie falling to the lexicographically smaller spelling rather than to row order, so the same rows always render the same name. This is the rule `attribution._fold_repo_case` already applies within a session, lifted to the only scope that can see across sessions. The key lowercases only the field that holds a repository name, which is `ref` on a repository row and `repo` on every other kind, because a branch name and a file path are case-sensitive in git and on disk: folding those would merge two different branches into one and claim work on a branch that does not exist. The title join is matched case-insensitively for the same reason the rows are folded.
+- **Verified:** against the live node's own 256 sessions, by running both the old and the new query over the same rows. Repository rows went from 208 to 207, with the two spellings becoming one row carrying 3 sessions instead of 2 and 1. Every other kind is byte-identical: 352 pull-request rows before and after, 145 branch, 353 commit, 500 file, and attributed money unchanged to the cent at $5408.0144, because a repository's name was never what the cost split was keyed on. 3 tests, of which 2 are red against the released 0.12.924 and one passes both ways on purpose, pinning that two branches whose names differ only in case stay two branches. Extraction semantics are untouched, so `RULES_VERSION` stays at 9 and no session needs refiling.
+- **Limits:** the spelling on display is the most-sighted one rather than the one GitHub would return, since nothing here asks GitHub. A repository whose two spellings are each sighted by the same number of sessions renders the lexicographically smaller one, which is a deterministic answer and not necessarily the one its owner uses. The fold applies to the read, so the stored rows keep the spelling each session saw, which is what makes the evidence column still match the session it came from.
+
 ### Fixed: a specimen is not a repository, and a config key is not a name (#6441)
 
 - **Why:** `openai/openai` reached the live Delivered tab in two sessions. The sighting is a documentation line listing the URL shapes a tool accepts: `URL. Examples: https://github.com/openai/openai/pulls/123, https://api.github.com/repos/openai/openai, https://github.example.com/api/v3/repos/octo/repo.` There is no `openai/openai` account, and a repository nobody has is the failure that matters on this tab, because it reads as an answer. The phantom row was not the only damage. In one of the two sessions it became a second repository, so the fold could no longer tell which repository pull request #6351 belonged to, and a real $10.89 row was shown with a blank name. Found by auditing the live node after 0.12.923 shipped, which is the fifth time in this effort that reading the live tab after a fix found the next defect, and the fifth time that reading the diff would not have.

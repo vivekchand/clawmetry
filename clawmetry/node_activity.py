@@ -8,8 +8,10 @@ import logging
 import math
 import os
 import platform
+import selectors
 import socket
 import stat
+import subprocess
 import time
 import weakref
 from pathlib import Path
@@ -25,6 +27,9 @@ MAX_LOGINS = 64
 MAX_FILE_BYTES = 1024 * 1024
 UNKNOWN_ACTOR = {"kind": "unknown", "label": "Unattributed"}
 _CPU_WARMED = weakref.WeakSet()
+_PROCESS_CPU_SAMPLES = weakref.WeakKeyDictionary()
+MAX_LSOF_BYTES = 256 * 1024
+LSOF_TIMEOUT_SECONDS = 0.75
 SUMMARY_KEYS = ("cpu_percent", "memory_used_bytes", "memory_total_bytes",
                 "process_count", "listening_port_count")
 
@@ -84,8 +89,202 @@ def _coverage(source, scope, now, state="complete", reason="", count=0, truncate
             "count": count, "truncated": truncated}
 
 
+def _process_cpu(counters, previous, measured_at):
+    """One core is 100%; cumulative inputs remain only in daemon memory."""
+    user = number(getattr(counters, "user", None))
+    system = number(getattr(counters, "system", None))
+    result = {"cpu_percent": None, "cpu_interval_seconds": None,
+              "cpu_reason": "CPU starts after the next measurement."}
+    if user is None or system is None:
+        result["cpu_reason"] = "CPU counters are unavailable for this process."
+        return result, None
+    current = (user, system, measured_at)
+    if previous is not None:
+        elapsed = measured_at - previous[2]
+        if not 0.1 <= elapsed <= 120:
+            result["cpu_reason"] = "Waiting for a new CPU sample after a collection delay."
+        elif user < previous[0] or system < previous[1]:
+            result["cpu_reason"] = "CPU counters changed; a new interval is needed."
+        else:
+            measured = number(100 * ((user - previous[0]) + (system - previous[1])) / elapsed)
+            if measured is not None:
+                result.update(cpu_percent=measured, cpu_interval_seconds=elapsed, cpu_reason="")
+    return result, current
+
+
+def _clawmetry_launch_role(argv, cwd=None):
+    """Recognize entry points, never arbitrary argument substrings.
+
+    Arguments stay transient: only the fixed role is persisted. psutil supplies
+    this metadata on Linux, macOS and Windows; denial means unknown software.
+    """
+    if not isinstance(argv, (list, tuple)) or not argv or len(argv) > 256:
+        return None
+    if any(not isinstance(arg, str) for arg in argv):
+        return None
+    def basename(value):
+        return value.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    args = list(argv)
+    executable = basename(args.pop(0))
+    if executable in ("clawmetry", "clawmetry.exe"):
+        pass
+    elif executable.startswith("python"):
+        while args and args[0] in ("-u", "-B", "-E", "-s", "-S", "-I", "-O", "-OO"):
+            args.pop(0)
+        if len(args) >= 2 and args[0] == "-m":
+            module = args[1]
+            args = args[2:]
+            if module == "clawmetry.sync":
+                return "collector"
+            if module not in ("clawmetry", "clawmetry.cli"):
+                return None
+        elif args and basename(args[0]) in ("clawmetry", "clawmetry.exe"):
+            args.pop(0)
+        elif args:
+            # Only this installation's scripts, never an unrelated dashboard.py.
+            script = args.pop(0)
+            root = Path(__file__).resolve().parent
+            if os.path.isabs(script) or cwd:
+                path = (Path(cwd) / script if cwd else Path(script)).resolve()
+                if path == root / "sync.py":
+                    return "collector"
+                if path == root.parent / "dashboard.py":
+                    return "dashboard"
+                if path == root.parent / "desktop" / "app.py":
+                    return "desktop"
+            return None
+        else:
+            return None
+    else:
+        return None
+    return "collector" if args and args[0] == "sync" else "cli" if args and not args[0].startswith("-") else "dashboard"
+
+
+def _process_role(proc, info):
+    if info.get("pid") == os.getpid():
+        return "collector"
+    name = str(info.get("name") or "").lower()
+    if not name.startswith(("python", "clawmetry")):
+        return None
+    try:
+        argv = proc.cmdline()
+        role = _clawmetry_launch_role(argv)
+        return role or _clawmetry_launch_role(argv, cwd=proc.cwd())
+    except Exception:  # noqa: BLE001 - optional platform metadata must not discard a process
+        # AccessDenied/NoSuchProcess must not discard readable resource data.
+        return None
+
+
+def _read_lsof(deadline):
+    """Read a fixed local command with bounded memory and lifetime, without a shell."""
+    deadline = min(deadline, time.monotonic() + LSOF_TIMEOUT_SECONDS)
+    if deadline <= time.monotonic():
+        raise TimeoutError()
+    child = subprocess.Popen(
+        ["/usr/sbin/lsof", "-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-F0pftnT"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        shell=False, env={"LC_ALL": "C"},
+    )
+    data, limited = bytearray(), False
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    limited = True
+                    break
+                chunk = os.read(child.stdout.fileno(), min(16384, MAX_LSOF_BYTES + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+                if len(data) > MAX_LSOF_BYTES:
+                    del data[MAX_LSOF_BYTES:]
+                    limited = True
+                    break
+        if not limited:
+            try:
+                code = child.wait(timeout=max(0.001, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                limited = True
+            else:
+                # lsof also returns one when no selected files were found.
+                if code not in (0, 1):
+                    raise OSError("Listener command failed")
+        return bytes(data), limited
+    finally:
+        if child.poll() is None:
+            child.kill()  # Only the subprocess created above, never an observed process.
+            try:
+                child.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                log.warning("Node listener helper did not exit within its cleanup budget")
+        child.stdout.close()
+
+
+def _lsof_listeners(data, source_identity, cap):
+    """NUL fields, newline-delimited process/file sets; accept complete TCP sets only."""
+    rows, seen, pid, malformed, truncated = [], set(), None, False, False
+    for line in data.splitlines(keepends=True):
+        if not line.endswith(b"\0\n"):
+            malformed = True
+            pid = None
+            continue
+        fields = [item for item in line[:-1].split(b"\0") if item]
+        if not fields:
+            continue
+        if fields[0].startswith(b"p"):
+            value = fields[0][1:]
+            pid = int(value) if len(fields) == 1 and value.isdigit() and len(value) <= 12 else None
+            malformed |= not pid
+            continue
+        if not fields[0].startswith(b"f"):
+            pid, malformed = None, True
+            continue
+        values = {}
+        duplicate = False
+        for field in fields:
+            if field[:1] == b"T" and not field.startswith(b"TST="):
+                continue
+            if field[:1] in values:
+                duplicate = True
+            values[field[:1]] = field[1:]
+        try:
+            if (duplicate or not pid or not values.get(b"f", b"").isdigit() or
+                    values.get(b"t") not in (b"IPv4", b"IPv6") or
+                    values.get(b"T") != b"ST=LISTEN"):
+                raise ValueError()
+            endpoint = values[b"n"].decode("ascii")
+            address, port_text = endpoint.rsplit(":", 1)
+            if not port_text.isdigit() or len(port_text) > 5 or not 0 < int(port_text) <= 65535:
+                raise ValueError()
+            if address.startswith("[") and address.endswith("]") and values[b"t"] == b"IPv6":
+                address = address[1:-1]
+            elif "[" in address or "]" in address or (values[b"t"] == b"IPv6" and address != "*"):
+                raise ValueError()
+            exposure = "unknown"
+            if address != "*":
+                parsed = ipaddress.ip_address(address)
+                if parsed.version != (4 if values[b"t"] == b"IPv4" else 6):
+                    raise ValueError()
+                exposure = "loopback" if parsed.is_loopback else "nonloopback"
+            key = identity(source_identity, address, int(port_text), pid, "tcp", values[b"t"])
+            if key in seen:
+                continue
+            if len(rows) >= cap:
+                truncated = True
+                break
+            seen.add(key)
+            rows.append({"id": key, "pid": pid, "process_id": None,
+                         "address": clean(address), "port": int(port_text), "protocol": "tcp",
+                         "exposure": exposure, "actor": dict(UNKNOWN_ACTOR)})
+        except (ValueError, KeyError, UnicodeError):
+            malformed = True
+    return rows, malformed, truncated
+
+
 def collect_node_activity(*, preferences=None, node_id="", now=None, psutil_module=None,
-                          fingerprint_key=None, home=None, budget_seconds=3.0):
+                          fingerprint_key=None, home=None, budget_seconds=3.0, resources_only=False):
     """Return public metadata plus private source state for the daemon writer.
 
     No command line, environment, file content or file digest is public. Polling
@@ -101,6 +300,7 @@ def collect_node_activity(*, preferences=None, node_id="", now=None, psutil_modu
                         "platform": platform.system()})
     out = {"public": public, "sources": {}}
     if not prefs["enabled"]:
+        _PROCESS_CPU_SAMPLES.clear()
         for source in ("resources", "processes", "listeners", "logins", "sensitive_files"):
             public["coverage"][source] = _coverage(source, "unknown", now, "disabled", "Monitoring is disabled.")
             out["sources"][source] = {"identity": "disabled", "rows": []}
@@ -119,6 +319,8 @@ def collect_node_activity(*, preferences=None, node_id="", now=None, psutil_modu
         sensor, boot = None, "unknown"
         log.warning("Node polling library unavailable: %s", type(exc).__name__)
     source_identity = identity(node_id, namespace, boot)
+    if sensor is None or not prefs["processes"]:
+        _PROCESS_CPU_SAMPLES.clear()
 
     def save(name, rows, state="complete", reason="", truncated=False):
         public["coverage"][name] = _coverage(name, scope, now, state, reason, len(rows), truncated)
@@ -153,7 +355,7 @@ def collect_node_activity(*, preferences=None, node_id="", now=None, psutil_modu
     pid_ids = {}
     for source, cap in (("processes", MAX_PROCESSES), ("listeners", MAX_LISTENERS),
                         ("logins", MAX_LOGINS)):
-        if not enabled or (source != "logins" and not prefs[source]):
+        if (resources_only and source != "processes") or not enabled or (source != "logins" and not prefs[source]):
             save(source, [], "disabled")
             continue
         if sensor is None:
@@ -168,36 +370,71 @@ def collect_node_activity(*, preferences=None, node_id="", now=None, psutil_modu
                 clear_cache = getattr(process_iter, "cache_clear", None)
                 if callable(clear_cache):
                     clear_cache()
+                cpu_state = _PROCESS_CPU_SAMPLES.get(sensor, {})
+                previous_cpu = cpu_state.get("samples", {}) if cpu_state.get("source") == source_identity else {}
+                current_cpu = {}
                 process_deadline = min(deadline - 0.75, time.monotonic() + 1.5)
-                candidates = 0
-                for proc in process_iter(["pid", "ppid", "name", "create_time", "memory_info"], ad_value=None):
+                attrs = ["pid", "ppid", "name", "create_time", "memory_info", "cpu_times"]
+                # Sample our own PID before a large/partial enumeration. Retain
+                # it within the same cap and CPU sampler, not in a new poller.
+                def candidates_iter(attrs=attrs, process_iter=process_iter):
+                    nonlocal partial
+                    try:
+                        own = sensor.Process(os.getpid())
+                        yield own, own.as_dict(attrs=attrs, ad_value=None)
+                    except Exception as exc:  # noqa: BLE001 - enumeration may still provide our PID
+                        log.debug("Node collector process lookup unavailable: %s", type(exc).__name__)
+                    try:
+                        for process in process_iter(attrs, ad_value=None):
+                            yield process, None
+                    except Exception as exc:  # noqa: BLE001 - preserve positive evidence after a failed scan
+                        partial = True
+                        log.debug("Node process enumeration incomplete: %s", type(exc).__name__)
+                candidates, seen = 0, set()
+                for proc, info in candidates_iter():
                     if cap <= 0 or candidates >= MAX_PROCESS_CANDIDATES or time.monotonic() > process_deadline:
                         truncated = True
                         break
                     candidates += 1
                     try:
-                        info = proc.info
+                        if info is None:
+                            info = proc.info
                         started = number(info.get("create_time"))
                         if started is None or not info.get("pid"):
                             partial = True
                             continue
                         pid = int(info["pid"])
                         key = identity(source_identity, pid, started)
+                        if key in seen:
+                            continue
+                        seen.add(key)
                         pid_ids[pid] = key
                         mem = info.get("memory_info")
-                        rows.append({"id": key, "pid": pid, "parent_pid": info.get("ppid"),
+                        cpu, sample = _process_cpu(info.get("cpu_times"), previous_cpu.get(key), time.monotonic())
+                        if sample is not None:
+                            current_cpu[key] = sample
+                        row = {"id": key, "pid": pid, "parent_pid": info.get("ppid"),
                                      "name": clean(info.get("name")) or "Process name unavailable",
-                                     "started_at": int(started * 1000), "cpu_percent": None,
+                                     "started_at": int(started * 1000), **cpu,
                                      "memory_bytes": number(getattr(mem, "rss", None), True),
-                                     "actor": dict(UNKNOWN_ACTOR)})
+                                     "actor": dict(UNKNOWN_ACTOR)}
+                        role = _process_role(proc, info)
+                        if role:
+                            row["clawmetry_role"] = role
+                        rows.append(row)
                         partial |= info.get("ppid") is None or info.get("name") is None
                     except Exception:
                         partial = True
                 # Prefer recent processes with measurable memory. A cap on
                 # ascending PID enumeration would hide the user's new work.
-                rows.sort(key=lambda row: (row["memory_bytes"] is not None, row["started_at"]), reverse=True)
+                rows.sort(key=lambda row: (row.get("clawmetry_role") == "collector",
+                                           bool(row.get("clawmetry_role")),
+                                           row["memory_bytes"] is not None, row["started_at"]), reverse=True)
                 truncated |= len(rows) > cap
                 rows = rows[:cap]
+                _PROCESS_CPU_SAMPLES[sensor] = {"source": source_identity,
+                                               "samples": {row["id"]: current_cpu[row["id"]]
+                                                           for row in rows if row["id"] in current_cpu}}
                 pid_ids = {row["pid"]: row["id"] for row in rows}
                 public["processes"] = rows
                 public["summary"]["process_count"] = len(rows) if not (partial or truncated) else None
@@ -242,15 +479,38 @@ def collect_node_activity(*, preferences=None, node_id="", now=None, psutil_modu
                  "Only accessible sockets are shown. Other sockets may be omitted for this account."
                  if source == "listeners" and partial else
                  "Some records may be inaccessible or outside the scan budget." if partial or truncated else "", truncated)
-        except NotImplementedError:
-            save(source, rows, "unsupported", "This source is not supported on this platform.")
         except Exception as exc:
-            save(source, rows, "partial" if rows else "unavailable",
-                 "Permission denied." if type(exc).__name__ in ("AccessDenied", "PermissionError")
-                 else "The source could not be read within this scan.")
+            if source == "processes":
+                _PROCESS_CPU_SAMPLES.pop(sensor, None)
+            if (source == "listeners" and platform.system() == "Darwin" and
+                    (isinstance(exc, (PermissionError, NotImplementedError)) or type(exc).__name__ == "AccessDenied")):
+                listener_identity = identity(source_identity, "lsof_tcp_listen")
+                try:
+                    data, limited = _read_lsof(deadline - 0.35)
+                    rows, malformed, row_limit = _lsof_listeners(data, listener_identity, cap)
+                    limited |= row_limit
+                    public["listeners"] = rows
+                    save(source, rows, "partial" if rows or not limited else "unavailable",
+                         "Only accessible TCP listeners are shown using lsof; other listeners may be omitted."
+                         + (" The scan was interrupted or bounded." if limited else "")
+                         + (" Some records could not be parsed." if malformed else ""), limited)
+                except Exception as fallback_error:
+                    save(source, [], "unavailable", "Accessible TCP listeners could not be read using lsof: "
+                         + ("the tool is unavailable." if isinstance(fallback_error, FileNotFoundError) else
+                            "the scan budget was exhausted." if isinstance(fallback_error, TimeoutError) else
+                            "permission or collection failed."))
+                    log.warning("Node listener fallback unavailable: %s", type(fallback_error).__name__)
+                public["coverage"][source]["method"] = "lsof_polling"
+                out["sources"][source]["identity"] = listener_identity
+            else:
+                save(source, rows, "unsupported" if isinstance(exc, NotImplementedError)
+                     else "partial" if rows else "unavailable",
+                     "This source is not supported on this platform." if isinstance(exc, NotImplementedError)
+                     else "Permission denied." if type(exc).__name__ in ("AccessDenied", "PermissionError")
+                     else "The source could not be read within this scan.")
             log.debug("Node %s scan incomplete: %s", source, type(exc).__name__)
 
-    if not enabled or not prefs["sensitive_files"]:
+    if resources_only or not enabled or not prefs["sensitive_files"]:
         save("sensitive_files", [], "disabled")
     elif not fingerprint_key:
         save("sensitive_files", [], "unavailable", "The private comparison key is unavailable.")

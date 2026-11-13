@@ -47,7 +47,7 @@
 .asimov-secondary{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:28px;padding-bottom:26px;border-bottom:1px solid var(--border-primary)}
 .asimov-secondary p{margin-top:8px}
 .asimov-secondary .asimov-values{font-variant-numeric:tabular-nums;color:var(--text-primary);font-size:14px;overflow-wrap:anywhere}
-#asimov-alerts{padding-left:17px;margin-top:13px;color:var(--text-secondary);font-size:13px}
+#asimov-alerts{padding-left:17px;margin-top:13px;color:var(--text-secondary);font-size:13px;overflow-wrap:anywhere}
 #asimov-events{list-style:none;padding:0;margin:18px 0}
 .asimov-event{border-left:2px solid var(--border-primary);padding:0 0 21px 16px;overflow-wrap:anywhere}
 .asimov-event h4{font-size:13px;font-weight:700;margin-bottom:5px}
