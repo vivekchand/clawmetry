@@ -15,16 +15,30 @@ view — so you can tell a long run that is working from one that is stuck.
 
 Works with **32 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 more. One dashboard for your whole agent fleet. ([the full list](SUPPORTED_RUNTIMES.txt), generated from the catalogue.)
 
-> 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
+## Get started
 
-One command. Zero config. Auto-detects everything.
+**Download the desktop app.** Install it on the machine where your agents run, then open ClawMetry. No terminal commands required.
+
+[![Download for macOS](https://img.shields.io/badge/macOS-Download%20.dmg-E5443A?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/vivekchand/clawmetry/releases/latest/download/ClawMetry-mac.dmg)
+[![Download for Windows](https://img.shields.io/badge/Windows-Download%20.exe-0078D4?style=for-the-badge)](https://github.com/vivekchand/clawmetry/releases/latest/download/ClawMetry-windows-setup.exe)
+[![Download for Linux](https://img.shields.io/badge/Linux-Download%20.AppImage-333333?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/vivekchand/clawmetry/releases/latest/download/clawmetry-linux.AppImage)
+
+[Desktop setup steps](#desktop-app) · [Other install options](#install)
+
+**Free and paid plans:** OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code are free, with no account required.
+Paid **Starter** adds the other supported runtimes and cloud fleet monitoring. **Pro** adds governance, evaluations and waste detection.
+
+**[Try Pro free for 7 days](https://clawmetry.com/connect)** (no credit card) · **[Compare plans and pricing](https://clawmetry.com/pricing)**
+
+**Prefer the terminal?** With Python installed, run:
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-Opens at **http://localhost:8900**. Zero config: it finds the agent runtimes
-you already have, reads them read-only, and changes nothing about how they run.
+Open **http://localhost:8900**. ClawMetry finds supported agent runtimes automatically. Observation is the default. Controls are opt-in.
+
+> 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
 
 ![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
@@ -184,8 +198,22 @@ dependency entirely.
 
 ## Install
 
+### Desktop app
+
+| Platform | Download | Open the app |
+|---|---|---|
+| **macOS** | [Download .dmg](https://github.com/vivekchand/clawmetry/releases/latest/download/ClawMetry-mac.dmg) | Open the disk image. Drag ClawMetry to Applications, then open it. |
+| **Windows** | [Download .exe installer](https://github.com/vivekchand/clawmetry/releases/latest/download/ClawMetry-windows-setup.exe) | Run the installer. Open ClawMetry from the Start menu. |
+| **Linux (x86_64)** | [Download .AppImage](https://github.com/vivekchand/clawmetry/releases/latest/download/clawmetry-linux.AppImage) | Allow the file to run as a program in its file properties, then open it. |
+
+The first launch needs an internet connection to install the current ClawMetry runtime.
+See [desktop requirements and troubleshooting](desktop/README.md) for Python requirements, signing status and platform details.
+
+### Terminal
+
 ```bash
-pip install clawmetry     # then: clawmetry
+pip install clawmetry
+clawmetry
 ```
 
 Or the one-liner: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
