@@ -8,7 +8,7 @@ Companion pages: [OPENTELEMETRY.md](OPENTELEMETRY.md) for the receiver, [BRING_Y
 
 | Package | Version |
 |---|---|
-| `langgraph` | 1.2.11 |
+| `langgraph` | 1.2.14 |
 | `langchain-core` | 1.6.3 |
 | `opentelemetry-instrumentation-langchain` | 0.62.3 |
 | `opentelemetry-sdk` | 1.44.0 |
