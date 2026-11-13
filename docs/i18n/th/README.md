@@ -15,7 +15,7 @@
 อ่านไฟล์เซสชันที่เอเจนต์โค้ดของคุณเขียนขึ้นอยู่แล้ว และนำไทม์ไลน์
 การเรียกใช้ tool และข้อมูลโทเค็นกับต้นทุนที่ runtime เปิดเผยออกมา มารวมไว้ในมุมมองเดียว — เพื่อให้คุณแยกแยะได้ว่างานที่รันไปนาน ๆ นั้นกำลังทำงานได้ผลอยู่ หรือกำลังติดอยู่กับที่
 
-ใช้งานได้กับ **33 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw และอีก 29 ตัว แดชบอร์ดเดียวสำหรับฟลีตเอเจนต์ทั้งหมดของคุณ ([รายการทั้งหมด](SUPPORTED_RUNTIMES.txt) สร้างขึ้นจากแคตาล็อก)
+ใช้งานได้กับ **32 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw และอีก 28 ตัว แดชบอร์ดเดียวสำหรับฟลีตเอเจนต์ทั้งหมดของคุณ ([รายการทั้งหมด](SUPPORTED_RUNTIMES.txt) สร้างขึ้นจากแคตาล็อก)
 
 > 🌐 **อ่านเวอร์ชันภาษาอื่น:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [เพิ่มเติม →](docs/i18n/)
 
@@ -46,11 +46,11 @@ pip install clawmetry && clawmetry
 ปิดกั้นมันได้ ([การควบคุมแบบใดที่ใช้งานได้จริง แยกตาม runtime](docs/APPROVALS.md))
 
 
-## ใช้งานได้กับ 33 agent runtimes
+## ใช้งานได้กับ 32 agent runtimes
 
 **ใช้ได้ฟรีในแอปโอเพนซอร์ส:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**อยู่ในแพลนที่ต้องเสียเงิน:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**อยู่ในแพลนที่ต้องเสียเงิน:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 ทุก runtime จะได้แดชบอร์ดแบบเดียวกัน รันหลายตัวพร้อมกันได้ และตัวสลับที่ส่วนหัว
 จะปรับทุกแท็บให้โฟกัสไปที่ runtime ตัวใดตัวหนึ่งได้
@@ -79,7 +79,7 @@ pip install clawmetry && clawmetry
 เปอร์เซ็นต์การใช้งานจะน่าเชื่อถือได้ก็ต่อเมื่อตัวหารนั้นถูกต้อง ClawMetry
 คิดขนาด window ตาม provider จาก [ตารางที่คุณอ่านและ
 ส่ง PR ได้](clawmetry/context_windows.py) ซึ่งครอบคลุม Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama และ GLM มันไม่ได้วัดทั้ง 33
+DeepSeek, Kimi, Qwen, Mistral, Llama และ GLM มันไม่ได้วัดทั้ง 32
 runtime ด้วยไม้บรรทัดของผู้ขายรายเดียว นี่คือเรื่องสำคัญ: เทิร์นของ GPT-5 ที่ 300K
 ตัวเลขที่เทียบกับ 200K ของ Anthropic จะอ่านว่า ">100% ล้น" ในขณะที่จริง ๆ
 มันอยู่ที่แค่ 75% ของ 400K ของ GPT-5 ไม้บรรทัดเดียวกันนี้ก็ซ่อนเทิร์น DeepSeek
@@ -98,7 +98,7 @@ ClawMetry มองเห็นเหตุการณ์ compaction ได้�
 
 | เส้นทาง | สิ่งที่เพิ่มเข้าไปในเอเจนต์ของคุณ | ค่าเริ่มต้น? |
 |---|---|---|
-| การ tail ไฟล์เซสชัน (ทั้ง 33 runtime) | **0** โปรเซสแยกต่างหาก ไม่มีโค้ด ClawMetry อยู่ในเอเจนต์ของคุณ | เปิด |
+| การ tail ไฟล์เซสชัน (ทั้ง 32 runtime) | **0** โปรเซสแยกต่างหาก ไม่มีโค้ด ClawMetry อยู่ในเอเจนต์ของคุณ | เปิด |
 | HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** ต่อการเรียก LLM หรือ 0.009% ของการเรียกที่ใช้เวลา 5 วินาที | ปิด |
 | Pre-tool hook gate (warm cache) | **+44 ms** ต่อการเรียก tool ที่ถูก gate เกินกว่าพื้นฐาน interpreter floor 36 ms | ปิด |
 | Enforcement proxy | **+9.7 ms** ต่อการเรียก LLM | ปิด |

@@ -14,7 +14,7 @@
 #     clawmetry         : E2E Gate (required)
 #     clawmetry-cloud   : Cloud golden-path browser E2E
 #     clawmetry-landing : Landing golden path (C3)
-#   "E2E Gate (required)" aggregates the rest, drift-bot included.
+#   "E2E Gate (required)" aggregates functional checks and portable product-record validation.
 #   This comment is illustrative; the script reads the Python list, so it
 #   cannot apply something different from what is declared there.
 #

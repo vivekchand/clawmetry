@@ -21,7 +21,7 @@ def api_node_activity():
     if not store_is_authoritative():
         return jsonify(unavailable("Select a connected node to read its encrypted observations."))
     try:
-        body = _call("query_node_activity")
+        body = _call("query_node_activity_live" if request.args.get("live") == "1" else "query_node_activity")
         if not isinstance(body, dict):
             raise RuntimeError("unavailable")
         return jsonify(body)

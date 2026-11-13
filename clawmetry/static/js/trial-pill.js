@@ -57,13 +57,13 @@
   // Modal selection lives in module state, not the DOM, so a background
   // refresh that repaints the pill can never reset a half-made choice.
   //
-  // Pro + annual is preselected DELIBERATELY, and differs from the
+  // Pro is recommended here, with the same monthly interval as the
   // hard-block overlay's Starter default on purpose: that screen is a
   // blocked user trying to get unstuck, so it leads with the cheapest way
   // back in. This one is a proactive upsell to somebody still working, so it
   // leads with the recommended tier. Both are one click from the other.
   var _selTier = 'pro';
-  var _selInterval = 'year';
+  var _selInterval = 'month';
 
   // Last thing painted into the slot, so a background refresh that reports an
   // unchanged countdown is a no-op. Without this the pill's DOM is rebuilt on
@@ -218,86 +218,12 @@
       '  background:currentColor;flex-shrink:0;}',
       '#' + BTN_ID + '{display:inline-flex;align-items:center;gap:5px;',
       '  padding:6px 13px;border-radius:8px;border:1px solid #16a34a;',
-      '  background:#16a34a;color:#ffffff;font-size:12px;font-weight:700;',
+      '  background:#15803d;color:#ffffff;font-size:12px;font-weight:700;',
       '  cursor:pointer;white-space:nowrap;line-height:1;font-family:inherit;',
       '  transition:background 140ms ease,border-color 140ms ease;}',
       '#' + BTN_ID + ':hover{background:#15803d;border-color:#15803d;}',
       '#' + BTN_ID + ':focus-visible{outline:2px solid #4ade80;outline-offset:2px;}',
 
-      // ── modal ──
-      '#' + MODAL_ID + '{position:fixed;inset:0;z-index:2147483600;',
-      '  background:rgba(15,17,20,0.86);backdrop-filter:blur(6px);',
-      '  -webkit-backdrop-filter:blur(6px);display:flex;align-items:flex-start;',
-      '  justify-content:center;overflow-y:auto;overscroll-behavior:contain;',
-      '  padding:20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}',
-      '#' + MODAL_ID + ' .cm-up-card{max-width:460px;width:100%;background:#1a1d22;',
-      '  border:1px solid #2a2f36;border-radius:14px;margin:auto;',
-      '  box-shadow:0 24px 60px rgba(0,0,0,0.55);padding:22px 26px;color:#e8eaed;',
-      '  position:relative;}',
-      '#' + MODAL_ID + ' .cm-up-close{position:absolute;top:12px;right:12px;',
-      '  width:28px;height:28px;border-radius:8px;border:0;background:transparent;',
-      '  color:#8b9098;font-size:19px;line-height:1;cursor:pointer;}',
-      '#' + MODAL_ID + ' .cm-up-close:hover{background:#22262d;color:#e8eaed;}',
-      '#' + MODAL_ID + ' .cm-up-eyebrow{color:#eab308;font-size:11px;font-weight:700;',
-      '  text-transform:uppercase;letter-spacing:1.3px;margin:0 0 6px;}',
-      '#' + MODAL_ID + ' h2{margin:0 0 8px;font-size:19px;line-height:1.25;',
-      '  color:#fff;font-weight:700;padding-right:28px;}',
-      '#' + MODAL_ID + ' p.cm-up-body{margin:0 0 14px;font-size:13px;line-height:1.5;color:#b5b8be;}',
-      '#' + MODAL_ID + ' .cm-up-seg{display:flex;gap:6px;background:#12141a;',
-      '  border:1px solid #2a2f36;border-radius:10px;padding:4px;margin:0 0 14px;}',
-      '#' + MODAL_ID + ' .cm-up-seg button{flex:1;padding:8px 10px;border-radius:7px;',
-      '  border:0;background:transparent;color:#b5b8be;font-size:13px;font-weight:600;',
-      '  cursor:pointer;font-family:inherit;display:flex;align-items:center;',
-      '  justify-content:center;gap:6px;}',
-      '#' + MODAL_ID + ' .cm-up-seg button[aria-pressed="true"]{background:#2a2f36;color:#fff;}',
-      '#' + MODAL_ID + ' .cm-up-save{font-size:10px;font-weight:700;color:#4ade80;',
-      '  background:rgba(74,222,128,0.13);padding:2px 6px;border-radius:5px;}',
-      '#' + MODAL_ID + ' .cm-up-tier{display:flex;width:100%;gap:11px;text-align:left;',
-      '  align-items:flex-start;padding:13px 14px;margin:0 0 9px;border-radius:11px;',
-      '  border:1px solid #2a2f36;background:#12141a;color:#e8eaed;cursor:pointer;',
-      '  font-family:inherit;}',
-      '#' + MODAL_ID + ' .cm-up-tier[aria-pressed="true"]{border-color:#16a34a;',
-      '  background:rgba(22,163,74,0.09);}',
-      '#' + MODAL_ID + ' .cm-up-radio{width:16px;height:16px;border-radius:50%;',
-      '  border:2px solid #4a5058;flex-shrink:0;margin-top:2px;position:relative;}',
-      '#' + MODAL_ID + ' .cm-up-tier[aria-pressed="true"] .cm-up-radio{border-color:#16a34a;}',
-      '#' + MODAL_ID + ' .cm-up-tier[aria-pressed="true"] .cm-up-radio::after{content:"";',
-      '  position:absolute;inset:2px;border-radius:50%;background:#16a34a;}',
-      '#' + MODAL_ID + ' .cm-up-tier-main{flex:1;min-width:0;}',
-      '#' + MODAL_ID + ' .cm-up-tier-top{display:flex;align-items:baseline;',
-      '  justify-content:space-between;gap:8px;}',
-      '#' + MODAL_ID + ' .cm-up-tier-name{font-size:14px;font-weight:700;color:#fff;}',
-      '#' + MODAL_ID + ' .cm-up-tier-price{font-size:14px;font-weight:700;color:#fff;',
-      '  white-space:nowrap;}',
-      '#' + MODAL_ID + ' .cm-up-was{color:#6b7078;text-decoration:line-through;',
-      '  font-weight:500;margin-right:5px;}',
-      '#' + MODAL_ID + ' .cm-up-per{font-size:11px;font-weight:500;color:#8b9098;}',
-      '#' + MODAL_ID + ' .cm-up-tier-sub{display:block;margin-top:4px;font-size:12px;',
-      '  line-height:1.45;color:#8b9098;}',
-      '#' + MODAL_ID + ' .cm-up-device{font-size:12px;color:#4ade80;',
-      '  background:rgba(74,222,128,0.09);border:1px solid rgba(74,222,128,0.22);',
-      '  border-radius:8px;padding:8px 11px;margin:2px 0 12px;}',
-      '#' + MODAL_ID + ' .cm-up-cta{display:block;width:100%;padding:12px 18px;',
-      '  border-radius:10px;border:0;background:#16a34a;color:#fff;font-size:15px;',
-      '  font-weight:700;cursor:pointer;text-align:center;font-family:inherit;',
-      '  box-sizing:border-box;margin:2px 0 10px;transition:background 120ms ease;}',
-      '#' + MODAL_ID + ' .cm-up-cta:hover{background:#15803d;}',
-      '#' + MODAL_ID + ' .cm-up-cta[disabled]{opacity:0.6;cursor:default;}',
-      '#' + MODAL_ID + ' .cm-up-status{min-height:18px;font-size:12px;color:#b5b8be;',
-      '  text-align:center;margin-bottom:4px;}',
-      '#' + MODAL_ID + ' .cm-up-status.err{color:#ff6b6b;}',
-      '#' + MODAL_ID + ' .cm-up-status.ok{color:#59d18d;}',
-      '#' + MODAL_ID + ' .cm-up-foot{margin-top:10px;font-size:11px;color:#6b7078;',
-      '  text-align:center;line-height:1.5;}',
-      '#' + MODAL_ID + ' .cm-up-foot a{color:#8b9098;text-decoration:underline;cursor:pointer;}',
-      '#' + MODAL_ID + ' .cm-up-key{width:100%;min-height:74px;margin-top:9px;',
-      '  padding:9px 11px;border-radius:8px;border:1px solid #2a2f36;background:#12141a;',
-      '  color:#e8eaed;font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;',
-      '  font-size:11px;box-sizing:border-box;resize:vertical;}',
-      '#' + MODAL_ID + ' .cm-up-activate{margin-top:8px;width:100%;padding:9px 14px;',
-      '  border-radius:9px;border:1px solid #2a2f36;background:transparent;color:#e8eaed;',
-      '  font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;}',
-      '#' + MODAL_ID + ' .cm-up-activate:hover{border-color:#4a5058;}',
       '@media (max-width:640px){#' + PILL_ID + '{font-size:11px;padding:5px 9px;}}',
     ].join('');
     document.head.appendChild(st);
@@ -348,45 +274,10 @@
   }
 
   // ── modal ─────────────────────────────────────────────────────────────
-  function priceHtml(tier) {
-    var P = plans();
-    if (!P) return '';
-    var p = P.prices[tier];
-    if (!p) return '';
-    var yearly = _selInterval === 'year';
-    var amt = yearly ? p.year : p.month;
-    var was = (yearly && p.was) ? '<span class="cm-up-was">$' + p.was + '</span>' : '';
-    return was + '$' + amt
-      + '<span class="cm-up-per"> /' + (yearly
-          ? tr('trial.per_year', null, 'node/yr')
-          : tr('trial.per_month', null, 'node/mo')) + '</span>';
-  }
-
-  function tierRowHtml(tier, name) {
-    var P = plans();
-    var blurb = (P && P.blurb && P.blurb[tier]) || '';
-    return ''
-      + '<button type="button" class="cm-up-tier" data-tier="' + tier + '" '
-      + 'aria-pressed="' + (_selTier === tier) + '">'
-      + '<span class="cm-up-radio" aria-hidden="true"></span>'
-      + '<span class="cm-up-tier-main">'
-      + '  <span class="cm-up-tier-top">'
-      + '    <span class="cm-up-tier-name">' + esc(name) + '</span>'
-      + '    <span class="cm-up-tier-price">' + priceHtml(tier) + '</span>'
-      + '  </span>'
-      + '  <span class="cm-up-tier-sub">' + esc(blurb) + '</span>'
-      + '</span>'
-      + '</button>';
-  }
-
-  function deviceValue() {
-    var P = plans();
-    return (P && P.deviceValue) || 0;
-  }
-
   function buildModal() {
     var el = document.createElement('div');
     el.id = MODAL_ID;
+    el.className = 'cm-trial-offer';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-modal', 'true');
     el.setAttribute('aria-labelledby', 'cm-up-title');
@@ -413,67 +304,18 @@
         'You can upgrade during the trial. The trial still continues until its final day.');
     }
 
-    var dev = deviceValue();
-    el.innerHTML = ''
-      + '<div class="cm-up-card">'
-      + '  <button type="button" class="cm-up-close" aria-label="'
-      +      esc(tr('trial.close', null, 'Close')) + '">&times;</button>'
-      + '  <div class="cm-up-eyebrow">' + esc(eyebrow) + '</div>'
-      + '  <h2 id="cm-up-title">' + esc(head) + '</h2>'
-      + '  <p class="cm-up-body">' + esc(sub) + '</p>'
-      + '  <div class="cm-up-seg" role="group" aria-label="'
-      +      esc(tr('trial.interval', null, 'Billing interval')) + '">'
-      + '    <button type="button" data-interval="month" aria-pressed="' + (_selInterval === 'month') + '">'
-      +      esc(tr('trial.monthly', null, 'Monthly')) + '</button>'
-      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">'
-      +      esc(tr('trial.annual', null, 'Annual'))
-      + '      <span class="cm-up-save">' + esc(tr('trial.two_months_free', null, '2 months free')) + '</span>'
-      + '    </button>'
-      + '  </div>'
-      + '  <div id="cm-up-tiers">'
-      +      tierRowHtml('starter', tr('trial.starter', null, 'Starter'))
-      +      tierRowHtml('pro', tr('trial.pro', null, 'Pro'))
-      + '  </div>'
-      // Annual-only perk. The cloud collects a shipping address on annual
-      // checkouts and ships on the first PAID invoice, so this is a real
-      // promise, not a made-up one. Rendered only when app.js published a
-      // device value, and hidden on monthly.
-      + (dev
-        ? ('  <div class="cm-up-device" id="cm-up-device" style="'
-           + (_selInterval === 'year' ? '' : 'display:none;') + '">'
-           + esc(tr('trial.device', { value: dev },
-               'Includes a free ${value} desk device.')) + '</div>')
-        : '')
-      + '  <button type="button" class="cm-up-cta">'
-      +      esc(tr('trial.continue_stripe', null, 'Continue to Stripe')) + '  &rarr;</button>'
-      + '  <div class="cm-up-status" aria-live="polite"></div>'
-      + '  <div class="cm-up-foot">'
-      + '    ' + esc(tr('trial.secure', null, 'Secure checkout by Stripe. Cancel anytime.'))
-      + '    <br><a id="cm-up-havekey" role="button" tabindex="0">'
-      +        esc(tr('trial.have_key', null, 'Already have a license key?')) + '</a>'
-      + '  </div>'
-      + '  <div id="cm-up-keywrap" style="display:none;">'
-      + '    <textarea class="cm-up-key" id="cm-up-key" spellcheck="false" autocomplete="off" '
-      +      'placeholder="header.payload.signature"></textarea>'
-      + '    <button type="button" class="cm-up-activate">'
-      +      esc(tr('trial.activate', null, 'Activate license')) + '</button>'
-      + '  </div>'
-      + '</div>';
+    el.innerHTML = window.CMTrialOffer.html({
+      prefix: 'cm-up', title: st.expired ? tr('trial.offer.continue_title', null, 'Choose how to continue') : head,
+      body: st.expired ? tr('trial.offer.continue_body', null, 'Choose a plan to continue with ClawMetry.') : sub,
+      tier: _selTier, interval: _selInterval, dismissible: true,
+      showFree: !!st.expired,
+      recoverable: !!st.expired && PAID_TIERS.indexOf(st.tier) === -1,
+    });
     return el;
   }
 
   function repaint(el) {
-    Array.prototype.forEach.call(el.querySelectorAll('.cm-up-seg button'), function (b) {
-      b.setAttribute('aria-pressed', String(b.getAttribute('data-interval') === _selInterval));
-    });
-    var tiers = el.querySelector('#cm-up-tiers');
-    if (tiers) {
-      tiers.innerHTML = tierRowHtml('starter', tr('trial.starter', null, 'Starter'))
-        + tierRowHtml('pro', tr('trial.pro', null, 'Pro'));
-      wireTiers(el);
-    }
-    var dev = el.querySelector('#cm-up-device');
-    if (dev) dev.style.display = (_selInterval === 'year') ? '' : 'none';
+    window.CMTrialOffer.repaint(el, 'cm-up', _selTier, _selInterval);
   }
 
   function wireTiers(el) {
@@ -491,6 +333,7 @@
     if (el._cmEsc) {
       try { document.removeEventListener('keydown', el._cmEsc, true); } catch (e) { /* noop */ }
     }
+    if (el._cmReleaseFocus) el._cmReleaseFocus();
     el.remove();
     try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
   }
@@ -544,10 +387,13 @@
   }
 
   function openModal(source) {
+    var locked = document.getElementById('cm-hard-block-overlay');
+    if (locked) { var title = locked.querySelector('h2'); if (title) title.focus(); return; }
     injectStyles();
     closeModal();
     var el = buildModal();
     document.body.appendChild(el);
+    el._cmReleaseFocus = window.CMTrialOffer.trap(el, closeModal);
     try { document.body.style.overflow = 'hidden'; } catch (e) { /* noop */ }
 
     // Fire-and-forget funnel telemetry, same event stream the hard-block
@@ -575,11 +421,6 @@
 
     el.querySelector('.cm-up-close').addEventListener('click', closeModal);
     el.addEventListener('click', function (ev) { if (ev.target === el) closeModal(); });
-    el._cmEsc = function (ev) {
-      if (ev.key === 'Escape') { ev.preventDefault(); closeModal(); }
-    };
-    document.addEventListener('keydown', el._cmEsc, true);
-
     var statusEl = el.querySelector('.cm-up-status');
     var cta = el.querySelector('.cm-up-cta');
     cta.addEventListener('click', function () {
@@ -611,12 +452,12 @@
       }
       function fail(msg) {
         if (payTab) { try { payTab.close(); } catch (e) { /* noop */ } }
-        statusEl.className = 'cm-up-status err';
+        statusEl.className = 'cm-up-status cm-offer-status err';
         statusEl.textContent = msg;
         cta.disabled = false;
       }
       cta.disabled = true;
-      statusEl.className = 'cm-up-status';
+      statusEl.className = 'cm-up-status cm-offer-status';
       statusEl.textContent = tr('trial.opening', null, 'Opening secure checkout…');
       requestCheckoutUrl()
         .then(function (resp) {
@@ -630,7 +471,7 @@
           }
           go(url);
           cta.disabled = false;
-          statusEl.className = 'cm-up-status ok';
+          statusEl.className = 'cm-up-status cm-offer-status ok';
           statusEl.textContent = tr('trial.waiting', null,
             'Waiting for payment. This dashboard updates automatically once checkout completes.');
           schedule();  // poll hard while they are off paying
@@ -653,6 +494,24 @@
       } catch (e) { /* noop */ }
     });
 
+    var free = el.querySelector('.cm-up-free');
+    function continueFree() {
+      if (isCloud()) { closeModal(); return Promise.resolve(); }
+      return fetch('/api/trial/continue-free', {method: 'POST'}).then(function (response) {
+        if (!response.ok) throw new Error('free');
+        var url = new URL(window.location.href);
+        url.searchParams.set('runtime', 'openclaw');
+        window.location.replace(url.toString());
+      });
+    }
+    if (free) free.addEventListener('click', function () {
+      continueFree().catch(function () { statusEl.textContent = tr('trial.offer.free_failed', null, 'Could not switch to free mode. Please try again.'); });
+    });
+    var more = el.querySelector('.cm-offer-more');
+    if (more) more.addEventListener('click', function () {
+      window.CMTrialOffer.recover(el, function () { window.location.reload(); }, continueFree);
+    });
+
     // "Already have a license key?" — annual self-hosted is a one-time
     // license purchase delivered by email, so the person completing that
     // flow needs somewhere to put the key without hunting for the CLI.
@@ -661,6 +520,7 @@
     if (keyLink && keyWrap) {
       keyLink.addEventListener('click', function () {
         keyWrap.style.display = keyWrap.style.display === 'none' ? 'block' : 'none';
+        keyLink.setAttribute('aria-expanded', String(keyWrap.style.display === 'block'));
         if (keyWrap.style.display === 'block') {
           var ta = el.querySelector('#cm-up-key');
           if (ta) ta.focus();
@@ -673,12 +533,12 @@
         var ta = el.querySelector('#cm-up-key');
         var key = ((ta && ta.value) || '').trim();
         if (!key) {
-          statusEl.className = 'cm-up-status err';
+          statusEl.className = 'cm-up-status cm-offer-status err';
           statusEl.textContent = tr('trial.paste_first', null, 'Paste a license key first.');
           return;
         }
         activate.disabled = true;
-        statusEl.className = 'cm-up-status';
+        statusEl.className = 'cm-up-status cm-offer-status';
         statusEl.textContent = tr('trial.verifying', null, 'Verifying key…');
         fetch('/api/license/activate', {
           method: 'POST',
@@ -689,18 +549,18 @@
           .then(function (resp) {
             activate.disabled = false;
             if (resp && resp.ok === false) {
-              statusEl.className = 'cm-up-status err';
+              statusEl.className = 'cm-up-status cm-offer-status err';
               statusEl.textContent = resp.message || resp.error
                 || tr('trial.activate_failed', null, 'License activation failed.');
               return;
             }
-            statusEl.className = 'cm-up-status ok';
+            statusEl.className = 'cm-up-status cm-offer-status ok';
             statusEl.textContent = tr('trial.activated', null, 'The license was installed. The page will reload.');
             setTimeout(function () { try { window.location.reload(); } catch (e) { /* noop */ } }, 900);
           })
           .catch(function () {
             activate.disabled = false;
-            statusEl.className = 'cm-up-status err';
+            statusEl.className = 'cm-up-status cm-offer-status err';
             statusEl.textContent = tr('trial.activate_failed', null, 'License activation failed.');
           });
       });
@@ -714,11 +574,16 @@
       // The cloud page fetches this itself on load; reuse the result when it
       // is already there rather than issuing a second identical request.
       try {
-        if (window._account) return Promise.resolve(window._account);
+        var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
+        if (window._account && !paying) return Promise.resolve(window._account);
       } catch (e) { /* noop */ }
       if (!tok) return Promise.resolve(null);
       return fetch('/api/cloud/account?token=' + encodeURIComponent(tok))
         .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (account) {
+          if (account && account.plan) { window._account = account; window.CLOUD_PLAN = account.plan; }
+          return account;
+        })
         .catch(function () { return null; });
     }
     return fetch('/api/trial/status')
@@ -729,8 +594,13 @@
   function apply(raw) {
     var st = normalise(raw);
     if (!st) return;
+    var unlocked = _checkoutClickedAt && _state && !isPaid(_state) && isPaid(st);
     _state = st;
     renderPill(st);
+    if (unlocked && document.getElementById(MODAL_ID)) {
+      closeModal();
+      window.location.reload();
+    }
   }
 
   function schedule() {
@@ -751,7 +621,8 @@
   // poll above is the fallback for a cached app.js that predates the event.
   try {
     window.addEventListener('cm:trial-state', function (ev) {
-      if (ev && ev.detail) apply(ev.detail);
+      // Hosted billing state comes from the account, not the cloud host's local license.
+      if (ev && ev.detail && (!isCloud() || ev.detail.plan !== undefined)) apply(ev.detail);
     });
   } catch (e) { /* noop */ }
 
