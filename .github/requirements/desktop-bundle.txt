@@ -86,9 +86,9 @@ bottle==0.13.4 \
     --hash=sha256:045684fbd2764eac9cdeb824861d1551d113e8b683d8d26e296898d3dd99a12e \
     --hash=sha256:787e78327e12b227938de02248333d788cfe45987edca735f8f88e03472c3f47
     # via pywebview
-certifi==2026.10.19 \
-    --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
-    --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
+certifi==2026.10.23 \
+    --hash=sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd \
+    --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
     # via -r desktop/requirements-dev.txt
 cffi==2.1.1 ; sys_platform == 'win32' \
     --hash=sha256:046bfc24911b37851ee1b51aab8bffe713d89c68c6a057b09484ce9fd5f69b4e \
@@ -301,36 +301,36 @@ pillow==13.0.0 \
 proxy-tools==0.1.0 \
     --hash=sha256:ccb3751f529c047e2d8a58440d86b205303cf0fe8146f784d1cbcd94f0a28010
     # via pywebview
-pycairo==1.29.1 ; sys_platform == 'linux' \
-    --hash=sha256:0c6159117680798da1457404b648e69b0a0eb23597b22f8a97315eaeea19f917 \
-    --hash=sha256:12515e71e2f17db8c40911ff089c23c465f92ddbabb89cd01304f275030c80ec \
-    --hash=sha256:3836feabfaf35ef9c502234c5924f3b2db935b6c55d8850ed190b3a58ab3b4ca \
-    --hash=sha256:4506a15f0dcd9d65b2706f417f8e5633e1456867d5cf272dc69c0b48e2302842 \
-    --hash=sha256:46abf30e61d4c27022296e858af900d3e5dae764c1e6acfb9b9e4082af860131 \
-    --hash=sha256:4fbd26b4af24c9787d84cf5448e34eb8dca064b732479aaecd03109520eebd5f \
-    --hash=sha256:507fefbddc8eeb27862a815c4a4ec648f06d6e22a671e00dcbe766a899e4bcef \
-    --hash=sha256:50da6e8eb1525f216e564b3e634b19ede5465080d4fa813416ed45a69b3f6605 \
-    --hash=sha256:59eb4a6d1101834a7ba2c7a8096fccd54eb8514d8189f896b4a8e24a19cfa1f0 \
-    --hash=sha256:5c51bd98d2190841389845deae8243479393c1f2d9423de85e9fb4c95afebc10 \
-    --hash=sha256:7222587a4ae1674287c17d10d1c42c4219914f7ef64cac4b2fb995df4f7918cb \
-    --hash=sha256:73a364341ce6b382200d13cfdf814f8ea50a8a2e0f8280c2d2e7dfb3ba52edcf \
-    --hash=sha256:7cb6279cf0a7951ae9aaa21c6a0adff0fce62c0a68797b6a26a54f9a0859ad4d \
-    --hash=sha256:839cd8c98e1933426d8959168b466901b398bf4867454451023b93d91030cca9 \
-    --hash=sha256:85127fb834a8a37a550fa5c684a4c49fc546b465a64ac8df94d7728914a56279 \
-    --hash=sha256:859f5f29d7c30fc28dbc5ce91eb30a45e0b7e447a7bd738c231dd7f9be368d1a \
-    --hash=sha256:b5db545cc8e59fe9bb68039db86c5ebcf9d1e6417695d0d2cb5530e67d925af9 \
-    --hash=sha256:cf25a97a15bedd0cdabee5b18652de45eff70b4a7999416ed18dcee2144d17f5 \
-    --hash=sha256:e5dde8dc08d92ad6935d1a45ff6ea71ea6d5739ed08dbf8677313935f94d5c6d \
-    --hash=sha256:e923875c96cfe935d632de50aeebf49db7dffdd23f9042587c3f34af7596868e \
-    --hash=sha256:eae57db7719c8b717f0d69fe81a1586621dcbfd7f92a1277a181dd89e754be25 \
-    --hash=sha256:f635a60b7525661b562061e4b1635670b804d1efc9c7f40796c2fa14b24c3ddf
+pycairo==1.29.2 ; sys_platform == 'linux' \
+    --hash=sha256:00cb8f7a343e6ab5a6a2d275184b511ed2132ef1bdcba03487283cdc01b593d2 \
+    --hash=sha256:0b87aa05a50a2c8cf2489dffc1b12f88b6e2fe384075f8c799367625081ca3cd \
+    --hash=sha256:0e49de5b93fc1e76e670f368b9bd0ffc881c72f506e4293c4b4d79f52cbe4c47 \
+    --hash=sha256:104dc796eaf9ae4194079e1948634cdc8b88088437e1fd8e997853d2e78407c6 \
+    --hash=sha256:29e3389c0b6d3dafda1b2360a8938790c2c7b6971b78e109a565c1cb91f8ae9a \
+    --hash=sha256:3e69fff74fe64f5ba2dfa31f67c6bdf26413342574047437d2ac520d35e9a489 \
+    --hash=sha256:50c30f88fa12b722ac8f997b67f83f5ea8fad06bc1d6c33dbdab504eb9978e56 \
+    --hash=sha256:680a2bd4ab97d088483044774e8007ad7da109f0715df900f3bd328fe52c2e34 \
+    --hash=sha256:6b0410280b82bf60a84185392f720c099d71524dd7983f93d9abe18c8b2cd3a6 \
+    --hash=sha256:75b1b6ff515b6bcb89e86c5f2bb4762c46f0fcbde6c444ea035c8fecd1bc8b55 \
+    --hash=sha256:786373ba1bd78fbdec02cb1c99254eef12438bf942dd13534fe61b948becb527 \
+    --hash=sha256:806cd0f1266776fb6e881ce322569f0439993d66df0eeb8a255b1316f947acd0 \
+    --hash=sha256:88cbf5632be0b9255822b457d3bfe4f9eb0bc24e5520f54b6c4334e4f5b0f5aa \
+    --hash=sha256:98360270afaa909bcc1769f299160123322da29d2a7310763b0ddc16e624d5c6 \
+    --hash=sha256:9bb09bca782b5e21a4beb698075b5504f234af0597920f0c0439979226a76182 \
+    --hash=sha256:a9ed77de6f9ba148d493360d1b2a93be8a785c8ae855d4fd6e8df293ed58ddd8 \
+    --hash=sha256:b97fd674dea445eae40387353f32665dbe19080a2ef63df97fd81273afc6e9d1 \
+    --hash=sha256:bc9e26b7e9577d3655509766275653aa945f101fb28c197496facf8c9ba90321 \
+    --hash=sha256:c5dfa99afdde95b82325f240d144008a6b5be99405e74070540a1b7a857eb2a7 \
+    --hash=sha256:c66e08496678ba36d2d2aed2add1fade358b96c4842cb8b558c77ae01ca61fa7 \
+    --hash=sha256:edbe75fe4267bda95f3bec1fcb6e90cccf10e72a8e2645bd1b3431e9a75225ce \
+    --hash=sha256:fc75fca130e8f9b3d1548b322b0b79b149f482478d1b70e771c66c4dfc654d4f
     # via pygobject
-pycparser==3.0 ; implementation_name != 'PyPy' and sys_platform == 'win32' \
-    --hash=sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29 \
-    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+pycparser==3.12 ; implementation_name != 'PyPy' and sys_platform == 'win32' \
+    --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e \
+    --hash=sha256:f03387877eab82ce01bbdfd0ba7252ee55a90b1c708d5129e2ce915475cf1db6
     # via cffi
-pygobject==3.58.0 ; sys_platform == 'linux' \
-    --hash=sha256:45068697de3ffe46840ca369705f23118b34db4f7deb63f6eff079a6734ddcca
+pygobject==3.58.1 ; sys_platform == 'linux' \
+    --hash=sha256:4c80598ade17fbaa7798e01a25d0bf29ce109740786026a074c5c62bb3e79d23
     # via -r desktop/requirements-dev.txt
 pyinstaller==6.22.3 \
     --hash=sha256:020d4fe0627f5c73dfbcfad1a6578ef354d5fe4bdccd9d8e5a615528f5a45d2b \
@@ -346,21 +346,20 @@ pyinstaller==6.22.3 \
     --hash=sha256:ea240b5dfa831ff673c97505eee0ec24670bccf71396c83109440348944c83d0 \
     --hash=sha256:f82d0fb89f21c3ed6f482ee16f341bc59e8a31dbabb9bae9ef04e53ade4dc0d9
     # via -r desktop/requirements-dev.txt
-pyinstaller-hooks-contrib==2026.7 \
-    --hash=sha256:24257a04c7a5a7a034cf28e39dcee20fbeeb9f043076729480f2e1b69904408a \
-    --hash=sha256:5fbcaacb22c4f4aac869a127dce283f67a4b4cfcc37d496f2446603e6d68aefa
+pyinstaller-hooks-contrib==2026.9 \
+    --hash=sha256:2748767901acb5cecd1304652b6c7add5bffcff1d71d01207fe24a5d42942a56 \
+    --hash=sha256:fb3e67dd64122561724c48ad0366ac9e8c16e638b63bf7d85de03bf3fdbf06c3
     # via pyinstaller
-pyobjc-core==12.2.2 ; sys_platform == 'darwin' \
-    --hash=sha256:122e6ad302a2abf5d4d4adb0156db751600ddf2768441696cba17b31323085e7 \
-    --hash=sha256:2062e8ad30a310441cd022544a897553408bebeaa7820d5edba3c96fd7fd693b \
-    --hash=sha256:2c7ef3d2f865b4b3ebb14ec3556f7a3e8abb6d130c67275cd9daa08dbd6e4e4e \
-    --hash=sha256:3772b406edb3ff78171530a17cda1c4a7817f87b87ded0d8715b3fa664df16db \
-    --hash=sha256:3906452339cd06a3bb07df103c2511d4cb0f7a22d8771c0b802eba15d9a642b6 \
-    --hash=sha256:56c6c39f1de059fcbb174ebca5525505fc8feaa89be2a28c329bf09b6b25ee75 \
-    --hash=sha256:59a77038ebe0ab1240f61c341e7fb67b8674f2b4cd41bc71a6472511a12b50f7 \
-    --hash=sha256:89acc6bc13aaa6e3f52b0ce652ede7e201edb6bf062741b246b0c5a44582f25f \
-    --hash=sha256:950bd2d9c74634398c4e3d24ef2f213d4e23d705083697464fa67afedc53c1ad \
-    --hash=sha256:b9cdd686e32db8e451feb19f8a85bc4cd52c2893103881d04aca51e1f35371d1
+pyobjc-core==13.0 ; sys_platform == 'darwin' \
+    --hash=sha256:1e8752b3950ceec603bf36f57083151abed15e0c2e7c5b8c3efded9c81dc732c \
+    --hash=sha256:292462e0947a09aca3737a06c44457cb2aa58f267cfc581c16fca036fc073b45 \
+    --hash=sha256:4627348cb31c8deb2bb94702d9bcaa74869f4fef9559fd134416a6a4ca42006e \
+    --hash=sha256:5818e3d8cc2677a1e767968ebfe3bc0cb7f80c1f7c19c653ee25ef1cc1b3e188 \
+    --hash=sha256:c497a23077ba0a42b59b879d81049eebfb0b7b67a8ca80c68b6d3683bbbd6d6f \
+    --hash=sha256:d65d383efed5a803e43f6c67ccc9f4c94754842b2268da24319bb57a852b016f \
+    --hash=sha256:f29f7cdb3969268716017ada9516b94f6dd1c66c2e415274b5ac1169440da1a4 \
+    --hash=sha256:fe470bd7b8163b4b8d216b1ebe5b227f01c0fa1c4e0085d7ccade269dec02bb0 \
+    --hash=sha256:ffe154462d14aa4852f424e9116f17b5f8d44f78fc0f6c4727e721a5fa7177da
     # via
     #   pyobjc-framework-cocoa
     #   pyobjc-framework-quartz
@@ -368,64 +367,60 @@ pyobjc-core==12.2.2 ; sys_platform == 'darwin' \
     #   pyobjc-framework-uniformtypeidentifiers
     #   pyobjc-framework-webkit
     #   pywebview
-pyobjc-framework-cocoa==12.2.2 ; sys_platform == 'darwin' \
-    --hash=sha256:0e8ace0d44a00d281281a723d17fcd05eea7544a38a6a512e1fd018ddb7aece2 \
-    --hash=sha256:5a751c8033a3b51f7996f0327e0675eb44dcfdfe7920fae01e3d78b662723fff \
-    --hash=sha256:600b1723184ca094931330e79355274949965460e23de38628d601b5a967baf9 \
-    --hash=sha256:851dca4c16e70b405e5cd5a8c166cf7c445ae54a4cdd95ce9a523803172f32d1 \
-    --hash=sha256:875f2aad73963faa81a6b36ae674fd494a4658d6d999e1075e0e2aca3d2391df \
-    --hash=sha256:889d7bbd4ba2d4941078bfbbfb882138e51dbead27df006abfe0f2e0d49b5b2e \
-    --hash=sha256:8fe5b2e79c9530f667b4e58a87a3a15ea62f86a5d19eec405517ecbd4f454868 \
-    --hash=sha256:c96c0ef69a71afbbb0e6a7d594b455c5fe47d62e0db376ee7a2b4b828c16ace9 \
-    --hash=sha256:de69c5933750f3a4599ed962eccd92b6a71914c7e4318dacc7895738a8ae60d7 \
-    --hash=sha256:e106f395531e67694376b0f1184612cbeea3ec8b9bf56b55ef41d026171d2a2d
+pyobjc-framework-cocoa==13.0 ; sys_platform == 'darwin' \
+    --hash=sha256:16dd1e8890ed695ce12bcd367ed0ac9f3e70dd1f7a8098b6398427c162591b83 \
+    --hash=sha256:1a6b9f9e0ab123e51fa7df43bbc6c0414a444facd2225ad4f221a0d842c49ad6 \
+    --hash=sha256:88be6d452e7531f695ce6d41428aa74bcaade9ddbc50af592419b9f2fbb7c879 \
+    --hash=sha256:9282ebad57784ec18f4b7ea2e6b65bac0a6f56cc21a5c63e061fa48a9b49dd26 \
+    --hash=sha256:bb0bcba2e4e9d05af875306e0e055cfc2f152fd602d5f2f1a54490adebebcd34 \
+    --hash=sha256:bb7a23941fc8d7866578dbc84e56140efd343a1d28510f530dd1dbf80807daf4 \
+    --hash=sha256:d6fa11ea29d85d46e65ed1c9fdba3a5131ad26971bf24bb7d16aa55f06bcdc1e \
+    --hash=sha256:e1618d315939c9fae57cb858d4db496ec61f82495ce6a877398131ee494fc19d \
+    --hash=sha256:f1e26ad2225d1c84973cce725f2f4aeeb4d5f653a36c8a9f0b691c5529dc7780
     # via
     #   pyobjc-framework-quartz
     #   pyobjc-framework-security
     #   pyobjc-framework-uniformtypeidentifiers
     #   pyobjc-framework-webkit
     #   pywebview
-pyobjc-framework-quartz==12.2.2 ; sys_platform == 'darwin' \
-    --hash=sha256:0ec9751904ef975bf0789d760dc4fadcb400edc4ffe4a736eb54971968babe5c \
-    --hash=sha256:1f7f3d9010e38f03ea1fa266664c10ea349cd7492bd603b403584f49d713dbed \
-    --hash=sha256:4b01e325b0cdc121e78730dde9756e971b23069bf141cd62efbcaac76d7b6dbb \
-    --hash=sha256:63f6f0f3233dcf650aac1374781e78961b0b17b33e3351953bacf8bd0c430593 \
-    --hash=sha256:7f668979d0c7320bf8f7ed6e030da578f93ab0f5dd619b295ec735cd8d5faa34 \
-    --hash=sha256:810f97b210cfd93704d240860286dfd6df09f9f1c52525fc5c2166723aea3f9e \
-    --hash=sha256:8f58c589b5a76ba98f186b1f3b19fb1c8b730e82351f81fb62e6194f64a71622 \
-    --hash=sha256:cee63b891c2b6b7ccf98f233175411529f3e80286f58438793b3634af79858f1 \
-    --hash=sha256:d89a5f47c079b5c340d2b1cbb83eb6c4c92d4bb17cd4daf7d8c02c91a49f5399 \
-    --hash=sha256:ebf8167ca2096cf3a05199decfa517be0df4c56048f49cf132bd6b1a6ab9c086
+pyobjc-framework-quartz==13.0 ; sys_platform == 'darwin' \
+    --hash=sha256:5e1d49f2699d128553a52fad473622ff4fd424d05e879d9585dad0a9f7c3dcfd \
+    --hash=sha256:90630977d69975e94f49f06e7b32b5e757334d71239944ad38c3efabb73aa4ef \
+    --hash=sha256:ab6f410ac494b63ed48294392650b88ce8229511a0eb0059458982daeeacc6f7 \
+    --hash=sha256:b94ba73bfbd1b707723c88997aaf38b2aad03d9417f6fe54f243fc583237a353 \
+    --hash=sha256:b9a4942182efbbc7e18e6cb7f5a8faa166dc2fc5e33bece7c7b1355494274add \
+    --hash=sha256:d76914284e721b96e2a7850da81343cd4af083a00d07afd87545be432d1e2e24 \
+    --hash=sha256:ea179def24ffbdd61e43e7c33a0cb2b2d79c7cb39fa8d212ab87c964702e5f87 \
+    --hash=sha256:f7a4fab3bb1a78640135db257f2c75277d0931bad26c500e34b88480c33dece1 \
+    --hash=sha256:fdba4c5d095e2f88812d0584fdb4b35dc31f38d93145830cc955f42710f1f8ec
     # via
     #   pystray
     #   pywebview
-pyobjc-framework-security==12.2.2 ; sys_platform == 'darwin' \
-    --hash=sha256:266f41995f2fc80660c8451bdb199a7e259a6cad02fbc1e0e2f69dd5576e2203 \
-    --hash=sha256:33efab1ff7d18570148f8f3ddd44eca305f733aee00b9115d5263bef81018f65 \
-    --hash=sha256:4cc2e7352f4ca67a43bcf65587a024fdafdea5f5fcae7264b896e39cd68d5718 \
-    --hash=sha256:54b9b7a03f2e4a7e1ac182239d63cb94bc3628293f39637c17d3ececd495a619 \
-    --hash=sha256:67655616bd0b9e05bd6a18fa353c5a7bc1743f79f1774644dbb180a2c62bf65b \
-    --hash=sha256:786da49c319318bb4cf168755d4a9324a6b3720a3dd7503990249c2a27b661ee \
-    --hash=sha256:a78b6945d4681e319e03757c8039ac4014833ede1d883aa793a286f48fa93bb7 \
-    --hash=sha256:c4726b41c96a611fa13880bcfcb38a32ac9256239adb5b48d559dc4d0c9d0b99 \
-    --hash=sha256:ca580d5f56e1222d63f1322a4fbf63be0bad77e77cca084290310df007b3fdde \
-    --hash=sha256:f5afda32efbfdef150e921563b94a799ea104e575f4a95b8c5cd71a2322413a8
+pyobjc-framework-security==13.0 ; sys_platform == 'darwin' \
+    --hash=sha256:027e4ec0a3080efa82fadb88de68c7aa5aedacceacf5115faf4c6924704500fb \
+    --hash=sha256:28a54bc028ac5951271ce168043111a478434e2271cbd054d460fdb246acc8ca \
+    --hash=sha256:2fcf3f415090829eb363cdd77df6370be17162700e34cd81d0bcf478c938a4b7 \
+    --hash=sha256:6693e6e083497c6e51ac4533c137f41712b3751cb3c45c3daf7ecc6a197d437e \
+    --hash=sha256:77fe472d115e527fdcaa9b97de693307deaf2c3bea36058b47ec1a5048b4a0bd \
+    --hash=sha256:7c295d54229adf8241538057e9d0106cc24aba452ec0050b0c222c56f707620a \
+    --hash=sha256:e5c3f90773fb53dcd525075011f80a83e6f38cb0ad0bcd13fb8f629bf35d22aa \
+    --hash=sha256:e988fb40d2f0a83e453056829433cb464699fc0fe5169d2db76a833c15cdc769 \
+    --hash=sha256:fa7228c7bfafbec54577d89ada79e3eb772234ba3e65e4c11873b417a7ff920f
     # via pywebview
-pyobjc-framework-uniformtypeidentifiers==12.2.2 ; sys_platform == 'darwin' \
-    --hash=sha256:12f8ba77dcc949ffb9f0f48743cae326aebec8e69cb1ac55a1d1e04dca7bd59a \
-    --hash=sha256:1dc6a538df07c410e4bfd6457adcb0b663a5e0df331905dbe135bcfd3f89ae57
+pyobjc-framework-uniformtypeidentifiers==13.0 ; sys_platform == 'darwin' \
+    --hash=sha256:5375270af9980825b3a20267312bbd616e9828c4b7d5ab008c98d9bf6b8a51e3 \
+    --hash=sha256:d70ae3722c91c57de71a77d1004a22a118e38798f66c30552cb93754f7a9cbb5
     # via pywebview
-pyobjc-framework-webkit==12.2.2 ; sys_platform == 'darwin' \
-    --hash=sha256:0be3ed885100dd38c6b927c9a25a63f22fd624bc4c6bb3d3af14fab5dcdcfc97 \
-    --hash=sha256:147f0f18c0ddd70a1d05f88cf42a89b423b191957db6faf508cbbdb33092864c \
-    --hash=sha256:206f88451e1c3e152c72c16c2af2664646cd752a3007c9cda8029a9e3f0ec9a4 \
-    --hash=sha256:36bea435489daa20ead1390d6bf0b98659beac0fc5a281e502acc5da334ec9eb \
-    --hash=sha256:83a5c250125ecaaf680a405cf435a038e4b168d0305ba7ad14398d810a49cf87 \
-    --hash=sha256:88c896d89764675af1ef85c6bda8740e50451e31bcd1d1d2ef59323acc9916ed \
-    --hash=sha256:cf683310d9ea01bcc9e5d6b59c6cead25d2a5453f58cc2e18f41b82b1fef1d26 \
-    --hash=sha256:e4e5bba0529e791b2f249e4c1e93331cc78741577dd7bf2d4a207ecf50d20b86 \
-    --hash=sha256:e5588df2a73b377b59a994cc2a78b467e4341f4e4d28b52e8671e21a2811d3c1 \
-    --hash=sha256:ef37692f0280151bf8164a718e334a9b3cb0abfc5455be14172280de7e277505
+pyobjc-framework-webkit==13.0 ; sys_platform == 'darwin' \
+    --hash=sha256:0378b0755d162f7bf0154fbd57edf72ab2e4619bf0379bde00e66208704b6cb5 \
+    --hash=sha256:1ca998217551140bd82b8bbfc09860e975a2d8dc649eb397ee8a6d3a74cfc058 \
+    --hash=sha256:3d99dd14a745d0520c2af55ac57afe63aac0368897613990a69cf36479b5d4cc \
+    --hash=sha256:71de92b724c67abec74c6d256834669754dbb9d166eaaace83a7965b99f3bc81 \
+    --hash=sha256:80debaa16c416895214c74e483bd13f510fc0965e4def34653e37705a5eef1a6 \
+    --hash=sha256:868cbeca83d079af6f049765d018db731d8fb2fb3bbfaf8be7fd6e96e8c6ca1a \
+    --hash=sha256:98f4342f072dc5adce93802953c1876c9d772d6aa6b8122750a332a3ca28f606 \
+    --hash=sha256:a6e6685f2684ff0c1cb09e8fe26f94fc58d2ed146102a3513828a421a04bb57b \
+    --hash=sha256:d97dd5077360d1e019d26bc26492e1c30fd3ef60e98ae48c9a9d555b8856ead0
     # via pywebview
 pystray==0.19.5 \
     --hash=sha256:a0c2229d02cf87207297c22d86ffc57c86c227517b038c0d3c59df79295ac617
@@ -434,10 +429,9 @@ python-xlib==0.33 ; sys_platform == 'linux' \
     --hash=sha256:55af7906a2c75ce6cb280a584776080602444f75815a7aff4d287bb2d7018b32 \
     --hash=sha256:c3534038d42e0df2f1392a1b30a15a4ff5fdc2b86cfa94f072bf11b10a164398
     # via pystray
-pythonnet==3.1.0 ; sys_platform == 'win32' \
-    --hash=sha256:698dd88edc198819ad63b624a6ebe76208c7b46e4fe13626f65e484f0358d6ba \
-    --hash=sha256:7b34c382905d10a371509ffafd64cae0416305c28817738a9cd138336f4e9991 \
-    --hash=sha256:7bdd4de03df3547a48122a3989265c8b31d5be0d19dadffa009eec7df8085e0b
+pythonnet==3.2.1 ; sys_platform == 'win32' \
+    --hash=sha256:c86e8dd31268f6e0c48fcc4d6030041316d49ed2764a1cb6ea8c37876e07c572 \
+    --hash=sha256:dd5668b74b0c903d9a24e1ba86f728fc490f8e919d56b3c24bf06739b9ee2b7f
     # via pywebview
 pywebview==6.2.1 \
     --hash=sha256:71b7136752e40824655304d938efb62014218d1a90bd8e87e1cbdb1ce9c466af \
@@ -451,9 +445,9 @@ qtpy==2.4.3 ; sys_platform == 'openbsd6' \
     --hash=sha256:72095afe13673e017946cc258b8d5da43314197b741ed2890e563cf384b51aa1 \
     --hash=sha256:db744f7832e6d3da90568ba6ccbca3ee2b3b4a890c3d6fbbc63142f6e4cdf5bb
     # via pywebview
-setuptools==84.0.0 \
-    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670 \
-    --hash=sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73
+setuptools==84.2.1 \
+    --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc \
+    --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
     # via pyinstaller
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
@@ -461,9 +455,9 @@ six==1.17.0 \
     # via
     #   pystray
     #   python-xlib
-truststore==0.10.4 \
-    --hash=sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301 \
-    --hash=sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981
+truststore==0.10.5 \
+    --hash=sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd \
+    --hash=sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c
     # via -r desktop/requirements-dev.txt
 typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
