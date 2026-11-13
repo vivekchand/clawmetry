@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Improved: Sessions beside Agents (#6598)
+
+- Sessions now sits directly below Agents in the shared dashboard navigation, including local, hosted and mobile views.
+- Verified the rendered sidebar and 30 navigation and session-layout checks. All feature CI checks passed.
+
 ### Fixed: event storage and cost totals for numeric timestamps (#6584)
 
 - Numeric event times no longer prevent a batch from saving. Unix seconds and milliseconds use the same local calendar as ISO timestamps.
