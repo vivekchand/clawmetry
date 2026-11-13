@@ -82,7 +82,7 @@
 #                         GHSA-g6cj-pr64-35w5 (HIGH, 50.0.0)
 #   h2==4.3.0             cap is exact. 1 advisory:
 #                         GHSA-6hr6-w5qg-qmwg (MODERATE, 4.4.1)
-#   msgpack==1.1.2        cap is exact. 1 advisory:
+#   msgpack==1.2.3        cap is exact. 1 advisory:
 #                         GHSA-6v7p-g79w-8964 (HIGH, 1.2.1)
 #   tornado==6.5.5        cap is exact, and this is the big one: 10
 #                         advisories, every fix in 6.5.6-6.5.9 (latest
@@ -854,7 +854,7 @@ mitmproxy-rs==0.12.11 \
     --hash=sha256:6f5ecf3dd3c21e56191b84fc90364dc4d1dc95c660beedab4c816a0119ecb785
 mitmproxy-windows==0.12.11 \
     --hash=sha256:59addc8864669a08f8cb48d8b29129efb1ca5f6cba9696e2d91f1f506b21a2d7
-msgpack==1.1.2 \
+msgpack==1.2.3 \
     --hash=sha256:0051fffef5a37ca2cd16978ae4f0aef92f164df86823871b5162812bebecd8e2 \
     --hash=sha256:a605409040f2da88676e9c9e5853b3449ba8011973616189ea5ee55ddbc5bc87 \
     --hash=sha256:8b696e83c9f1532b4af884045ba7f3aa741a63b2bc22617293a2c6a7c645f251 \
