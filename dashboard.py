@@ -7355,6 +7355,10 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
       </div>
+      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.session_replay">Sessions</span>
+      </div>
       <div class="left-nav-item" data-tab="node-activity" onclick="switchTab('node-activity')" title="Processes, resource use and changes on this machine">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><path d="M8 21h8M12 17v4M6 10h3l2-4 3 8 2-4h2"/></svg></span>
         <span class="left-nav-label">Node activity</span>
@@ -7366,10 +7370,6 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item" data-tab="improve" onclick="switchTab('improve')" title="Repeated guidance signals worth reviewing">
         <span class="left-nav-icon" aria-hidden="true">&#10047;</span>
         <span class="left-nav-label">Improve</span>
-      </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
-        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-        <span class="left-nav-label" data-i18n="nav.session_replay">Sessions</span>
       </div>
       <div class="left-nav-item" data-tab="brain" onclick="switchTab('brain')" data-i18n-title="nav.activity_tooltip" title="What your agents are doing right now, step by step">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
