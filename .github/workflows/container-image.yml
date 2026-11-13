@@ -249,7 +249,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: selfhosted-image-sbom
           path: sbom/
@@ -344,7 +344,7 @@ jobs:
 
           Opened with the workflow token, so checks do not start on their own: push an empty commit to this branch (or close and reopen) before merging.
 
-          Product record: https://factory.8090.ai/project/b415065f-ab2f-4f53-8864-0c009fd098cb/requirements/49529742-f381-4957-9abf-c92efe7b7d65
+          Product record: https://github.com/vivekchand/clawmetry-cloud/blob/main/docs/product-records/requirements/49529742-f381-4957-9abf-c92efe7b7d65.md
           EOF
           gh pr create --base main --head "$BRANCH" \
             --title "chore: pin self-hosted Compose to verified image v${VERSION}" \

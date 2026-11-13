@@ -38,6 +38,10 @@ import base64
 import json
 import logging
 import os
+import errno
+import tempfile
+import time
+from contextlib import contextmanager
 
 logger = logging.getLogger("clawmetry.license")
 
@@ -119,6 +123,97 @@ def _file_permissions_safe(path: str) -> bool:
         mode = os.stat(path).st_mode & 0o777
         return (mode & _POSIX_GROUP_OTHER_BITS) == 0
     except Exception:
+        return True
+
+
+@contextmanager
+def _license_write_lock(path):
+    """Serialize activation and heartbeat writers on Windows/macOS/Linux.
+
+    Python documents fcntl.flock on POSIX and msvcrt.locking on Windows.
+    Use a separate stable inode because the key itself is atomically replaced.
+    A failed lock never falls through to an unprotected entitlement write.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path + '.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Another license update is in progress. Try again.') from exc
+                time.sleep(.025)
+        yield
+    finally:
+        try:
+            if acquired:
+                if os.name == 'nt':
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _store_license_key(key, *, path=None, payload=None):
+    """Atomically store a verified key; a trial cannot replace a paid key.
+
+    Returns False when a current paid license wins. Both activation and the
+    daemon heartbeat use this function, so the decision is atomic across their
+    separate processes rather than a check in the HTTP handler alone.
+    """
+    path = path or LICENSE_PATH
+    payload = payload or verify_token(key)
+    if not payload:
+        raise ValueError('Unrecognized license key.')
+    incoming_expiry = payload.get('exp')
+    if isinstance(incoming_expiry, (int, float)) and incoming_expiry < time.time():
+        raise ValueError('This license key has expired.')
+    with _license_write_lock(path):
+        try:
+            with open(path, encoding='utf-8') as fh:
+                existing = fh.read(8192).strip()
+        except (FileNotFoundError, UnicodeError):
+            existing = ''
+        current = verify_token(existing) if existing else None
+        expiry = current.get('exp') if current else None
+        incoming_trial = str(payload.get('tier', '')).strip().lower() == 'trial'
+        current_trial = current and str(current.get('tier', '')).strip().lower() == 'trial'
+        # parse_license treats every signed non-trial tier as paid (including
+        # forward-compatible aliases), so the writer must use that same rule.
+        if (incoming_trial and current and not current_trial
+                and (expiry is None or (isinstance(expiry, (int, float)) and expiry > time.time()))):
+            return False
+        if (incoming_trial and current_trial
+                and isinstance(expiry, (int, float)) and isinstance(incoming_expiry, (int, float))
+                and expiry > incoming_expiry and expiry > time.time()):
+            return False
+        if existing == key.strip():
+            return True
+        fd, temporary = tempfile.mkstemp(prefix='.license-', dir=os.path.dirname(path))
+        os.close(fd)
+        try:
+            _secure_write(temporary, key.strip() + '\n')
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         return True
 
 
@@ -1167,7 +1262,8 @@ def activate(key: str, node_id: str | None = None, actor: str = "") -> tuple[boo
                 os.chmod(lic_dir, _LICENSE_DIR_MODE)
         except OSError:
             pass
-        _secure_write(LICENSE_PATH, key.strip() + "\n")
+        if not _store_license_key(key, payload=payload):
+            return True, "Your existing license remains active."
     except Exception as exc:
         _audit_license_event(
             "license.activate", result="write_error", actor=actor, payload=payload,

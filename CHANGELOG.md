@@ -1,5 +1,52 @@
 ## Unreleased
 
+### Security: publish GHSA-6r57-3vhv-2wpf and close the stale self-hosted pin
+
+- The file-boundary and loopback-authentication fixes released in 0.12.933 (#6511) now carry a published advisory, [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf), CVSS 3.1 `AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H` (7.5). Everything before 0.12.933 is affected. Reported by Wu Jiaxuan (吴嘉炫); a CVE has been requested through GitHub.
+- The advisory records that the **write** endpoint was reachable over DNS rebinding too, which the report had scored as out of reach. Under rebinding the attacker's domain is both `Origin` and `Host`, so the same-origin write guard matches and permits the request. Confirmed by replaying both vectors through the real application from the published 0.12.932 and 0.12.937 wheels.
+- The documented self-hosted Compose deployment was pinned to `0.12.908`, 25 releases behind and short of the fix. Its auto-pin pull requests are opened with the workflow token, so their checks never start on their own and five of them had been parked since 2026-10-24; #6534 carries the verified `0.12.937` digest and was restarted rather than bypassed.
+- `SECURITY.md` no longer sends reporters to GitHub's private advisory form. It is not enabled on this repository, so that link answered 404 for the reporter who followed it; email is named as the private channel and the published-advisory list is linked.
+
+### Improved: Sessions beside Agents (#6598)
+
+- Sessions now sits directly below Agents in the shared dashboard navigation, including local, hosted and mobile views.
+- Verified the rendered sidebar and 30 navigation and session-layout checks. All feature CI checks passed.
+
+### Fixed: event storage and cost totals for numeric timestamps (#6584)
+
+- Numeric event times no longer prevent a batch from saving. Unix seconds and milliseconds use the same local calendar as ISO timestamps.
+- Unknown event times stay unknown. Their costs remain separate instead of disappearing or being treated as duplicate turns.
+- Verified event storage, persistent cost totals, local day buckets and session costs with 285 checks. The feature passed all required CI checks before this release.
+
+### Fixed: saved robot sessions through the installed daemon (#6580)
+
+- Saved robot sessions can load through the daemon's existing private plugin query.
+- Existing daemon authentication, owner access and license checks remain unchanged. No robot command path was added.
+- Verified with dispatch, authentication and entitlement regression tests, including tests that failed before the fix.
+
+
+### Improved: compact trial dialogs and optional recovery (#6575)
+
+- Plan dialogs fit ordinary laptop screens, show prices in each plan row, and use a readable green action. License entry opens only when requested.
+- After an expired trial, users can request an eligible one-time extension with optional feedback. The offer requires no card and carries no automatic charge.
+- Paid licenses remain protected during simultaneous activation and heartbeat updates. Checkout refreshes access automatically after payment is confirmed.
+- Verified desktop and mobile layouts, keyboard access, translated controls, checkout recovery and native license writes on Linux, macOS and Windows.
+
+
+### Fixed: proper Setup image previews (#6568)
+
+- Setup displays supported local images and lets you save the original file. Text files remain readable source.
+- Binary files, damaged images and large images show clear fallback messages. Hosted images without synced original bytes explain how to open the file on the agent machine.
+- Selected files show their folder and size. The Memory and Skills browsers use the same image preview.
+- Verified with 29 focused checks, existing hosted Setup controls, and the real Codex PNG in Chrome. PNG and SVG API responses preserve the original bytes.
+
+
+### Fixed: every detailed-trace query needs the daemon token, by rule not by list (#6549)
+
+- The daemon query route named each detailed-trace operation that requires the private daemon bearer. That was a second list to keep in step with the operations licensed extensions actually expose, with nothing enforcing the two agreed, so a read added on one side and not the other reached dispatch without the bearer.
+- The requirement is now the operation's `trace_` prefix. It fails closed: a detailed-trace read is covered the day it exists rather than the day someone remembers to list it. `guard_ack` and `set_observation_only` keep their explicit names because they are not trace reads.
+- Verified by 96 focused authentication checks covering every declared trace operation plus one that does not exist, each asserting the store is never reached. Restoring the previous named list fails them, as does matching `trace` as a substring rather than a prefix: `retrace_history` must still reach the store.
+
 ### Fixed: responsive live measurements during ingestion (#6519)
 
 - Live frame queries and the sampler read existing preferences through DuckDB's concurrent read cursors. Read-only lookups no longer wait for ingestion's exclusive writer lock.
@@ -28,6 +75,8 @@
 
 
 ### Fixed: enforce local file and request boundaries (#6511)
+
+- Reported by Wu Jiaxuan (吴嘉炫). Tracked as [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf); affects every release before 0.12.933.
 
 - Workspace memory, skill-file and transcript filesystem endpoints compare resolved path components before file access. Workspace checks also run before cached memory reads. Symlinked roots remain supported, and links outside the selected root are refused.
 - Password-free local API access requires a direct loopback peer, a loopback Host and no forwarding headers. Authenticated reverse proxies retain access. Token bootstrap keeps its stricter local-only refusal contract.

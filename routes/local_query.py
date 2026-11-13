@@ -1376,12 +1376,15 @@ def http_local_method(method: str):
     operation = kwargs.get("operation")
     if method == "robotics_query" and not isinstance(operation, str):
         return jsonify({"error": "operation must be a string"}), 400
+    # Every detailed-trace operation is token-gated by its ``trace_`` prefix
+    # rather than by name. Naming them individually made this a second list to
+    # keep in step with the private package's own ``OPERATIONS``, and a read
+    # added there but not here was served without the daemon's private token.
+    # A prefix fails closed: a new trace operation is gated the day it exists.
     if method in {"query_node_activity", "query_node_activity_live", "set_node_activity_preferences", "review_node_activity_event",
                   "query_asimov_runs", "query_asimov_events", "query_physical_ai_runs", "query_physical_ai_events"} or (
-            method == "robotics_query" and operation in {"guard_ack", "set_observation_only",
-                "trace_detail", "trace_events", "trace_spans", "trace_artifact", "trace_artifacts",
-                "trace_notes", "trace_guard_get", "trace_jobs",
-                "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share"}):
+            method == "robotics_query" and (operation.startswith("trace_")
+                or operation in {"guard_ack", "set_observation_only"})):
         # This Blueprint also exists on the dashboard. Its internal RPC route
         # must not bypass route authentication or local-origin/CSRF checks. Only
         # the actual daemon owns this private token; the dashboard has none.

@@ -1,6 +1,6 @@
-name: Red-team detection audit (daily)
+name: Red-team detection audit (weekly)
 
-# Every day: replay every publicly disclosed agent attack in
+# Every Monday: replay every publicly disclosed agent attack in
 # scripts/redteam/corpus/ against ClawMetry's own detectors and report what we
 # would MISS. The PR gate (ci.yml, "Red-team corpus") catches a regression a
 # change introduces; this catches the other direction -- a signature added to
@@ -9,7 +9,7 @@ name: Red-team detection audit (daily)
 # A MISS is filed as a `sec-gap` issue on the private tracker (product work on
 # closed detectors does not belong in the public repo). The script dedupes on a
 # fingerprint it prints into each issue body, so a standing gap is filed once,
-# not once a day.
+# not on every run.
 #
 # Safe to merge before REDTEAM_ISSUE_TOKEN exists: with no token the audit still
 # runs and the run is still red on a gap; only the filing step is skipped, and it
@@ -17,7 +17,7 @@ name: Red-team detection audit (daily)
 
 on:
   schedule:
-    - cron: "0 5 * * *"   # daily 05:00 UTC (an hour before the harness audit)
+    - cron: "0 5 * * 1"   # Monday 05:00 UTC (an hour before the harness audit)
   workflow_dispatch:
     inputs:
       file_issues:
@@ -109,7 +109,7 @@ jobs:
 
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: redteam-report
           path: redteam-report.json
