@@ -14,6 +14,15 @@ ids written as OTLP/JSON hex, string values over 300 chars truncated):
   * ``..._stream.json``   ``agent.py --thread support-42 --stream``
   * ``..._nothread.json`` ``agent.py``
 
+Those capture versions are history and are deliberately not rewritten when
+``PINS`` moves: the corpus has not been recaptured. It is named for the
+instrumentation version because that is what decides the wire shape, and this
+half of the guard asserts how the RECEIVER reads a recorded payload. What the
+currently pinned versions actually emit is re-proved on every run by the live
+half, ``scripts/verify_otel_recipe_langgraph.py``, against a real dashboard.
+Recapture when ``opentelemetry-instrumentation-langchain`` moves, not when
+langgraph does.
+
 What that instrumentation really sends, and why this file exists: the thread
 is stamped as ``gen_ai.conversation.id`` on the top ``invoke_agent`` span ONLY.
 The nine spans beneath it (both model calls with all the tokens, and the tool
@@ -58,7 +67,7 @@ APP = "invoice_agent"
 THREAD = "support-42"
 RUN_TOKENS = 120 + 18 + 160 + 9  # what the recipe's stub model reports per run
 PINS = {
-    "langgraph": "1.2.11",
+    "langgraph": "1.2.14",
     "langchain-core": "1.6.3",
     "opentelemetry-instrumentation-langchain": "0.62.3",
     "opentelemetry-sdk": "1.44.0",
