@@ -1,20 +1,8 @@
-name: Product record (8090 PRD before code)
+name: Product record (requirements before code)
 
-# FLYWHEEL.md section 0c: 8090 Software Factory is the product REVIEWER, not a
-# lint gate drift-bot enforces after the fact. The requirement is where a
-# change is justified; the blueprint is where it is designed; the code is
-# where it is built -- in that order.
-#
-# Burned 2026-08-25 (PRs #5163/#5165/#5167/#5172): all four were implemented
-# first and the Factory records written afterwards to turn drift-bot green.
-# Six rounds produced accurate mechanism and zero product context, and three
-# defects a reviewer would have caught went with them -- among them a
-# one-click irreversible data-deletion control with no confirmation. Nothing
-# in CI noticed, because nothing was looking.
-#
-# This does not judge whether the record is any GOOD -- it cannot, and
-# pretending otherwise would be theatre. It makes skipping the review a
-# sentence somebody typed instead of a step that quietly did not happen.
+# Require a portable product-record citation before a product change merges.
+# Independent review checks the actual criteria against the exact candidate.
+# Historical Factory citations remain accepted during migration.
 
 on:
   pull_request:
@@ -30,7 +18,7 @@ permissions:
 jobs:
   product-record:
     name: PR cites the product record that justified it
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

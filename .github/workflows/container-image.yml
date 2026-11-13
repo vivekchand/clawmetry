@@ -62,7 +62,7 @@ jobs:
   pr-image:
     name: Branch image (${{ matrix.arch }})
     if: github.event_name == 'pull_request'
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -105,7 +105,7 @@ jobs:
   publish:
     name: Publish signed image
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -249,7 +249,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: selfhosted-image-sbom
           path: sbom/
@@ -258,7 +258,7 @@ jobs:
   verify:
     name: Anonymous pull and verify (${{ matrix.arch }})
     needs: publish
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.runner }}
     timeout-minutes: 30
     # Read-only and no registry login anywhere in this job: the whole point is
     # to see what someone with no credentials sees.
@@ -295,7 +295,7 @@ jobs:
   pin:
     name: Propose the verified digest for Compose
     needs: [publish, verify]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -344,7 +344,7 @@ jobs:
 
           Opened with the workflow token, so checks do not start on their own: push an empty commit to this branch (or close and reopen) before merging.
 
-          Product record: https://factory.8090.ai/project/b415065f-ab2f-4f53-8864-0c009fd098cb/requirements/49529742-f381-4957-9abf-c92efe7b7d65
+          Product record: https://github.com/vivekchand/clawmetry-cloud/blob/main/docs/product-records/requirements/49529742-f381-4957-9abf-c92efe7b7d65.md
           EOF
           gh pr create --base main --head "$BRANCH" \
             --title "chore: pin self-hosted Compose to verified image v${VERSION}" \

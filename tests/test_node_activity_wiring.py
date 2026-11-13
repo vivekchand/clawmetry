@@ -121,9 +121,10 @@ def test_snapshot_uses_store_and_declares_remote_capability(relay):
     assert data["capabilities"]["remote_mutations"] is True
     source = (ROOT / "clawmetry/sync.py").read_text()
     assert '"nodeActivity": _build_node_activity_snapshot()' in source
-    # Collection precedes snapshot and its local-only early return.
+    # Independent collection starts before blocking startup/cloud work.
+    assert source.index("start_node_activity(_node_store.get_store(read_only=False)") < source.index("    # Tail existing local Asimov")
     loop = source[source.index("    while True:", source.index("last_git_scan = 0.0")):]
-    assert loop.index("tick_node_activity(") < loop.index("sync_system_snapshot(")
+    assert "tick_node_activity(" not in loop
 
 
 def test_tab_is_live_node_wide_and_routes_registered():
@@ -357,3 +358,17 @@ def test_real_store_claim_retention_does_not_weaken_unclaimed_expiry(real_relay)
     h.deliver(h.request(request_id="b" * 32, preferences={"enabled": True}))
     assert len(h.results) == 3 and h.results[-1]["applied"] is True
     assert set(json.loads(h.stores[0].get_node_setting("node_activity.request_ids"))) == {"b" * 32}
+
+
+def test_sealed_live_view_renews_ephemeral_lease_without_saving_preferences(relay, monkeypatch):
+    from clawmetry import node_activity_service as service
+    store, send, _ = relay
+    touched = []
+    monkeypatch.setattr(service, 'touch_node_activity_view', lambda **kw: touched.append(kw))
+    result = send({'operation':'live'}, drop_preferences=True)
+    assert result['ok'] and result['applied'] and result['live']
+    assert result['saved'] is False
+    assert touched == [{'remote':True}]
+    assert store.preferences == {'enabled':True}
+    assert send({'operation':'live'},drop_preferences=True) is result
+    assert len(touched) == 1, 'Duplicate encrypted delivery cannot renew the lease again'

@@ -11,10 +11,78 @@ This isolated component check is not a release or hosted end-to-end proof.
 from pathlib import Path
 import json
 import threading
+import time
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_process_search_and_usage_component(_shared_chromium, tmp_path, width):
+    """Isolated UI contract with sample data, not live collector evidence.
+
+    AC-OBS-NODE-SEARCH-001.1
+    AC-OBS-NODE-SEARCH-001.2
+    AC-OBS-NODE-SEARCH-001.3
+    AC-OBS-NODE-SEARCH-002.2
+    AC-OBS-NODE-SEARCH-002.3
+    """
+    now = int(time.time() * 1000)
+    payload = {"available": True, "collected_at": now, "summary": {}, "events": [],
+               "coverage": {"processes": {"state": "partial"}}, "preferences": {},
+               "processes": [{"pid": i + 1, "name": "worker-" + str(i), "cpu_percent": 205 - i,
+                              "observed_at": now, "stale": False} for i in range(205)]}
+    payload["processes"].append({"pid": 9876, "name": "python3.12", "clawmetry_role": "collector",
+                                 "cpu_percent": 0, "cpu_interval_seconds": 30, "memory_bytes": 1048576,
+                                 "observed_at": now, "stale": False})
+    css = (ROOT / "clawmetry/static/css/dashboard.css").read_text() + (ROOT / "clawmetry/static/css/node-activity.css").read_text()
+    template = (ROOT / "clawmetry/templates/tabs/node-activity.html").read_text().replace('class="page"', 'class="page active"')
+    shell = '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + css + '</style><body style="padding:12px">' + template + '</body>'
+    context = _shared_chromium.new_context(viewport={"width": width, "height": 900})
+    try:
+        page = context.new_page()
+        errors, requests = [], []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        def respond(route):
+            requests.append(route.request.url)
+            route.fulfill(content_type="application/json", body=json.dumps(payload))
+        page.route("http://node.test/api/node-activity?limit=100", respond)
+        page.route("http://node.test/", lambda route: route.fulfill(content_type="text/html", body=shell))
+        page.goto("http://node.test/")
+        page.evaluate("window._cmCurrentTab='node-activity'")
+        page.add_script_tag(content=(ROOT / "clawmetry/static/js/node-activity.js").read_text())
+        page.evaluate("loadNodeActivity()")
+        assert "ClawMetry Collector" in page.locator("#na-clawmetry-processes").inner_text()
+        assert "0%" in page.locator("#na-clawmetry-processes").inner_text()
+        assert page.locator("#na-processes tbody tr").count() == 100
+        page.get_by_role("button", name="Next process page").click()
+        page.get_by_role("button", name="Next process page").click()
+        assert "worker-204" in page.locator("#na-processes").inner_text()
+        search = page.get_by_role("searchbox", name="Search processes")
+        search.fill("WORKER-204")
+        assert page.locator("#na-processes tbody tr").count() == 1
+        assert "1 to 1 of 1" in page.locator("#na-process-results").inner_text()
+        search.fill("9876")
+        assert "ClawMetry Collector" in page.locator("#na-processes").inner_text()
+        search.fill("clawmetry")
+        assert "python3.12" in page.locator("#na-processes").inner_text()
+        assert len(requests) == 1, "Search and pages must not fetch observations"
+        page.locator("#na-refresh").click()
+        page.wait_for_function("!cmNodeActivity.getState().pending")
+        assert search.input_value() == "clawmetry"
+        assert page.locator("#na-processes tbody tr").count() == 1
+        search.fill("<img src=x onerror=alert(1)>")
+        assert "No matching processes" in page.locator("#na-processes").inner_text()
+        assert page.locator("#na-processes img").count() == 0
+        page.get_by_role("button", name="Clear", exact=True).click()
+        assert search.input_value() == ""
+        assert page.locator("#na-processes tbody tr").count() == 100
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.screenshot(path=str(tmp_path / ("process-search-" + str(width) + ".png")), full_page=True)
+        assert not errors
+    finally:
+        context.close()
 
 
 def test_node_activity_real_payload_at_narrow_width(_shared_chromium, tmp_path):
