@@ -410,7 +410,7 @@ def main() -> int:
         try:
             with _generation(spec) as (again, fonts_again, _unused):
                 corroborated = (again, fonts_again) == (generated, fonts)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt):
                 raise
             print(

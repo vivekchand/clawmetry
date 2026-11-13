@@ -103,7 +103,8 @@ def test_check_does_not_touch_the_checked_in_font_directory() -> None:
     def record(_spec, fonts_dir=None):
         # A real build writes the woff2 files here. Prove it is somewhere else.
         seen.append(fonts_dir)
-        open(os.path.join(fonts_dir, "manrope-latin.woff2"), "wb").write(b"stub")
+        with open(os.path.join(fonts_dir, "manrope-latin.woff2"), "wb") as fh:
+            fh.write(b"stub")
         return module._read_text(_spec["css_path"])
 
     module.build = record
