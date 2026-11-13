@@ -12,18 +12,39 @@ the in-memory state of the loader so the dashboard, ``clawmetry status``, and
 shell wrappers can read it directly. No entitlement check is required: knowing
 which plugins are loaded is diagnostic, not gated. Pure read.
 
-Blueprint: ``bp_extensions``.
+The ``navigation`` key is the seam the Physical AI switch arrives through.
+The registered endpoint names are handed to the plugin so it can confirm its
+own route is really registered before advertising it; that list is an
+existence check, never an access-control input. Anything able to register a
+``clawmetry.extensions`` entry point already executes code in this process,
+so the plugin is trusted here and the defence is against malformed data:
+``clawmetry/static/js/app.js`` takes at most eight entries, requires ``href``
+to match a rooted relative path, and truncates the label. A plugin that names
+a route the user cannot reach therefore renders a dead link, not an exposure.
+
+Blueprint: ``bp_extensions``. The decision above is recorded under
+"Decisions on the OSS seams this feature touches" in the SO-101 blueprint.
 """
 
 from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, current_app
+
+from clawmetry.physical_ai.catalog import hardware_navigation, workbench_navigation
 
 logger = logging.getLogger("clawmetry.routes.extensions")
 
 bp_extensions = Blueprint("extensions", __name__)
+
+
+def physical_ai_navigation(entries):
+    """Preserve a declared installed workbench, with a built-in fallback."""
+    navigation = entries if isinstance(entries, list) else []
+    if "physical_ai.physical_ai_page" not in current_app.view_functions:
+        return navigation, []
+    return workbench_navigation(navigation)
 
 
 @bp_extensions.route("/api/extensions", methods=["GET"])
@@ -33,6 +54,7 @@ def api_extensions():
     Response shape::
 
         {
+          "navigation":           [{"label": "Workbench", "href": "/workbench"}],
           "plugins":              ["clawmetry-pro", ...],
           "plugin_count":         1,
           "failed_plugins":       [{"name": "clawmetry-pro", "error": "..."}],
@@ -105,7 +127,12 @@ def api_extensions():
             probed = []
         events = list(_ext.registered_events())
         handler_counts = {evt: _ext.handler_count(evt) for evt in events}
+        navigation = _ext.call("ui.navigation", {"endpoints": list(current_app.view_functions)}, default=[])
+        navigation, advanced = physical_ai_navigation(navigation)
         return jsonify({
+            "navigation": navigation,
+            "physical_ai_hardware": hardware_navigation(),
+            **({"physical_ai_advanced": advanced} if advanced else {}),
             "plugins": plugins,
             "plugin_count": len(plugins),
             "failed_plugins": failed,
@@ -119,6 +146,8 @@ def api_extensions():
         logger.warning("extensions: introspection failed: %s", exc)
         return jsonify({
             "plugins": [],
+            "navigation": physical_ai_navigation([])[0],
+            "physical_ai_hardware": hardware_navigation(),
             "plugin_count": 0,
             "failed_plugins": [],
             "failed_plugin_count": 0,

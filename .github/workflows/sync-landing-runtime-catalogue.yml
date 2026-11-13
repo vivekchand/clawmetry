@@ -1,0 +1,23 @@
+name: Dispatch landing runtime catalogue sync
+on:
+  push:
+    branches: [main]
+    paths: [SUPPORTED_RUNTIMES.txt]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: landing-runtime-catalogue-sync
+  cancel-in-progress: true
+jobs:
+  dispatch:
+    if: github.repository == 'vivekchand/clawmetry'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Notify landing when the product catalogue changes
+        env:
+          GH_TOKEN: ${{ secrets.LANDING_DISPATCH_TOKEN || secrets.CLOUD_REPO_PAT }}
+        run: |
+          gh api --method POST repos/vivekchand/clawmetry-landing/dispatches \
+            -f event_type=runtimes-changed -f "client_payload[catalogue_sha]=$GITHUB_SHA" --silent

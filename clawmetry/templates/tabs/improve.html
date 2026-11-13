@@ -4,9 +4,9 @@
       <div class="cm-improve-hero-copy">
         <div class="cm-improve-kicker"><span class="cm-improve-flower" aria-hidden="true"></span>GUIDANCE LOOP</div>
         <h2>Turn repeated friction into better defaults</h2>
-        <p>ClawMetry watches for corrections, durable preferences, and repeated frustration across your agent conversations. Review the evidence before changing setup files.</p>
+        <p>Every card below is something <em>you</em> said to an agent: a correction, a preference, or the same frustration again. Press <strong>Investigate</strong> and the Assistant reads the sessions behind it. It reports what went wrong and which file to change.</p>
       </div>
-      <div class="cm-improve-hero-note"><strong>Read-only candidates</strong><span>No files change from this view.</span></div>
+      <div class="cm-improve-hero-note"><strong>Read-only candidates</strong><span>No files change from this view. Investigating only reads your sessions.</span></div>
     </section>
 
     <div class="cm-improve-summary" aria-label="Improve summary">
@@ -31,7 +31,7 @@
 
     <div class="cm-improve-capability" id="improve-capability-note">
       <span class="cm-improve-capability-dot" aria-hidden="true"></span>
-      <span>These are evidence-backed candidates. Review them in context before promoting a rule, skill, or instruction.</span>
+      <span>These are evidence-backed candidates. Investigate one to find the cause, then decide whether a rule, skill, or instruction should change.</span>
     </div>
 
     <section id="improve-list" class="cm-improve-list" aria-live="polite">
@@ -66,15 +66,16 @@
       <div>
         <div class="cm-improve-review-label">Signal profile</div>
         <div id="improve-review-profile" class="cm-improve-review-profile"></div>
-        <div class="cm-improve-review-label">Likely destination</div>
+        <div class="cm-improve-review-label">Where a fix would land</div>
         <div id="improve-review-destination" class="cm-improve-destination"></div>
         <div class="cm-improve-review-label cm-improve-review-label-next">Next step</div>
-        <p class="cm-improve-review-next">Inspect the relevant instruction, skill, command, agent, or hook in Setup before promoting a change.</p>
+        <p class="cm-improve-review-next">Investigate sends this evidence to the Assistant. It reads the sessions this signal came from. It reports what went wrong and which file to change. Nothing is written for you.</p>
       </div>
     </div>
     <div class="cm-improve-modal-actions">
       <button type="button" class="cm-improve-secondary-button" onclick="improveCloseReview()">Keep reviewing</button>
-      <button type="button" class="cm-improve-primary-button" onclick="improveOpenSetup()">Open Setup</button>
+      <button type="button" class="cm-improve-secondary-button" onclick="improveOpenSetup()">Browse Setup</button>
+      <button type="button" class="cm-improve-primary-button" onclick="improveInvestigateReviewed()">Investigate</button>
     </div>
   </section>
 </div>

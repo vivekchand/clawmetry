@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import sys
 from flask import Blueprint, jsonify, request
 
 from clawmetry.improve_candidates import _build_candidates, unavailable  # compatibility for callers/tests
@@ -33,11 +31,8 @@ def get_improve_candidates():
     node_id = request.args.get("node_id") or None
     # Hosted fallback must never inspect this container's local store. The
     # browser interceptor serves the node's encrypted snapshot in normal use.
-    dashboard = sys.modules.get("dashboard")
-    if (os.environ.get("CLAWMETRY_CLOUD", "").strip()
-            or os.environ.get("CLOUD_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-            or getattr(dashboard, "CLOUD_MODE", False)
-            or getattr(sys.modules.get("config"), "CLOUD_MODE", False)):
+    from helpers.node_store import running_in_cloud
+    if running_in_cloud():
         body = unavailable(days=days, runtime=runtime, node_id=node_id)
         body["reason"] = "missing_snapshot"
         return jsonify(body), 200

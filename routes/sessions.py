@@ -29,6 +29,8 @@ from datetime import datetime
 
 import csv
 from datetime import timezone
+from clawmetry.file_security import is_path_within
+
 from flask import Blueprint, jsonify, request, Response
 from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
@@ -532,9 +534,59 @@ def api_live_sessions():
         "working": sum(1 for s in live if s["state"] == "working"),
         "waiting": sum(1 for s in live if s["state"] == "waiting"),
     }
-    return jsonify({"sessions": live[:20], "counts": counts,
-                    "runtime": rt_filter or "all", "available": True,
-                    "_source": "local_store"})
+
+    # Ground truth: the process table. Everything above is inferred from how
+    # recently a transcript was WRITTEN, which is a proxy for "is it working"
+    # and fails in both the ways that matter. An agent mid-tool-call writes
+    # nothing for the length of the call, and the store only knows what the
+    # daemon has ingested. Founder report 2026-10-07: seven Claude Code
+    # processes were running, the newest last_active_at in the store was 6.1
+    # HOURS old, so every session classified "ended", and the hero said
+    # "It's idle right now." over a working machine with the daemon reporting
+    # itself healthy (daemon_age_seconds: 51, fresh: true) the entire time.
+    # "The daemon is alive" is not "the data is current", and we had been
+    # using the first to justify asserting the second.
+    #
+    # So ask the OS. ``live_sessions()`` is pid-backed, costs ~3ms cold and
+    # nothing warm, and carries the runtime, so it can be scoped like the
+    # rows above. When it sees agents the store does not, we KNOW the store
+    # is behind, and the honest answer is "we cannot tell", never "idle".
+    processes_live = None
+    try:
+        from clawmetry import process_control as _pc
+        procs = _pc.live_sessions() or []
+        if rt_filter:
+            procs = [p for p in procs
+                     if str((p or {}).get("runtime") or "").strip().lower() == rt_filter]
+        processes_live = len(procs)
+    except Exception:
+        processes_live = None       # unknown, which is not the same as zero
+
+    evidence_age = None
+    try:
+        ages = [s["age_seconds"] for s in live if s.get("age_seconds") is not None]
+        if ages:
+            evidence_age = int(min(ages))
+    except Exception:
+        evidence_age = None
+
+    # The store says nothing is live while real agent processes exist: our
+    # evidence is demonstrably behind reality, so refuse the realtime claim.
+    contradicted = bool(processes_live) and counts["working"] == 0
+
+    body = {
+        "sessions": live[:20], "counts": counts,
+        "runtime": rt_filter or "all",
+        "available": not contradicted,
+        "realtime": not contradicted,
+        "processes_live": processes_live,
+        "evidence_age_seconds": evidence_age,
+        "_source": "local_store",
+    }
+    if contradicted:
+        # Carry WHY, so the UI can say what is true instead of going quiet.
+        body["reason"] = "evidence_behind_processes"
+    return jsonify(body)
 
 
 def _filter_internal_sessions(rows: list) -> list:
@@ -652,7 +704,17 @@ def _fetch_sessions_table_rows(limit: int = 200):
     standard install runs daemon + dashboard as separate processes and
     DuckDB's exclusive lock blocks direct opens), then falls back to a
     direct ``get_store()`` open for single-process boots (tests + dev mode).
+
+    Returns ``None`` — "unknown", never ``[]`` — in the hosted container.
+    The fallback open SUCCEEDS there against a DuckDB no daemon ever wrote
+    to, so every caller got a confident empty list describing the container
+    rather than the user's machine. That is how app.clawmetry.com came to
+    say "It's idle right now." over a node that localhost:8900 showed hard
+    at work (founder report 2026-10-06). See :mod:`helpers.node_store`.
     """
+    from helpers.node_store import store_is_authoritative
+    if not store_is_authoritative():
+        return None
     # 1. Cross-process: ask the daemon over HTTP.
     try:
         from routes.local_query import local_store_via_daemon
@@ -5876,7 +5938,7 @@ def api_transcript(session_id):
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     # Sanitize path
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Transcript not found"}), 404
@@ -6112,7 +6174,7 @@ def api_transcript_events(session_id):
     )
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Transcript not found"}), 404
@@ -6460,7 +6522,7 @@ def api_session_model_journey(session_id):
     )
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Transcript not found"}), 404
@@ -6739,7 +6801,7 @@ def api_session_cost_breakdown(session_id):
     )
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Session not found"}), 404
@@ -7116,7 +7178,7 @@ def api_session_export(session_id):
     )
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Session not found"}), 404
@@ -7739,7 +7801,7 @@ def api_session_config_drift(sid):
     )
     path = os.path.join(sessions_dir, sid + ".jsonl")
     path = os.path.normpath(path)
-    if not path.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(path, sessions_dir):
         return jsonify({"error": "access denied"}), 403
     if not os.path.isfile(path):
         return jsonify({"sessionId": sid, "has_drift": False, "drift_count": 0, "drifts": []})
@@ -7872,7 +7934,7 @@ def api_session_lexical_drift(session_id):
         "~/.openclaw/agents/main/sessions"
     )
     fpath = os.path.normpath(os.path.join(sessions_dir, session_id + ".jsonl"))
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "access denied"}), 403
     if not os.path.isfile(fpath):
         return jsonify({"error": "session not found"}), 404
@@ -8703,7 +8765,7 @@ def api_session_intent_divergence(session_id):
     )
     path = os.path.join(sessions_dir, session_id + ".jsonl")
     path = os.path.normpath(path)
-    if not path.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(path, sessions_dir):
         return jsonify({"error": "access denied"}), 403
     if not os.path.isfile(path):
         return jsonify({
@@ -8830,11 +8892,15 @@ def api_session_intent_drift(session_id):
     # Filesystem fallback for local-only installs without a running daemon.
     try:
         import dashboard as _d
+        from werkzeug.security import safe_join
+
         sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
             "~/.openclaw/agents/main/sessions"
         )
-        path = os.path.normpath(os.path.join(sessions_dir, session_id + ".jsonl"))
-        if path.startswith(os.path.normpath(sessions_dir)) and os.path.isfile(path):
+        path = safe_join(sessions_dir, session_id + ".jsonl")
+        if path is None or not is_path_within(path, sessions_dir):
+            return jsonify({"error": "access denied"}), 403
+        if os.path.isfile(path):
             fs = _detect_intent_divergence(path)
             return jsonify({
                 "sessionId": session_id,

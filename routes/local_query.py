@@ -25,6 +25,7 @@ node_id ownership check).
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -203,6 +204,26 @@ def _coerce_args(shape: str, raw: dict) -> dict:
                 "node_id": raw["node_id"], "incident_id": raw.get("incident_id") or None,
                 "cursor": raw.get("cursor") or None, "event_id": raw.get("event_id") or None,
                 "limit": _safe_int(raw.get("limit"), default=100, lo=1, hi=200)}
+    if shape in ("physical_ai_runs", "physical_ai_events"):
+        from clawmetry.physical_ai.query_args import coerce_query_args
+        return coerce_query_args(shape, raw)
+    if shape == "robotics_runs":
+        return {"limit": _safe_int(raw.get("limit"), default=50, lo=1, hi=100),
+                "before_ns": raw.get("before_ns"), "before_run_id": raw.get("before_run_id")}
+    if shape == "robotics_events":
+        if not raw.get("run_id"):
+            raise ValueError("robotics_events requires run_id")
+        if type(raw.get("tail", False)) is not bool:
+            raise ValueError("robotics_events tail must be a boolean")
+        return {"run_id": raw["run_id"],
+                "before": raw.get("before"), "tail": raw.get("tail", False),
+                "after": _safe_int(raw.get("after"), default=0, lo=0, hi=1000000000),
+                "limit": _safe_int(raw.get("limit"), default=500, lo=1, hi=1000)}
+    if shape == "robotics_incidents":
+        if not isinstance(raw.get("run_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", raw["run_id"]):
+            raise ValueError("robotics_incidents requires a valid run_id")
+        return {"run_id": raw["run_id"], "before_ns": raw.get("before_ns"), "before_id": raw.get("before_id"),
+                "limit": _safe_int(raw.get("limit"), default=64, lo=1, hi=64)}
     if shape == "events":
         return {
             "session_id": raw.get("session_id"),
@@ -419,7 +440,7 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog", "robotics_runs", "robotics_events", "robotics_incidents", "physical_ai_runs", "physical_ai_events"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -745,6 +766,14 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    "query_asimov_runs",
+    "query_asimov_events",
+    "query_physical_ai_runs",
+    "query_physical_ai_events",
+    "robotics_query",
+    "robotics_runs",
+    "robotics_events",
+    "robotics_incidents",
     # `clawmetry maintenance rescrub-spans` (REQ-OBS-OTG-001): the operator's
     # explicit rescrub of spans stored before scrubbing existed. A dry run
     # unless apply=True; pages by span_id so each call stays bounded.
@@ -774,6 +803,11 @@ _DAEMON_METHODS = frozenset({
     "get_session_intent",
     "query_session_intents",
     "query_session_git_outcomes",
+    # Delivery attribution: the per-pull-request roll-up and one session's
+    # own artifact rows. Read by routes/attribution.py from the dashboard
+    # process while the daemon holds the writer lock.
+    "query_delivery",
+    "query_session_artifacts",
     "query_session_git_counts",
     # Runtime event counts. NemoClawAdapter.detect() used to run
     # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses
@@ -1309,6 +1343,10 @@ _DAEMON_METHODS = frozenset({
     "acknowledge_incident",
     # Agent supply chain inventory (#5947), read by /api/guard/inventory.
     "query_agent_inventory",
+    "query_node_activity",
+    "query_node_activity_live",
+    "set_node_activity_preferences",
+    "review_node_activity_event",
     "query_session_denials",
     "find_session_by_cwd",
     # Issue #5680 — onboarding ingest-status strip. Polled every 2 s by
@@ -1329,10 +1367,33 @@ def http_local_method(method: str):
             "error": f"method not allowed: {method!r}",
             "allowed": sorted(_DAEMON_METHODS),
         }), 400
-    body = request.get_json(silent=True) or {}
-    kwargs = body.get("kwargs") or {}
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "body must be an object"}), 400
+    kwargs = body.get("kwargs", {})
     if not isinstance(kwargs, dict):
         return jsonify({"error": "kwargs must be an object"}), 400
+    operation = kwargs.get("operation")
+    if method == "robotics_query" and not isinstance(operation, str):
+        return jsonify({"error": "operation must be a string"}), 400
+    # Every detailed-trace operation is token-gated by its ``trace_`` prefix
+    # rather than by name. Naming them individually made this a second list to
+    # keep in step with the private package's own ``OPERATIONS``, and a read
+    # added there but not here was served without the daemon's private token.
+    # A prefix fails closed: a new trace operation is gated the day it exists.
+    if method in {"query_node_activity", "query_node_activity_live", "set_node_activity_preferences", "review_node_activity_event",
+                  "query_asimov_runs", "query_asimov_events", "query_physical_ai_runs", "query_physical_ai_events"} or (
+            method == "robotics_query" and (operation.startswith("trace_")
+                or operation in {"guard_ack", "set_observation_only"})):
+        # This Blueprint also exists on the dashboard. Its internal RPC route
+        # must not bypass route authentication or local-origin/CSRF checks. Only
+        # the actual daemon owns this private token; the dashboard has none.
+        import hmac
+        from clawmetry.local_server import get_token
+        token = get_token()
+        provided = request.headers.get("Authorization", "")
+        if not token or not hmac.compare_digest(provided.encode("utf-8"), ("Bearer " + token).encode("utf-8")):
+            return jsonify({"error": "unauthorized"}), 401
     try:
         store = _store()
         fn = getattr(store, method)

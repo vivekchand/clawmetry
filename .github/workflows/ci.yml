@@ -19,7 +19,7 @@ concurrency:
 jobs:
   assessment-privacy:
     name: Assessment privacy (${{ matrix.os }}, Python ${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -56,7 +56,7 @@ jobs:
   # caught by running exactly what the publish path runs, on every PR.
   frontend-bundle:
     name: Frontend bundle (npm ci + vite build)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,7 +97,7 @@ jobs:
   # ── Fast syntax check (runs in ~10s, blocks everything else) ─────────────────────
   lint:
     name: Syntax & Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -260,7 +260,13 @@ jobs:
       # faults and never ran once -- so the watchdog for required-check config
       # was itself dead, silently, for months.
       - name: Every workflow file must parse
-        run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
+        run: python3 -m pytest tests/test_workflow_yaml_valid.py tests/ci/test_hosted_linux_image.py -q
+
+      # Report a bug: the dialog, its intake route and the GitHub bridge.
+      # Listed by name because the ratchet is right -- a test file no
+      # workflow names is a test that never runs.
+      - name: Report-a-bug dialog, route and GitHub bridge
+        run: python3 -m pytest tests/test_bug_report.py tests/test_bug_report_sync_script.py -q
 
       - name: English policy regression tests
         run: python3 -m pytest tests/test_english.py tests/test_english_inventory.py tests/test_english_js.py tests/test_english_browser_rendering.py tests/test_english_python.py tests/test_english_cli.py tests/test_insights_english.py tests/test_generated_english.py tests/test_deepeval_bridge.py tests/test_i18n_no_raw_codes.py -q
@@ -285,6 +291,22 @@ jobs:
       # #5744 fixed again here.
       - name: Workflow integrity (dead steps, unreachable triggers, input injection)
         run: python3 -m pytest tests/test_ci_workflow_invocations_are_real.py -q
+
+      # `launchctl bootstrap` fails on an already-registered label and the
+      # legacy `load -w` fallback fails while exiting 0, so a rewritten plist
+      # was never re-read: a daemon whose pinned interpreter lost the package
+      # could not be repaired by `clawmetry sync --restart`, and we printed a
+      # success line over it (2026-10-14, node dead ~5h). Only bootout ->
+      # bootstrap re-pins; `kickstart -k` restarts the stale definition.
+      - name: launchd re-pin needs bootout, and never fakes success
+        run: python3 -m pytest tests/test_launchd_repin_requires_bootout.py -q
+
+      # `launchctl kickstart -k` restarts the definition launchd already holds,
+      # so it can never repair a LaunchAgent pinned to an interpreter that lost
+      # the package -- the exact case the stalled-collector banner fires on.
+      # It advised that anyway, and produced 12 failed launches on a real node.
+      - name: Stalled-collector banner advises a command that can work
+        run: python3 -m pytest tests/test_stale_daemon_banner_advises_a_command_that_works.py -q
 
       # The 3.9 pip bootstrap pin cannot follow Dependabot past 26.0.1: 26.1
       # moved pip's Requires-Python to >=3.10, which the release canary's 3.9
@@ -498,7 +520,7 @@ jobs:
       - name: Merge gate self-test
         run: |
           python3 scripts/e2e_gate.py --list
-          python3 -m pytest tests/test_e2e_gate.py -q
+          python3 -m pytest tests/test_e2e_gate.py tests/test_queue_priority.py -q
 
       # Guard files must exist, must not be hollowed out, and the ratchets may
       # only move upward. This is the mechanical half of agent-proofing: it
@@ -658,6 +680,11 @@ jobs:
       - name: Runtime memory catalog
         run: python3 -m pytest tests/test_runtime_memory_catalog.py -q
 
+      - name: Setup file previews preserve bytes and reject binary text
+        run: |
+          python3 -m pytest tests/test_setup_file_preview.py -q
+          node --test tests/test_setup_file_preview.js
+
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) -- the
       # 2026-08-29 Windows "PyPI install failed" brick. Runs here because
@@ -760,7 +787,7 @@ jobs:
       # "GITHUB_TOKEN activity does not cascade" rule and, until now, was
       # referenced only in a comment and ran in NO job at all.
       - name: A release actually reaches the cloud
-        run: python3 -m pytest tests/test_release_dispatches_cloud_deploy.py tests/test_release_canary_reachable.py -q
+        run: python3 -m pytest tests/test_release_dispatches_cloud_deploy.py tests/test_release_canary_reachable.py tests/test_release_checkout.py -q
 
       # `runtime` on a sub-agent record is the runtime's NAME. It used to hold
       # a formatted duration, which made the generic client resolver read "12m"
@@ -859,6 +886,9 @@ jobs:
       # reached `state["last_sync"] = ...`, and since the next cycle reloads
       # the same on-disk state, one bad source froze last_sync forever while
       # the separate heartbeat thread kept reporting the daemon as alive.
+      - name: File containment and direct loopback authentication
+        run: python3 -m pytest tests/test_file_boundaries.py -q --tb=short
+
       - name: Email sign-in preserves the linked account and opens the dashboard
         run: python3 -m pytest tests/test_signin_owner_not_rebound.py tests/test_verify_otp_opens_dashboard.py tests/test_verify_otp_rail_selection.py tests/test_auth_detected_token.py tests/test_login_overlay_fetches_real_routes.py -q
 
@@ -889,7 +919,7 @@ jobs:
   api-tests:
     name: API Tests (${{ matrix.os }})
     needs: lint
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     # Trial-end hard block is default-ON in code (clawmetry/trial_enforcement.py).
     # CI has no license file, so every non-allowlisted request would 402 and the
     # dashboard readiness probe would time out. These jobs test unrelated
@@ -929,6 +959,24 @@ jobs:
         run: >-
           pip install --require-hashes
           -r .github/requirements/ci-api-tests.txt
+
+      # The desktop-notification backends are per-OS by definition, and the
+      # suite that covers them runs only on ubuntu in moat-tests, where every
+      # platform branch is reached through a monkeypatched sys.platform. That
+      # proves the argv we build and nothing about the host: notably
+      # _windows_powershell() resolving a real powershell.exe, which is the
+      # one thing standing between a Windows user and no alert at all.
+      # Running the same file on all three runners costs a second and is the
+      # only place this code ever executes natively on Windows or macOS.
+      - name: Trial recovery and license writer races (native, all three OS)
+        timeout-minutes: 3
+        run: |
+          pip install --require-hashes -r .github/requirements/ci-trial-recovery.txt
+          python3 -m pytest tests/test_trial_extension.py tests/test_license_write_races.py -q --tb=short
+
+      - name: Desktop notification backends (native, all three OS)
+        timeout-minutes: 3
+        run: python3 -m pytest tests/test_desktop_notify_clickable.py -q --tb=short
 
       - name: Assistant Windows process-tree cancellation
         if: runner.os == 'Windows'
@@ -987,7 +1035,7 @@ jobs:
         # -m 'not quarantine': skip any tests listed in tests/quarantine.txt
         # (marked by conftest.py:pytest_collection_modifyitems via quarantine.txt).
         # Quarantined tests still run daily in quarantine-sweep.yml.
-        run: python3 -m pytest tests/test_api.py -v --tb=short -m 'not quarantine'
+        run: python3 -m pytest tests/test_api.py tests/test_file_boundaries.py -v --tb=short -m 'not quarantine'
 
   # ── MOAT verifier (hermetic, hard-fail) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
@@ -1000,7 +1048,7 @@ jobs:
   moat-tests:
     name: MOAT Verifier (72 tests)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1014,6 +1062,9 @@ jobs:
           pip install --require-hashes
           -r .github/requirements/ci-tests.txt
           -r .github/requirements/ci-assistant-tls.txt
+      - name: Epoch ingestion and local-calendar cost queries
+        timeout-minutes: 3
+        run: python3 -m pytest tests/test_epoch_day_bucket.py tests/test_day_bucket_local.py -q --tb=short
       - name: Verify assistant analytics and dashboard persistence
         run: >-
           python3 -m pytest -q --tb=short
@@ -1037,8 +1088,17 @@ jobs:
           tests/test_improve_candidates.py
           tests/test_improve_snapshot.py
           tests/test_improve_frontend.py
+          tests/test_improve_investigate.py
           tests/test_runtime_memory_sync.py
           tests/test_setup_improve_surfaces.py
+      - name: Verify node observation, governance and browser lifecycle
+        run: >-
+          python3 -m pytest --noconftest -q --tb=short
+          tests/test_node_activity.py
+          tests/test_node_activity_collector_clarity.py
+          tests/test_node_process_search.py
+          tests/test_node_activity_wiring.py
+          tests/test_node_activity_frontend.py
       - name: Verify shared secret redaction and its persistence boundary
         run: python3 -m pytest tests/test_redaction.py -q --tb=short
       - name: Run MOAT verifier suite
@@ -1129,6 +1189,7 @@ jobs:
             tests/test_activity_heatmap_runtime_scope.py \
             tests/test_cost_optimizer_route_honesty.py \
             tests/test_cost_optimizer_snapshot_slice.py \
+            tests/test_snapshot_slices_are_not_silent.py \
             tests/test_cost_basis_labels.py \
             tests/test_provenance.py \
             tests/test_provenance_render_coverage.py \
@@ -1185,6 +1246,7 @@ jobs:
             tests/test_fleet_install.py \
             tests/test_detector_incident_delivery.py \
             tests/test_blocked_agent_always_notifies.py \
+            tests/test_desktop_notify_clickable.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
             tests/test_detectors.py \
             tests/test_incident_lifecycle.py tests/test_activity_replay.py tests/test_activity_live_client.py \
@@ -1218,6 +1280,12 @@ jobs:
             tests/test_needs_you_matches_the_hero.py \
             tests/test_live_session_truth.py \
             tests/test_live_sessions_all_runtimes.py \
+            tests/test_scoped_hero_names_the_runtime.py \
+            tests/test_hero_refuses_unbacked_realtime_claim.py \
+            tests/test_snapshot_carries_process_liveness.py \
+            tests/test_assistant_invites_the_next_question.py \
+            tests/test_auto_update_claim_matches_reality.py \
+            tests/test_cloud_never_claims_idle.py \
             tests/test_needs_you_ui_contract.py \
             tests/test_overview_claims_are_evidenced.py \
             tests/test_obs_gap_nemoclaw_vllm_5579.py \
@@ -1234,6 +1302,8 @@ jobs:
             tests/test_project_attribution_budgets.py \
             tests/test_crons_local_store.py \
             tests/test_pr_provenance.py \
+            tests/test_delivery_attribution.py \
+            tests/test_list_oss_routes.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
@@ -1255,7 +1325,7 @@ jobs:
   store-invariants:
     name: Store invariants (property-based)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1311,7 +1381,7 @@ jobs:
   entitlement-tests:
     name: Entitlement API tests
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1348,7 +1418,7 @@ jobs:
   compression-safety:
     name: Compression Safety Eval (Tier-1)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1384,7 +1454,7 @@ jobs:
   redteam-corpus:
     name: Red-team corpus (disclosed attacks)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1460,7 +1530,7 @@ jobs:
   otlp-receiver:
     name: OTLP receiver (with otel extra)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1517,7 +1587,7 @@ jobs:
   otel-recipe-langgraph:
     name: OTel recipe (LangGraph + OpenLLMetry)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
       CLAWMETRY_HARD_BLOCK: '0'
@@ -1577,7 +1647,7 @@ jobs:
   selfhosted-server:
     name: Self-hosted server (container auth + persistence)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1618,7 +1688,7 @@ jobs:
   moat-keystone:
     name: MOAT Keystone (13-endpoint bar)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -1712,7 +1782,7 @@ jobs:
   e2e-critical:
     name: E2E Browser Tests (critical subset)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     # Trial-end hard block is default-ON in code -- see api-tests job.
     env:
@@ -1793,6 +1863,8 @@ jobs:
             tests/test_e2e.py::TestTabsLoad \
             tests/test_e2e_oss_all_tabs.py \
             tests/test_assistant_evidence_browser.py \
+            tests/test_node_activity_browser.py \
+            tests/test_trial_offer_browser.py \
             -v --tb=short -m 'not quarantine' \
             --junitxml=/tmp/junit-e2e-critical.xml
 
@@ -1809,7 +1881,7 @@ jobs:
   pip-install:
     name: pip install (${{ matrix.os }}, py${{ matrix.python-version }})
     needs: lint
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -1892,7 +1964,7 @@ jobs:
   wheel-install:
     name: Wheel install & asset presence
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1991,7 +2063,7 @@ jobs:
   eval-suite:
     name: Eval Suite Gate (Phase 2 evals)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2087,7 +2159,7 @@ jobs:
   live-openclaw-e2e:
     name: Live OpenClaw E2E (real gateway + real send-message)
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # NON-BLOCKING for now. OpenClaw harness setup in CI is an open
     # follow-up (see PR #1549 debug-team thread + comment from author).

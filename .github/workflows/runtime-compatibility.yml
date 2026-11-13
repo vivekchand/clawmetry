@@ -1,0 +1,248 @@
+name: Runtime compatibility (OSS and Pro)
+run-name: Runtime compatibility ${{ github.event.client_payload.pro_sha || inputs.pro_sha || 'main' }} [${{ github.event.client_payload.request_id || github.run_id }}]
+
+on:
+  repository_dispatch:
+    types: [pro-runtime-compatibility]
+  workflow_dispatch:
+    inputs:
+      pro_sha:
+        description: Exact Pro candidate SHA, or main to resolve once
+        type: string
+        default: main
+      force:
+        description: Retest even when identical inputs passed previously
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - clawmetry/**/*.py
+      - tests/test_*adapter*.py
+      - tests/test_openclaw_list_events.py
+      - tests/test_openclaw_replay_events.py
+      - tests/fixtures/runtimes/**
+      - .gitattributes
+      - setup.py
+      - requirements*.txt
+      - pyproject.toml
+      - setup.cfg
+      - SUPPORTED_RUNTIMES.txt
+      - scripts/ci/runtime_compatibility.py
+      - scripts/ci/local_runtime_dispatch.py
+      - tests/ci/test_runtime_compatibility.py
+      - tests/ci/test_local_runtime_dispatch.py
+      - .github/workflows/runtime-compatibility.yml
+  pull_request:
+    paths:
+      - scripts/ci/runtime_compatibility.py
+      - scripts/ci/local_runtime_dispatch.py
+      - tests/ci/test_runtime_compatibility.py
+      - tests/ci/test_local_runtime_dispatch.py
+      - .github/workflows/runtime-compatibility.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-compatibility-${{ github.event_name == 'repository_dispatch' && 'pro' || 'oss' }}-${{ github.event.client_payload.pull_request || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Runtime selection and confidentiality guards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests/ci -p test_runtime_compatibility.py -v
+      - run: python -m unittest discover -s tests/ci -p test_local_runtime_dispatch.py -v
+
+  plan:
+    if: github.repository == 'vivekchand/clawmetry' && github.event_name != 'pull_request'
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      pro_sha: ${{ steps.pro.outputs.sha }}
+      runtimes: ${{ steps.plan.outputs.runtimes }}
+      fingerprint: ${{ steps.plan.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          path: oss
+      - name: Resolve exact private candidate
+        id: pro
+        env:
+          GH_TOKEN: ${{ secrets.PRO_REPO_READ_TOKEN || secrets.CLOUD_REPO_PAT }}
+          PRO_REF: ${{ github.event.client_payload.pro_sha || inputs.pro_sha || 'main' }}
+        run: |
+          if [[ "$PRO_REF" != main && ! "$PRO_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::Pro candidate must be an exact commit SHA or main.'
+            exit 1
+          fi
+          cm_sha=$(gh api "repos/vivekchand/clawmetry-pro/commits/$PRO_REF" --jq .sha)
+          [[ "$cm_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$cm_sha" >> "$GITHUB_OUTPUT"
+      - name: Fetch candidate with private checkout logs
+        env:
+          PRO_REPO_READ_TOKEN: ${{ secrets.PRO_REPO_READ_TOKEN || secrets.CLOUD_REPO_PAT }}
+          PRO_SHA: ${{ steps.pro.outputs.sha }}
+        run: |
+          python oss/scripts/ci/runtime_compatibility.py checkout --oss oss --pro pro \
+            --sha "$PRO_SHA" --private-logs "$RUNNER_TEMP/private-runtime-logs" --output candidate.json
+      - name: Select runtimes from changed inputs
+        id: plan
+        env:
+          PRO_BASE: ${{ github.event.client_payload.base_sha }}
+          OSS_BASE: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          base = os.environ.get('PRO_BASE') or os.environ.get('OSS_BASE')
+          root = 'pro' if os.environ.get('PRO_BASE') else 'oss'
+          if base and re.fullmatch('[0-9a-f]{40}', base):
+              diff = subprocess.run(['git', '-C', root, 'diff', '--name-only', '-z', base, 'HEAD'], capture_output=True)
+              if diff.returncode == 0:
+                  Path('changed.json').write_text(json.dumps([x.decode() for x in diff.stdout.split(b'\0') if x]))
+          PY
+          cm_changed=()
+          if [ -f changed.json ]; then cm_changed=(--changed changed.json); fi
+          python oss/scripts/ci/runtime_compatibility.py plan --oss oss --pro pro \
+            "${cm_changed[@]}" --output runtime-selection.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          plan = json.loads(Path('runtime-selection.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('runtimes=' + json.dumps(plan['runtimes']) + '\n')
+              f.write('fingerprint=' + plan['fingerprint'] + '\n')
+          print(f"Selected {len(plan['runtimes'])} of {plan['catalogue_count']} catalogue runtimes")
+          PY
+      # This artifact contains public runtime IDs and hashes only. Never upload
+      # the private checkout, wheel, fixtures, raw logs or raw JUnit reports.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: runtime-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: runtime-selection.json
+          retention-days: 1
+      - name: Remove private planning files
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          shutil.rmtree('pro', ignore_errors=True)
+          shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'private-runtime-logs', ignore_errors=True)
+          PY
+
+  compatibility:
+    needs: plan
+    if: needs.plan.outputs.runtimes != '[]'
+    name: Runtime fixture and adapter tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - name: Identify the actual OS image and Python patch version
+        id: environment
+        run: |
+          python - <<'PY'
+          import hashlib, os, platform
+          identity = '\n'.join([os.environ.get('ImageOS', ''), os.environ.get('ImageVersion', ''),
+                                platform.platform(), platform.python_version(), platform.machine()])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('identity=' + hashlib.sha256(identity.encode()).hexdigest() + '\n')
+          PY
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: success
+        with:
+          path: ${{ runner.temp }}/runtime-success
+          key: runtime-compat-v2-${{ matrix.os }}-${{ steps.environment.outputs.identity }}-${{ needs.plan.outputs.fingerprint }}-${{ github.event_name == 'workflow_dispatch' && inputs.force && format('{0}-{1}', github.run_id, github.run_attempt) || 'reuse' }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.success.outputs.cache-hit != 'true'
+        with:
+          persist-credentials: false
+          path: oss
+      - name: Fetch candidate with private checkout logs
+        if: steps.success.outputs.cache-hit != 'true'
+        env:
+          PRO_REPO_READ_TOKEN: ${{ secrets.PRO_REPO_READ_TOKEN || secrets.CLOUD_REPO_PAT }}
+          PRO_SHA: ${{ needs.plan.outputs.pro_sha }}
+        run: |
+          python oss/scripts/ci/runtime_compatibility.py checkout --oss oss --pro pro \
+            --sha "$PRO_SHA" --private-logs "$RUNNER_TEMP/private-runtime-logs" --output candidate.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: steps.success.outputs.cache-hit != 'true'
+        with:
+          name: runtime-selection-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Install exact candidate wheel with private build logs
+        if: steps.success.outputs.cache-hit != 'true'
+        run: |
+          python oss/scripts/ci/runtime_compatibility.py prepare --oss oss --pro pro \
+            --private-logs "$RUNNER_TEMP/private-runtime-logs" --output candidate-wheel.json
+      - name: Test selected runtime adapters and report sanitized outcomes
+        if: steps.success.outputs.cache-hit != 'true'
+        run: |
+          python oss/scripts/ci/runtime_compatibility.py run --oss oss --pro pro \
+            --selection runtime-selection.json --private-logs "$RUNNER_TEMP/private-runtime-logs" \
+            --output runtime-results.json
+          mkdir -p "$RUNNER_TEMP/runtime-success"
+          printf 'verified\n' > "$RUNNER_TEMP/runtime-success/passed"
+      - name: Remove private candidate files
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          shutil.rmtree('pro', ignore_errors=True)
+          shutil.rmtree(Path(os.environ['RUNNER_TEMP']) / 'private-runtime-logs', ignore_errors=True)
+          PY
+
+  result:
+    name: OSS runtime compatibility
+    if: always() && github.event_name != 'pull_request'
+    needs: [plan, compatibility]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Record the result on the exact Pro candidate
+        env:
+          GH_TOKEN: ${{ secrets.PRO_STATUS_TOKEN || secrets.CLOUD_REPO_PAT }}
+          PRO_SHA: ${{ needs.plan.outputs.pro_sha || github.event.client_payload.pro_sha }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          MATRIX_RESULT: ${{ needs.compatibility.result }}
+          RUNTIMES: ${{ needs.plan.outputs.runtimes }}
+          EVENT_NAME: ${{ github.event_name }}
+          LOCAL_BRIDGE: ${{ github.event.client_payload.local_bridge }}
+        run: |
+          cm_state=failure
+          if [ "$PLAN_RESULT" = success ] && { [ "$MATRIX_RESULT" = success ] || [ "$RUNTIMES" = '[]' ]; }; then
+            cm_state=success
+          fi
+          if [ "$EVENT_NAME" = repository_dispatch ] && [ "$LOCAL_BRIDGE" != true ] && [[ "$PRO_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            gh api --method POST "repos/vivekchand/clawmetry-pro/statuses/$PRO_SHA" \
+              -f "state=$cm_state" -f 'context=OSS runtime compatibility' \
+              -f "target_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              -f 'description=Cross-platform runtime fixture and adapter validation' --silent
+          fi
+          [ "$cm_state" = success ]

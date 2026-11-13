@@ -80,7 +80,8 @@ def _fallback_repo() -> "str | None":
     a scan yet"; the card is served from the daemon's ``repoReadiness``
     snapshot slice, scanned where the agents actually run.
     """
-    if os.environ.get("CLAWMETRY_CLOUD", "").strip():
+    from helpers.node_store import running_in_cloud
+    if running_in_cloud():
         return None
     from clawmetry import repo_readiness
     try:
