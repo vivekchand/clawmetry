@@ -449,7 +449,16 @@ def _finding_scope_keys(sessions, signal, details):
             continue
         runtime = _observe_only_runtime(session) or _session_runtime(sid, session.get("agent_type") or "")
         key = (str(session.get("node_id") or ""), runtime, sid)
-        if (not signal_runtime or runtime == signal_runtime) and (node is None or key[0] == node):
+        # On the OSS tier, waste_flags.runtime_from_session_id returns
+        # 'openclaw' for every session regardless of its actual runtime.
+        # Accept a match when signal_runtime equals the session's stored
+        # agent_type column, so a 'codex' signal is not discarded because
+        # the id-prefix resolver resolved it to 'openclaw'.
+        agent_type = str(session.get("agent_type") or "").strip().lower()
+        runtime_ok = (not signal_runtime
+                      or runtime == signal_runtime
+                      or agent_type == signal_runtime)
+        if runtime_ok and (node is None or key[0] == node):
             matches.add(key)
     # Older projections have no node. Preserve a unique match but do not
     # choose among collisions, or display one finding on several nodes.
