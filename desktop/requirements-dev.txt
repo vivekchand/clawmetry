@@ -45,4 +45,4 @@ pyinstaller>=6.22.3
 # has NO configured CA bundle and every HTTPS POST from the shell
 # fails CERTIFICATE_VERIFY_FAILED (support 2026-08-12 "Send code").
 certifi>=2026.7.22
-truststore>=0.10; python_version >= "3.10"
+truststore>=0.10.5; python_version >= "3.10"
