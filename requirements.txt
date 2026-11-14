@@ -6,7 +6,7 @@ certifi>=2024.7.4  # CA bundle: the trust-store fallback for 3.8/3.9 and for any
 zstandard>=0.25.0; python_version < "3.14"  # decodes OpenClaw 2026.9.x zstd transcript events (stdlib from 3.14)
 
 # Testing dependencies
-pytest>=9.1.1
+pytest>=9.2.0
 pytest-playwright>=0.9.0
 requests>=2.34.2
 
