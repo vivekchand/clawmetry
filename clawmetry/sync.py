@@ -280,9 +280,39 @@ def _lock_holder_verdict(rec, pid_path: Path = None) -> tuple:
     try:
         hb = _lock_heartbeat_file()
         if hb.exists():
-            age = time.time() - hb.stat().st_mtime
-            if age > _lock_stale_secs():
-                return "wedged", f"no_heartbeat_for_{int(age)}s"
+            hb_age = time.time() - hb.stat().st_mtime
+            if hb_age > _lock_stale_secs():
+                return "wedged", f"no_heartbeat_for_{int(hb_age)}s"
+            # Heartbeat is fresh: the daemon is alive and scheduling.
+            # But if its ingest loop has been stuck for the full stall
+            # window, treat it as wedged so the supervisor can recover.
+            # Three guards prevent false positives:
+            # 1. hb_age < 60 — within two heartbeat ticks; a machine
+            #    waking from long sleep would have a stale heartbeat too,
+            #    so "fresh heartbeat + stale sync" means the daemon is
+            #    genuinely running but stuck, not just waking up.
+            # 2. pid_path mtime > _STALLED_INGEST_SECS old — the daemon
+            #    wrote the lock file long enough ago for a stall to be
+            #    real; a daemon that just started hasn't had time yet.
+            # 3. last_sync is not None — None means no cycle has ever
+            #    completed (first-run backfill in progress), not a stall.
+            if hb_age < 60 and pid_path is not None:
+                try:
+                    lock_age = time.time() - pid_path.stat().st_mtime
+                    if lock_age > _STALLED_INGEST_SECS:
+                        raw = json.loads(STATE_FILE.read_text()).get("last_sync")
+                        if raw:
+                            ts = datetime.fromisoformat(
+                                str(raw).strip().replace("Z", "+00:00"))
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
+                            sync_age = (datetime.now(timezone.utc).timestamp()
+                                        - ts.timestamp())
+                            if sync_age >= 0 and sync_age > _STALLED_INGEST_SECS:
+                                return ("wedged",
+                                        f"ingest_stalled_for_{int(sync_age)}s")
+                except Exception:
+                    pass
     except OSError:
         pass
     return "held", "daemon_running"
