@@ -1,4 +1,5 @@
 # Hash-pinned install set for the LiteLLM proxy in .github/workflows/litellm-gateway.yml.
+# (re-verified 2026-11-14: litellm==1.88.6 hashes confirmed against PyPI)
 #
 # Direct requirements: litellm[proxy]==1.88.6 prisma==0.11.0
 #   opentelemetry-api==1.44.0 opentelemetry-sdk==1.44.0
