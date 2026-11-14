@@ -266,6 +266,15 @@ def _lock_holder_verdict(rec, pid_path: Path = None) -> tuple:
         if not ok:
             # Alive, but not the process that took the lock: recycled number.
             return "stale", f"pid_recycled({why})"
+        # Defence-in-depth against PID reuse within the tolerance window
+        # (field-failure #6553, daemon_lock_refused on Linux py3.12). A
+        # recycled PID can share the daemon's start epoch by chance (the
+        # tolerance is 3s to cover lstart's 1s resolution). A positively-
+        # foreign cmdline is proof of recycling even after the token matched.
+        # "unknown" (psutil absent, CIM timeout) is left unchanged so a
+        # healthy daemon is never shot when the cmdline cannot be read.
+        if _holder_cmdline_verdict(int(pid)) == "foreign":
+            return "stale", f"pid_recycled(cmdline_mismatch_despite_start:{why})"
     elif pid_path is not None and _started_after_the_lock(int(pid), pid_path):
         # It cannot have written a file that predates it.
         return "stale", "pid_recycled(started_after_lock)"
