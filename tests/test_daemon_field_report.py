@@ -313,3 +313,32 @@ def test_the_stall_check_never_raises(monkeypatch):
     monkeypatch.setattr(fr, "last_sync_age_secs",
                         lambda: (_ for _ in ()).throw(RuntimeError("boom")))
     sync._report_if_ingest_stalled()  # must not raise
+
+
+def test_stall_not_reported_when_cycle_runs_despite_stale_disk(home, monkeypatch, sent):
+    """A persistent save_state() failure must not produce a false stall report.
+
+    The main loop updates _STALL_WATCH directly before save_state(), so the
+    watchdog's timer resets every cycle regardless of disk I/O. Without this fix
+    (#6513), a node whose disk was full or whose ~/.clawmetry/ had wrong permissions
+    would fire daemon_ingest_stalled even though ingest was running fine.
+    """
+    import datetime as dt
+    import clawmetry.sync as sync
+
+    # Disk has a stale timestamp (simulating persistent save_state failure)
+    _state(home, monkeypatch, "2026-09-08T19:32:21+00:00")
+
+    # Main loop completed and updated _STALL_WATCH directly (the fix):
+    # state["last_sync"] = now; _STALL_WATCH["last_sync"] = same value
+    fresh_ts = dt.datetime.now(dt.timezone.utc).isoformat()
+    sync._STALL_WATCH["last_sync"] = fresh_ts
+    sync._STALL_WATCH["since_mono"] = 7170.0
+
+    # Watchdog fires 30 s after the cycle completed: wall age looks huge
+    # (the stale disk stamp is hours old) but _STALL_WATCH has the real ts.
+    monkeypatch.setattr(sync.time, "monotonic", lambda: 7200.0)
+    sync._report_if_ingest_stalled()
+
+    # Stale disk + running cycle = no stall report
+    assert sent == []
