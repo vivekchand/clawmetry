@@ -80,7 +80,7 @@ REQUIRED_CHECKS: list[tuple[str, str]] = [
     ("clawmetry",         "E2E Gate (required)"),
     ("clawmetry-cloud",   "Cloud golden-path browser E2E"),
     ("clawmetry-landing", "Landing golden path (C3)"),
-    # drift-bot is deliberately NOT here. It is required, but it is aggregated
+    # Product-record validation is deliberately not a second context: it is aggregated
     # behind "E2E Gate (required)" in scripts/e2e_gate.py rather than named as a
     # second branch-protection context, because ADR-001 says protection names
     # exactly one context. Adding a second would make the merge gate and its own

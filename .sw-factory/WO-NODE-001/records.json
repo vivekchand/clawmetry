@@ -1,0 +1,7 @@
+{
+  "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
+  "requirement_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+  "blueprint_id": "72d9ec38-2671-4258-a5ad-ffe36c84b27c",
+  "category_note": "External API refuses locked Feature Blueprints. Feature composition is stored in writable Components category.",
+  "linked_feature_blueprint_id": "30fa3bd8-d322-4b39-8674-6a86d73fb229"
+}

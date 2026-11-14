@@ -13,7 +13,7 @@
 
 **エージェントは進捗がないまま何百回もツール呼び出しを行うことがあります。** ClawMetryは、コーディングエージェントが既に書き出しているセッションファイルを読み取り、タイムライン、ツール呼び出し、そしてランタイムが公開しているトークンとコストのデータを1つのビューにまとめます。これにより、順調に進んでいる長時間の実行と、詰まってしまっている実行を見分けられます。
 
-**33種類のAIエージェントランタイム**に対応 — Claude Code、OpenAI Codex、Hermes、OpenClaw、その他29種。エージェントフリート全体を1つのダッシュボードで。([完全なリスト](SUPPORTED_RUNTIMES.txt)、カタログから生成。)
+**32種類のAIエージェントランタイム**に対応 — Claude Code、OpenAI Codex、Hermes、OpenClaw、その他28種。エージェントフリート全体を1つのダッシュボードで。([完全なリスト](SUPPORTED_RUNTIMES.txt)、カタログから生成。)
 
 > 🌐 **言語を選択:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [もっと見る →](docs/i18n/)
 
@@ -40,11 +40,11 @@ pip install clawmetry && clawmetry
 出力を評価する前に知っておくべき制限が2つあります: ランタイムが公開するデータは大きく異なります(コストを一切公開しないものもあります — どのランタイムかは[マトリクス](docs/compatibility.md)に記載)、そして、動作を観察できることと、それを止められることは同じではありません([ランタイムごとに実際に使える制御機能](docs/APPROVALS.md))。
 
 
-## 33種のエージェントランタイムに対応
+## 32種のエージェントランタイムに対応
 
 **オープンソース版で無料:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**有料プランで:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**有料プランで:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 すべてのランタイムで同じダッシュボードが使えます。複数のランタイムを同時に実行していれば、ヘッダーのスイッチャーでどのタブもそのランタイムに合わせて切り替えられます。
 
@@ -68,7 +68,7 @@ SDKで独自のエージェントを構築した場合も、インターセプ�
 
 **ランタイムをまたいでコンテキストウィンドウの枯渇をどう扱っているか?**
 
-利用率のパーセンテージは、何で割っているかが正確であって初めて意味を持ちます。ClawMetryは、[読める・PRできるテーブル](clawmetry/context_windows.py)からプロバイダーごとにウィンドウサイズを決めており、Anthropic、OpenAI、Google、xAI、DeepSeek、Kimi、Qwen、Mistral、Llama、GLMを対象としています。33種すべてのランタイムを1社の基準で測ることはしません。これは重要です: 30万トークンのGPT-5ターンをAnthropicの20万トークン基準で評価すると「100%超、枯渇」と表示されますが、実際にはGPT-5の40万トークンの75%です。同じ基準では、実際には枯渇している13万トークンのDeepSeekターンが、安心できる65%として隠れてしまいます。
+利用率のパーセンテージは、何で割っているかが正確であって初めて意味を持ちます。ClawMetryは、[読める・PRできるテーブル](clawmetry/context_windows.py)からプロバイダーごとにウィンドウサイズを決めており、Anthropic、OpenAI、Google、xAI、DeepSeek、Kimi、Qwen、Mistral、Llama、GLMを対象としています。32種すべてのランタイムを1社の基準で測ることはしません。これは重要です: 30万トークンのGPT-5ターンをAnthropicの20万トークン基準で評価すると「100%超、枯渇」と表示されますが、実際にはGPT-5の40万トークンの75%です。同じ基準では、実際には枯渇している13万トークンのDeepSeekターンが、安心できる65%として隠れてしまいます。
 
 ウィンドウにはそれぞれ出典が記録されます: `model_table`、`explicit_marker`、`observed_floor`、またはモデルが不明な場合の正直な `default` です。推測で作られたゲージは、検索で作られたゲージと同じ権威を持って表示されることはありません。
 
@@ -78,7 +78,7 @@ ClawMetryが圧縮イベントを確認できるのは一部のランタイム�
 
 | 経路 | エージェントに加わる負荷 | デフォルト? |
 |---|---|---|
-| セッションファイルのtail監視(全33ランタイム) | **0**。別プロセスで動作し、エージェント内にClawMetryのコードは存在しない | オン |
+| セッションファイルのtail監視(全32ランタイム) | **0**。別プロセスで動作し、エージェント内にClawMetryのコードは存在しない | オン |
 | HTTPインターセプター(`CLAWMETRY_INTERCEPT=1`) | LLM呼び出し1回あたり **+0.44 ms**、5秒の呼び出しの0.009% | オフ |
 | プレツールフックゲート(ウォームキャッシュ) | ゲートされたツール呼び出し1回あたり **+44 ms**(インタープリタの基準値36 msに加えて) | オフ |
 | エンフォースメントプロキシ | LLM呼び出し1回あたり **+9.7 ms** | オフ |

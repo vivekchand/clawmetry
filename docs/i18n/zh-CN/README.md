@@ -16,7 +16,7 @@
 工具调用，以及运行时所暴露的 token 和成本数据，整合到一个
 视图中——这样你就能分辨一次正在推进的长时间运行，和一次卡住不动的长时间运行。
 
-支持**33 种 AI 智能体运行时**——Claude Code、OpenAI Codex、Hermes、OpenClaw 及其他 29 种。为你整个智能体舰队提供一个仪表盘。（[完整列表](SUPPORTED_RUNTIMES.txt)，由目录自动生成。）
+支持**32 种 AI 智能体运行时**——Claude Code、OpenAI Codex、Hermes、OpenClaw 及其他 28 种。为你整个智能体舰队提供一个仪表盘。（[完整列表](SUPPORTED_RUNTIMES.txt)，由目录自动生成。）
 
 > 🌐 **本文档语言版本：** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [更多 →](docs/i18n/)
 
@@ -47,11 +47,11 @@ pip install clawmetry && clawmetry
 能够阻止它（[每个运行时哪些控制是真实有效的](docs/APPROVALS.md)）。
 
 
-## 支持 33 种智能体运行时
+## 支持 32 种智能体运行时
 
 **在开源应用中免费：** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**付费计划：** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**付费计划：** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 每种运行时都用同一套仪表盘。同时运行多个运行时时，顶部的
 切换器会将每个标签页重新聚焦到其中一个运行时上。
@@ -81,7 +81,7 @@ pip install clawmetry && clawmetry
 会根据[一张你可以阅读并提交 PR 的表格](clawmetry/context_windows.py)
 按服务商确定窗口大小，覆盖 Anthropic、OpenAI、Google、xAI、
 DeepSeek、Kimi、Qwen、Mistral、Llama 和 GLM。它不会用某一家
-供应商的尺子去衡量全部 33 种运行时。这很重要：一次 300K 的 GPT-5
+供应商的尺子去衡量全部 32 种运行时。这很重要：一次 300K 的 GPT-5
 对话轮如果拿 Anthropic 的 200K 去衡量，会显示">100%，已爆满"，
 而实际上它只是 GPT-5 的 400K 窗口的 75%。同一把尺子也会把一次
 确实已溢出的 130K DeepSeek 对话轮，掩盖成看似舒适的 65%。
@@ -100,7 +100,7 @@ ClawMetry 只能在部分运行时上看到压缩（compaction）事件。因此
 
 | 路径 | 为你的智能体增加的开销 | 是否默认开启？ |
 |---|---|---|
-| 会话文件 tailing（全部 33 种运行时） | **0**。独立进程，你的智能体中不含任何 ClawMetry 代码 | 开启 |
+| 会话文件 tailing（全部 32 种运行时） | **0**。独立进程，你的智能体中不含任何 ClawMetry 代码 | 开启 |
 | HTTP 拦截器（`CLAWMETRY_INTERCEPT=1`） | 每次 LLM 调用 **+0.44 毫秒**，相当于一次 5 秒调用的 0.009% | 关闭 |
 | 工具执行前钩子门（Pre-tool hook gate，热缓存） | 每次受控工具调用 **+44 毫秒**，在 36 毫秒解释器基线之上 | 关闭 |
 | 强制执行代理（Enforcement proxy） | 每次 LLM 调用 **+9.7 毫秒** | 关闭 |

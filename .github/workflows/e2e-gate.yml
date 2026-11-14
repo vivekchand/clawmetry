@@ -23,21 +23,15 @@ name: E2E Gate (required)
 #   - pip install matrix (x4)
 #   - Wheel install & asset presence
 #   - Store invariants (property-based)
-#   - Drift Bot  [skip_if_unreported: only enforced when 8090 App posts]
+#   - PR cites the product record that justified it
 #
-# Tracking: vivekchand/clawmetry#4029 (C6)
-#
-# This workflow intentionally runs on pull_request only -- not on push events.
-# Drift Bot (8090-software-factory app) posts its commit status to PR head
-# SHAs only; the app never re-posts to the merge commit that lands on main.
-# If the gate ran on push events, it would wait the full timeout for
-# a Drift Bot status that never arrives (confirmed on run #33224218966).
-# The enforcement that matters happens on the PR; no extra run is needed after
-# the merge. Supersedes PR #5323 which fixed the same issue via code but was
-# blocked by a Blueprint update on 8090.ai.
+# The functional checks and portable product-record citation gate run on PRs.
+# Independent exact-candidate review is documented in docs/PRODUCT_RECORDS.md.
+# Retired third-party review services are not required contexts.
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
 
 concurrency:
   group: e2e-gate-${{ github.event.pull_request.number || github.ref }}
@@ -51,7 +45,7 @@ permissions:
 jobs:
   e2e-gate:
     name: E2E Gate (required)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 65
 
     steps:
@@ -62,6 +56,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          filter: blob:none
+          fetch-depth: 0
+
+      # Recheck this event's body synchronously. Otherwise an edited PR body
+      # can reuse a prior successful citation check on the same commit SHA.
+      - name: Validate the current product-record citation
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/check_product_record.py
 
       # The gate logic lives in scripts/e2e_gate.py so it can be unit-tested
       # (tests/test_e2e_gate.py) instead of only being exercised in anger on a

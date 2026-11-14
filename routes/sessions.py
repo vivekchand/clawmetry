@@ -29,6 +29,8 @@ from datetime import datetime
 
 import csv
 from datetime import timezone
+from clawmetry.file_security import is_path_within
+
 from flask import Blueprint, jsonify, request, Response
 from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
@@ -5936,7 +5938,7 @@ def api_transcript(session_id):
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     # Sanitize path
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Transcript not found"}), 404
@@ -6172,7 +6174,7 @@ def api_transcript_events(session_id):
     )
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Transcript not found"}), 404
@@ -6520,7 +6522,7 @@ def api_session_model_journey(session_id):
     )
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Transcript not found"}), 404
@@ -6799,7 +6801,7 @@ def api_session_cost_breakdown(session_id):
     )
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Session not found"}), 404
@@ -7176,7 +7178,7 @@ def api_session_export(session_id):
     )
     fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
         return jsonify({"error": "Session not found"}), 404
@@ -7799,7 +7801,7 @@ def api_session_config_drift(sid):
     )
     path = os.path.join(sessions_dir, sid + ".jsonl")
     path = os.path.normpath(path)
-    if not path.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(path, sessions_dir):
         return jsonify({"error": "access denied"}), 403
     if not os.path.isfile(path):
         return jsonify({"sessionId": sid, "has_drift": False, "drift_count": 0, "drifts": []})
@@ -7932,7 +7934,7 @@ def api_session_lexical_drift(session_id):
         "~/.openclaw/agents/main/sessions"
     )
     fpath = os.path.normpath(os.path.join(sessions_dir, session_id + ".jsonl"))
-    if not fpath.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(fpath, sessions_dir):
         return jsonify({"error": "access denied"}), 403
     if not os.path.isfile(fpath):
         return jsonify({"error": "session not found"}), 404
@@ -8763,7 +8765,7 @@ def api_session_intent_divergence(session_id):
     )
     path = os.path.join(sessions_dir, session_id + ".jsonl")
     path = os.path.normpath(path)
-    if not path.startswith(os.path.normpath(sessions_dir)):
+    if not is_path_within(path, sessions_dir):
         return jsonify({"error": "access denied"}), 403
     if not os.path.isfile(path):
         return jsonify({
@@ -8890,11 +8892,15 @@ def api_session_intent_drift(session_id):
     # Filesystem fallback for local-only installs without a running daemon.
     try:
         import dashboard as _d
+        from werkzeug.security import safe_join
+
         sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
             "~/.openclaw/agents/main/sessions"
         )
-        path = os.path.normpath(os.path.join(sessions_dir, session_id + ".jsonl"))
-        if path.startswith(os.path.normpath(sessions_dir)) and os.path.isfile(path):
+        path = safe_join(sessions_dir, session_id + ".jsonl")
+        if path is None or not is_path_within(path, sessions_dir):
+            return jsonify({"error": "access denied"}), 403
+        if os.path.isfile(path):
             fs = _detect_intent_divergence(path)
             return jsonify({
                 "sessionId": session_id,
