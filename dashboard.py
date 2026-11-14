@@ -444,6 +444,9 @@ EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service
 FLEET_API_KEY = os.environ.get("CLAWMETRY_FLEET_KEY", "")
 FLEET_DB_PATH = None  # Set via CLI or auto-detected
 FLEET_NODE_TIMEOUT = 300  # seconds before node is considered offline
+# True only when WORKSPACE came from an explicit source (--workspace, env var, or
+# detected OpenClaw markers).  False when it fell back to os.getcwd().
+WORKSPACE_EXPLICIT = False
 
 # ── Budget & Alert Configuration ───────────────────────────────────────
 _budget_paused = False
@@ -1731,6 +1734,7 @@ EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service
 FLEET_API_KEY = os.environ.get("CLAWMETRY_FLEET_KEY", "")
 FLEET_DB_PATH = None  # Set via CLI or auto-detected
 FLEET_NODE_TIMEOUT = 300  # seconds before node is considered offline
+WORKSPACE_EXPLICIT = False
 
 # ── Stuck-Session Detection ────────────────────────────────────────────
 STUCK_SESSION_TIMEOUT_SEC = 300   # 5 min silent → warning alert
@@ -2273,7 +2277,12 @@ def _fleet_db_path():
     """
     if FLEET_DB_PATH:
         return FLEET_DB_PATH
-    if WORKSPACE:
+    # Only use a workspace-relative fleet DB when the workspace was given
+    # explicitly (--workspace, OPENCLAW_HOME, OPENCLAW_WORKSPACE) or when real
+    # OpenClaw markers were found during auto-detect.  A cwd fallback must NOT
+    # steer the fleet DB, because the daemon always writes to
+    # ~/.clawmetry/fleet.db and the two paths then diverge (issue #6615).
+    if WORKSPACE and WORKSPACE_EXPLICIT:
         _ws_db = os.path.join(WORKSPACE, ".clawmetry-fleet.db")
         # Only honour the workspace-relative path when we can actually write
         # there. Under launchd the process starts with cwd="/", and the
@@ -6393,7 +6402,7 @@ def _auto_detect_data_dir():
 
 def detect_config(args=None):
     """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
-    global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
+    global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME, WORKSPACE_EXPLICIT
 
     # 0a. --openclaw-dir: set OpenClaw config directory (Issue #322 - Docker config bleed)
     if args and getattr(args, 'openclaw_dir', None):
@@ -6424,10 +6433,13 @@ def detect_config(args=None):
     # 1. Workspace - where agent files live (SOUL.md, MEMORY.md, memory/, etc.)
     if args and args.workspace:
         WORKSPACE = os.path.expanduser(args.workspace)
+        WORKSPACE_EXPLICIT = True
     elif os.environ.get("OPENCLAW_HOME"):
         WORKSPACE = os.path.expanduser(os.environ["OPENCLAW_HOME"])
+        WORKSPACE_EXPLICIT = True
     elif os.environ.get("OPENCLAW_WORKSPACE"):
         WORKSPACE = os.path.expanduser(os.environ["OPENCLAW_WORKSPACE"])
+        WORKSPACE_EXPLICIT = True
     else:
         # Auto-detect: check common locations
         candidates = [
@@ -6446,11 +6458,14 @@ def detect_config(args=None):
                 os.path.isdir(os.path.join(c, "memory"))
             ):
                 WORKSPACE = c
+                WORKSPACE_EXPLICIT = True  # real OpenClaw markers found
                 break
         if not WORKSPACE:
             # "/" is not a workspace. launchd starts agents with cwd="/", so
             # this last-resort guess silently poisoned every workspace-relative
             # state path (see _fleet_db_path) on an auto-started install.
+            # WORKSPACE_EXPLICIT stays False: the cwd fallback must not steer
+            # the fleet DB away from ~/.clawmetry/fleet.db (issue #6615).
             _cwd = os.getcwd()
             WORKSPACE = _cwd if _cwd not in ("/", "") else os.path.expanduser("~")
 
