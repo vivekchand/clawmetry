@@ -106,11 +106,13 @@ from helpers.gateway import (  # noqa: F401 — re-export for routes/
     _gw_ws_rpc,
 )
 from routes.usage import bp_usage
+from routes.attribution import bp_attribution
 from routes.crons import bp_crons
 from routes.harness import bp_harness
 from routes.delegated import bp_delegated
 from routes.readiness import bp_readiness
 from routes.guard import bp_guard
+from routes.node_activity import bp_node_activity
 from routes.improve import bp_improve  # noqa: E402 (route registration follows boot setup)
 from routes.signals import bp_signals
 from routes.selfdiag import bp_selfdiag
@@ -141,9 +143,12 @@ from routes.assets import bp_assets
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
 from routes.local_query import bp_local_query
+from routes.asimov import bp_asimov
+from routes.physical_ai import bp_physical_ai
 from routes.public_api import bp_public_api
 from routes.apikeys_admin import bp_apikeys_admin
 from routes.update_check import bp_update_check, start_update_check_thread
+from routes.support import bp_support
 from routes.workspaces import bp_workspaces
 from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
@@ -373,7 +378,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.909"
+__version__ = "0.12.939"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -6507,8 +6512,11 @@ def detect_config(args=None):
     if not _pro_loaded:
         app.register_blueprint(bp_selfevolve)
     app.register_blueprint(bp_alerts)
+    app.register_blueprint(bp_attribution)
     app.register_blueprint(bp_autonomy)
     app.register_blueprint(bp_auth)
+    app.register_blueprint(bp_asimov)
+    app.register_blueprint(bp_physical_ai)
     app.register_blueprint(bp_brain)
     app.register_blueprint(bp_budget)
     app.register_blueprint(bp_channels)
@@ -6528,6 +6536,7 @@ def detect_config(args=None):
     from routes.error_groups import bp_error_groups
     app.register_blueprint(bp_error_groups)
     app.register_blueprint(bp_improve)
+    app.register_blueprint(bp_node_activity)
     app.register_blueprint(bp_signals)
     app.register_blueprint(bp_selfdiag)
     app.register_blueprint(bp_capability_gaps)
@@ -6557,6 +6566,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_sla)
+    app.register_blueprint(bp_support)
     app.register_blueprint(bp_agentops)
     app.register_blueprint(bp_tracing)
     app.register_blueprint(bp_trail)
@@ -7161,6 +7171,7 @@ DASHBOARD_HTML = r"""
      no legal basis. Regenerate with scripts/vendor_fonts.py. -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=asset_version|default(version, true)) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=asset_version|default(version, true)) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/node-activity.css', v=asset_version|default(version, true)) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/investigations.css', v=asset_version|default(version, true)) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css', v=asset_version|default(version, true)) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=asset_version|default(version, true)) }}"></script>
@@ -7168,6 +7179,7 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/trail.js', v=asset_version|default(version, true)) }}" defer></script>
 <script src="{{ url_for('static', filename='js/compliance.js', v=asset_version|default(version, true)) }}" defer></script>
 <script src="{{ url_for('static', filename='js/price-book.js', v=asset_version|default(version, true)) }}" defer></script>
+<script src="{{ url_for('static', filename='js/bug-report.js', v=asset_version|default(version, true)) }}" defer></script>
 <!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
      transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
      See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly.
@@ -7253,6 +7265,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="openBugModal()" title="Something in ClawMetry itself is wrong? Tell the people who build it">Report a bug</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
@@ -7289,6 +7302,7 @@ DASHBOARD_HTML = r"""
        billing/plan management, and an always-visible sign-out. Rendered by
        cmProfileInit() in gw-setup.js; supersedes the bare #logout-btn icon
        (hidden via body.has-profile-menu in dashboard.css). -->
+  <button type="button" class="bug-header" onclick="openBugModal()" aria-label="Report a bug" title="Report a bug" aria-haspopup="dialog" aria-controls="bug-overlay"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="14" rx="5"/><path d="M9 7V5a3 3 0 0 1 6 0v2M12 8v12M3 9l4 2M17 11l4-2M3 17l4-2M17 15l4 2M2 13h5M17 13h5"/></svg></button>
   <div id="cm-profile-wrap" style="position:relative;margin-left:8px;flex-shrink:0;">
     <button id="cm-profile-btn" onclick="cmProfileToggle(event)" data-i18n-title="profile.account" title="Account" aria-haspopup="menu" aria-expanded="false" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--border-color,rgba(255,255,255,0.22));background:var(--button-bg,transparent);color:var(--text-tertiary,#cbd5e1);font-size:13px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;box-shadow:var(--card-shadow);transition:all 0.15s;">
       <span id="cm-profile-initial" style="display:flex;align-items:center;justify-content:center;line-height:1;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
@@ -7341,6 +7355,14 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
       </div>
+      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.session_replay">Sessions</span>
+      </div>
+      <div class="left-nav-item" data-tab="node-activity" onclick="switchTab('node-activity')" title="Processes, resource use and changes on this machine">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><path d="M8 21h8M12 17v4M6 10h3l2-4 3 8 2-4h2"/></svg></span>
+        <span class="left-nav-label">Node activity</span>
+      </div>
       <div class="left-nav-item" data-tab="setup" onclick="switchTab('setup')" title="Rules, skills, commands, agents, and hooks shaping how your agents work">
         <span class="left-nav-icon" aria-hidden="true">&#10022;</span>
         <span class="left-nav-label">Setup</span>
@@ -7348,10 +7370,6 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item" data-tab="improve" onclick="switchTab('improve')" title="Repeated guidance signals worth reviewing">
         <span class="left-nav-icon" aria-hidden="true">&#10047;</span>
         <span class="left-nav-label">Improve</span>
-      </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
-        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-        <span class="left-nav-label" data-i18n="nav.session_replay">Sessions</span>
       </div>
       <div class="left-nav-item" data-tab="brain" onclick="switchTab('brain')" data-i18n-title="nav.activity_tooltip" title="What your agents are doing right now, step by step">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
@@ -7361,6 +7379,10 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
+      </div>
+      <div class="left-nav-item" id="left-nav-delivery" data-tab="delivery" onclick="switchTab('delivery')" title="What the spend bought: the pull requests your agents worked on, and what each one cost">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 9v6a3 3 0 0 0 3 3h6"/><path d="M18 9V7a3 3 0 0 0-3-3h-2"/></svg></span>
+        <span class="left-nav-label">Delivered</span>
       </div>
       <div class="left-nav-item" data-tab="models" onclick="switchTab('models')" data-i18n-title="nav.models_tooltip" title="Which models your agents used, and what each one cost">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M9 2v2M15 20v2M9 20v2M2 15h2M2 9h2M20 15h2M20 9h2"/></svg></span>
@@ -7495,6 +7517,18 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-label">NemoClaw</span>
       </div>
     </div>
+    {# Report a bug: pinned to the bottom of the nav so it is reachable from
+       every tab, on localhost and on the hosted dashboard alike. Deliberately
+       not a tab - it opens the dialog in partials/bug-modal.html and leaves
+       the screen the person was on untouched, because what they are looking
+       at IS the report. #}
+    <div class="left-nav-footer">
+      <button type="button" class="left-nav-item left-nav-report" id="left-nav-report"
+              onclick="openBugModal()" aria-haspopup="dialog" aria-controls="bug-overlay">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="14" rx="5"/><path d="M9 7V5a3 3 0 0 1 6 0v2M12 8v12M3 9l4 2M17 11l4-2M3 17l4-2M17 15l4 2M2 13h5M17 13h5"/></svg></span>
+        <span class="left-nav-label">Report a bug</span>
+      </button>
+    </div>
   </aside>
   <main class="app-shell-content">
 {% endif %}
@@ -7504,6 +7538,7 @@ DASHBOARD_HTML = r"""
 
 <!-- AGENT INVENTORY (single-pane control-tower roster) -->
 {% include 'tabs/inventory.html' %}
+{% include 'tabs/node-activity.html' %}
 
 <!-- HARNESS SETUP (runtime-aware rules, skills, commands, agents, and hooks) -->
 {% include 'tabs/setup.html' %}
@@ -7525,6 +7560,9 @@ DASHBOARD_HTML = r"""
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}
+
+<!-- DELIVERY (what the spend bought: pull requests + the cost split) -->
+{% include 'tabs/delivery.html' %}
 
 <!-- PRICE BOOK (settings screen for negotiated rates, opened from Cost; #5936) -->
 {% include 'tabs/price-book.html' %}
@@ -7625,6 +7663,7 @@ DASHBOARD_HTML = r"""
      every dollar amount and score renders through. Loaded BEFORE app.js so
      window.cmMoney / cmProvBadge exist by the time a tab paints. -->
 <script src="{{ url_for('static', filename='js/provenance.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/trial-offer.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/guard-checks.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/activity-live.js', v=asset_version|default(version, true)) }}"></script>
@@ -7635,6 +7674,7 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/custom-dashboard.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/setup.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/improve.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/node-activity.js', v=asset_version|default(version, true)) }}"></script>
 </div> <!-- end zoom-wrapper -->
 
 {# position:fixed overlays must live OUTSIDE #zoom-wrapper: its zoom
@@ -7647,6 +7687,7 @@ DASHBOARD_HTML = r"""
 {% include 'partials/onboarding-modal.html' %}
 {% include 'partials/selfhost-modal.html' %}
 {% include 'partials/budget-modal.html' %}
+{% include 'partials/bug-modal.html' %}
 
 <!-- Component Detail Modal -->
 <div class="comp-modal-overlay" id="comp-modal-overlay" onclick="if(event.target===this)closeCompModal()">
@@ -8201,6 +8242,7 @@ def _cross_origin_write_blocked() -> bool:
 @app.before_request
 def _check_auth():
     """Require valid gateway token for all /api/* routes when GATEWAY_TOKEN is set."""
+    from clawmetry.request_security import is_direct_loopback_request
     # CSRF guard first: it applies to EVERY state-changing request, including
     # the loopback callers that skip the token check below and the paths
     # (auth-check, gateway config, fleet API) that return early from it.
@@ -8215,14 +8257,15 @@ def _check_auth():
                     "crossOriginBlocked": True,
                 }
             ), 403
-    if request.path == "/api/auth/check":
-        return  # Auth check endpoint is always accessible
+    if request.path in ("/api/auth/check", "/api/auth/detected-token"):
+        # Bootstrap checks its stricter direct-loopback rule in the handler,
+        # including when a caller supplies otherwise valid credentials.
+        return
     if request.path == "/api/gw/config":
         # Gateway setup must work before auth is configured, but only from
         # loopback: this route opens an outbound connection to a caller-supplied
         # URL, so a non-loopback caller must be authenticated (SSRF guard).
-        _r = request.remote_addr or ""
-        if _r in ("127.0.0.1", "::1", "localhost"):
+        if is_direct_loopback_request(request):
             return
         # else fall through to the standard token check below
     if request.path.startswith("/api/nodes"):
@@ -8268,9 +8311,8 @@ def _check_auth():
         return  # HTML, static, etc. are fine
     if is_otlp and str(os.environ.get("CLAWMETRY_OTLP_ALLOW_UNAUTH", "")).strip().lower() in ("1", "true", "yes"):
         return
-    # Trust localhost — the dashboard is a local tool; auth protects remote access only
-    remote = request.remote_addr or ""
-    if remote in ("127.0.0.1", "::1", "localhost"):
+    # Trust direct loopback only: a rebound Host or a proxy needs credentials.
+    if is_direct_loopback_request(request):
         return
     if not GATEWAY_TOKEN:
         if is_otlp:
@@ -12534,7 +12576,7 @@ ARCHITECTURE_OVERVIEW = """\
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
   │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
-  │  Any of 33 runtimes │              │  ClawMetry          │              │  Your browser       │
+  │  Any of 32 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
   │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
   │  Nothing changes.   │              │  Serves dashboard.  │              │                     │

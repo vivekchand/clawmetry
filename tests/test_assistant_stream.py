@@ -358,6 +358,58 @@ def test_request_deadline_cancels_full_queue_and_releases_worker(chat, monkeypat
     assert not assistant._conversations_in_flight and saved == []
 
 
+def test_deadline_read_waits_for_authoritative_failure_receipt(chat, daemon_adapter, monkeypatch):
+    from clawmetry import assistant_http
+
+    _app, client, saved = chat
+    receipt_entered, finish_receipt = threading.Event(), threading.Event()
+    original_fail = daemon_adapter.receipts.fail
+    monkeypatch.setattr(stream, "REQUEST_SECONDS", 0.1)
+
+    def fail(request_id, message, status):
+        assert "too long" in message and status == 504
+        receipt_entered.set()
+        assert finish_receipt.wait(3)
+        return original_fail(request_id, message, status)
+
+    def timed_out(mode, credential, system, prompt, **kwargs):
+        if system.startswith(assistant._PLAN):
+            return json.dumps(PLAN)
+        assert kwargs["control"].cancelled.wait(3)
+        kwargs["control"].check()
+
+    monkeypatch.setattr(daemon_adapter.receipts, "fail", fail)
+    monkeypatch.setattr(providers, "generate", timed_out)
+    response = client.post("/api/assistant/chat", json={"message": "Count", "stream": True})
+    iterator = iter(response.response)
+    try:
+        try:
+            assert unpack(next(iterator))[0] == "status"
+            assert receipt_entered.wait(3)
+            job, = daemon_adapter.jobs.values()
+            deadline, lease_until = job.deadline, job.lease_until
+            # Hold the actual durable receipt before terminal publication, then
+            # read through the renewing RPC used by local HTTP streaming.
+            pending = assistant_http.rpc("read_assistant_job", request_id=job.request_id, renew=True)
+            assert pending["terminal"] is False and "error" not in pending
+            assert not any(item["event"] in {"error", "done"} for item in pending["events"])
+            assert job.deadline == deadline and job.lease_until == lease_until
+            assert job.cancelled.is_set() and job._timed_out
+            assert saved == []
+        finally:
+            finish_receipt.set()
+        events = list(map(unpack, iterator))
+        assert events[-1][0] == "error" and "too long" in events[-1][1]["error"]
+        terminal = assistant_http.rpc("read_assistant_job", request_id=job.request_id, renew=True)
+        assert terminal["terminal"] and terminal["http_status"] == 504
+        assert terminal["events"][-1]["event"] == "error" and saved == []
+        receipt = daemon_adapter.receipts.lookup(job.request_id, job.epoch, job.operation, job.digest)
+        assert receipt["state"] == "failed" and receipt["status"] == 504
+        assert receipt["data"] == terminal["events"][-1]["data"]
+    finally:
+        response.close()
+
+
 def test_committed_daemon_result_survives_http_disconnect(chat, monkeypatch, daemon_adapter):
     # ADR-007: once the daemon's atomic commit crossed its live-lease barrier,
     # a browser disconnect cannot turn the completed answer into a lost turn.

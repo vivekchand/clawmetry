@@ -13,7 +13,7 @@
 
 **ഒരു ഏജന്റിന് പുരോഗതി ഒന്നും ഉണ്ടാക്കാതെ നൂറ് ടൂൾ കോളുകൾ നടത്താൻ കഴിയും.** ClawMetry നിങ്ങളുടെ കോഡിംഗ് ഏജന്റുകൾ ഇതിനകം എഴുതുന്ന സെഷൻ ഫയലുകൾ വായിച്ച്, ടൈംലൈൻ, ടൂൾ കോളുകൾ, റൺടൈം തുറന്നുകാണിക്കുന്ന ടോക്കൺ, കോസ്റ്റ് ഡേറ്റ എന്നിവ ഒരൊറ്റ വ്യൂവിൽ കൊണ്ടുവരുന്നു — അതിനാൽ പ്രവർത്തിക്കുന്ന ഒരു ദൈർഘ്യമുള്ള റണ്ണിനെയും കുടുങ്ങിയ ഒന്നിനെയും വേർതിരിച്ചറിയാൻ നിങ്ങൾക്ക് സാധിക്കും.
 
-**33 AI ഏജന്റ് റൺടൈമുകളുമായി** പ്രവർത്തിക്കുന്നു — Claude Code, OpenAI Codex, Hermes, OpenClaw, കൂടാതെ 29 എണ്ണം കൂടി. നിങ്ങളുടെ മുഴുവൻ ഏജന്റ് ഫ്ലീറ്റിനും ഒരു ഡാഷ്ബോർഡ്. ([പൂർണ്ണ ലിസ്റ്റ്](SUPPORTED_RUNTIMES.txt), കാറ്റലോഗിൽ നിന്ന് ജനറേറ്റ് ചെയ്തത്.)
+**32 AI ഏജന്റ് റൺടൈമുകളുമായി** പ്രവർത്തിക്കുന്നു — Claude Code, OpenAI Codex, Hermes, OpenClaw, കൂടാതെ 28 എണ്ണം കൂടി. നിങ്ങളുടെ മുഴുവൻ ഏജന്റ് ഫ്ലീറ്റിനും ഒരു ഡാഷ്ബോർഡ്. ([പൂർണ്ണ ലിസ്റ്റ്](SUPPORTED_RUNTIMES.txt), കാറ്റലോഗിൽ നിന്ന് ജനറേറ്റ് ചെയ്തത്.)
 
 > 🌐 **ഇത് ഇതിൽ വായിക്കുക:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
 
@@ -40,11 +40,11 @@ pip install clawmetry && clawmetry
 നിങ്ങൾ ഔട്ട്‌പുട്ട് വിധിക്കുന്നതിന് മുൻപ് അറിഞ്ഞിരിക്കേണ്ട രണ്ട് പരിധികൾ: റൺടൈമുകൾ വളരെ വ്യത്യസ്തമായ ഡേറ്റ തുറന്നുകാണിക്കുന്നു (ചിലത് ഒരു കോസ്റ്റ് പോലും പ്രസിദ്ധീകരിക്കുന്നില്ല — [the matrix](docs/compatibility.md) ഓരോ റൺടൈമിനും ഏതാണെന്ന് പറയുന്നു), കൂടാതെ ഒരു ആക്ഷൻ നിരീക്ഷിക്കുന്നത് അത് തടയാൻ കഴിയുന്നതിന് തുല്യമല്ല ([ഏത് കൺട്രോളുകൾ യഥാർത്ഥമാണ്, ഓരോ റൺടൈമിനും](docs/APPROVALS.md)).
 
 
-## 33 ഏജന്റ് റൺടൈമുകളുമായി പ്രവർത്തിക്കുന്നു
+## 32 ഏജന്റ് റൺടൈമുകളുമായി പ്രവർത്തിക്കുന്നു
 
 **ഓപ്പൺ സോഴ്സ് ആപ്പിൽ ഫ്രീ:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**ഒരു പെയ്ഡ് പ്ലാനിൽ:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**ഒരു പെയ്ഡ് പ്ലാനിൽ:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 എല്ലാ റൺടൈമിനും ഒരേ ഡാഷ്ബോർഡ് ലഭിക്കുന്നു. ഒന്നിലധികം ഒരേ സമയം റൺ ചെയ്യുക, ഹെഡർ സ്വിച്ചർ എല്ലാ ടാബുകളെയും അവയിൽ ഒന്നിലേക്ക് റീ-സ്കോപ്പ് ചെയ്യുന്നു.
 
@@ -68,7 +68,7 @@ pip install clawmetry && clawmetry
 
 **റൺടൈമുകളിലുടനീളം കോണ്ടെക്സ്റ്റ്-വിൻഡോ ബ്ലോഔട്ട് എങ്ങനെ കൈകാര്യം ചെയ്യുന്നു?**
 
-ഒരു യൂട്ടിലൈസേഷൻ ശതമാനം അത് ഏതിനെ ഹരിക്കുന്നു എന്നതിന്റെ സത്യസന്ധത പോലെ മാത്രമേ സത്യസന്ധമാകൂ. ClawMetry [നിങ്ങൾക്ക് വായിക്കാനും PR ചെയ്യാനും കഴിയുന്ന ഒരു ടേബിളിൽ](clawmetry/context_windows.py) നിന്ന് ഓരോ പ്രൊവൈഡറിനുമുള്ള വിൻഡോ സൈസ് ചെയ്യുന്നു, Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama, GLM എന്നിവ ഉൾപ്പെടെ. ഒരു വെണ്ടറുടെ അളവുകോൽ ഉപയോഗിച്ച് 33 റൺടൈമുകളും അളക്കുന്നില്ല. അത് പ്രധാനമാണ്: Anthropic ന്റെ 200K നെതിരെ സ്കോർ ചെയ്യുന്ന ഒരു 300K GPT-5 ടേൺ ">100%, ബ്ലോൺ" എന്ന് വായിക്കുന്നു, അത് യഥാർത്ഥത്തിൽ GPT-5 ന്റെ 400K ൽ 75% ആയിരിക്കെ. അതേ അളവുകോൽ ഒരു യഥാർത്ഥത്തിൽ ഓവർഫ്ലോ ആയ 130K DeepSeek ടേണിനെ സൗകര്യപ്രദമായ 65% ആയി മറയ്ക്കുന്നു.
+ഒരു യൂട്ടിലൈസേഷൻ ശതമാനം അത് ഏതിനെ ഹരിക്കുന്നു എന്നതിന്റെ സത്യസന്ധത പോലെ മാത്രമേ സത്യസന്ധമാകൂ. ClawMetry [നിങ്ങൾക്ക് വായിക്കാനും PR ചെയ്യാനും കഴിയുന്ന ഒരു ടേബിളിൽ](clawmetry/context_windows.py) നിന്ന് ഓരോ പ്രൊവൈഡറിനുമുള്ള വിൻഡോ സൈസ് ചെയ്യുന്നു, Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama, GLM എന്നിവ ഉൾപ്പെടെ. ഒരു വെണ്ടറുടെ അളവുകോൽ ഉപയോഗിച്ച് 32 റൺടൈമുകളും അളക്കുന്നില്ല. അത് പ്രധാനമാണ്: Anthropic ന്റെ 200K നെതിരെ സ്കോർ ചെയ്യുന്ന ഒരു 300K GPT-5 ടേൺ ">100%, ബ്ലോൺ" എന്ന് വായിക്കുന്നു, അത് യഥാർത്ഥത്തിൽ GPT-5 ന്റെ 400K ൽ 75% ആയിരിക്കെ. അതേ അളവുകോൽ ഒരു യഥാർത്ഥത്തിൽ ഓവർഫ്ലോ ആയ 130K DeepSeek ടേണിനെ സൗകര്യപ്രദമായ 65% ആയി മറയ്ക്കുന്നു.
 
 ഓരോ വിൻഡോയും അതിന്റെ പ്രോവനൻസ് സഹിതം ഷിപ്പ് ചെയ്യുന്നു: `model_table`, `explicit_marker`, `observed_floor`, അല്ലെങ്കിൽ നമുക്ക് മോഡൽ അറിയാത്തപ്പോൾ ഒരു സത്യസന്ധമായ `default`. ഒരു ഊഹത്തിൽ നിർമ്മിച്ച ഗേജ് ഒരു ലുക്കപ്പിൽ നിർമ്മിച്ച ഒന്നിന്റെ അതേ അധികാരത്തോടെ ഒരിക്കലും റെൻഡർ ചെയ്യുന്നില്ല.
 
@@ -79,7 +79,7 @@ ClawMetry ക്ക് ചില റൺടൈമുകളിൽ മാത്ര�
 
 | പാത | നിങ്ങളുടെ ഏജന്റിലേക്ക് ചേർക്കുന്നത് | ഡിഫോൾട്ടോ? |
 |---|---|---|
-| സെഷൻ-ഫയൽ ടെയിലിംഗ് (33 റൺടൈമുകളും) | **0**. വേറിട്ട പ്രോസസ്, നിങ്ങളുടെ ഏജന്റിൽ ClawMetry കോഡ് ഇല്ല | ഓൺ |
+| സെഷൻ-ഫയൽ ടെയിലിംഗ് (32 റൺടൈമുകളും) | **0**. വേറിട്ട പ്രോസസ്, നിങ്ങളുടെ ഏജന്റിൽ ClawMetry കോഡ് ഇല്ല | ഓൺ |
 | HTTP ഇന്റർസെപ്റ്റർ (`CLAWMETRY_INTERCEPT=1`) | ഒരു LLM കോളിന് **+0.44 ms**, അല്ലെങ്കിൽ 5സെക്കൻഡ് കോളിന്റെ 0.009% | ഓഫ് |
 | പ്രീ-ടൂൾ ഹുക്ക് ഗേറ്റ് (വാം ക്യാഷ്) | 36 ms ഇന്റർപ്രെറ്റർ ഫ്ലോറിന് മുകളിൽ, ഒരു ഗേറ്റഡ് ടൂൾ കോളിന് **+44 ms** | ഓഫ് |
 | എൻഫോഴ്സ്മെന്റ് പ്രോക്സി | ഒരു LLM കോളിന് **+9.7 ms** | ഓഫ് |

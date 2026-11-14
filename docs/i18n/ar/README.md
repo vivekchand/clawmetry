@@ -16,7 +16,7 @@
 واستدعاءات الأدوات، وأي بيانات رموز وتكلفة يعرضها وقت التشغيل في عرض واحد —
 بحيث يمكنك التمييز بين تشغيل طويل يعمل بنجاح وآخر عالق.
 
-يعمل مع **33 نظام تشغيل لوكلاء الذكاء الاصطناعي** — Claude Code، OpenAI Codex، Hermes، OpenClaw وأكثر من 29 آخرين. لوحة تحكم واحدة لكل أسطول الوكلاء لديك. ([القائمة الكاملة](SUPPORTED_RUNTIMES.txt)، مولّدة من الكتالوج.)
+يعمل مع **32 نظام تشغيل لوكلاء الذكاء الاصطناعي** — Claude Code، OpenAI Codex، Hermes، OpenClaw وأكثر من 28 آخرين. لوحة تحكم واحدة لكل أسطول الوكلاء لديك. ([القائمة الكاملة](SUPPORTED_RUNTIMES.txt)، مولّدة من الكتالوج.)
 
 > 🌐 **اقرأ هذا بلغة:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [المزيد →](docs/i18n/)
 
@@ -47,11 +47,11 @@ pip install clawmetry && clawmetry
 ([أي الضوابط حقيقية فعليًا، لكل نظام تشغيل](docs/APPROVALS.md)).
 
 
-## يعمل مع 33 نظام تشغيل للوكلاء
+## يعمل مع 32 نظام تشغيل للوكلاء
 
 **مجاني في التطبيق مفتوح المصدر:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**في خطة مدفوعة:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**في خطة مدفوعة:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 يحصل كل نظام تشغيل على نفس لوحة التحكم. شغّل عدة أنظمة في الوقت نفسه، وسيعيد
 مُبدّل العناوين توجيه كل تبويب لأحدها.
@@ -81,7 +81,7 @@ pip install clawmetry && clawmetry
 ClawMetry حجم النافذة لكل مزوّد من [جدول يمكنك قراءته وتقديم طلب سحب
 (PR) له](clawmetry/context_windows.py)، يغطي Anthropic وOpenAI وGoogle وxAI
 وDeepSeek وKimi وQwen وMistral وLlama وGLM. فهي لا تقيس جميع أنظمة التشغيل
-الـ33 بمسطرة مزوّد واحد. وهذا أمر مهم: دورة بحجم 300K من GPT-5 مُقاسة
+الـ32 بمسطرة مزوّد واحد. وهذا أمر مهم: دورة بحجم 300K من GPT-5 مُقاسة
 بمسطرة Anthropic البالغة 200K تُقرأ على أنها ">100%، منفجرة" بينما هي في
 الحقيقة عند 75% من حدّ GPT-5 البالغ 400K. وتخفي نفس المسطرة دورة DeepSeek
 منفجرة فعليًا بحجم 130K وتُظهرها كنسبة مريحة قدرها 65%.
@@ -100,7 +100,7 @@ ClawMetry حجم النافذة لكل مزوّد من [جدول يمكنك قر
 
 | المسار | المُضاف إلى وكيلك | افتراضي؟ |
 |---|---|---|
-| تتبّع ملف الجلسة (33 نظام تشغيل جميعًا) | **0**. عملية منفصلة، بلا أي كود من ClawMetry داخل وكيلك | مفعّل |
+| تتبّع ملف الجلسة (32 نظام تشغيل جميعًا) | **0**. عملية منفصلة، بلا أي كود من ClawMetry داخل وكيلك | مفعّل |
 | المُعترِض HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0.44 مللي ثانية** لكل استدعاء نموذج لغة، أو 0.009% من استدعاء مدته 5 ثوان | معطّل |
 | بوابة الخطّاف قبل الأداة (ذاكرة تخزين مؤقت دافئة) | **+44 مللي ثانية** لكل استدعاء أداة مُراقَب، فوق حد مفسِّر مقداره 36 مللي ثانية | معطّل |
 | وكيل التطبيق (proxy) للتنفيذ | **+9.7 مللي ثانية** لكل استدعاء نموذج لغة | معطّل |

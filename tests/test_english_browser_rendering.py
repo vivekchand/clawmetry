@@ -270,11 +270,11 @@ var fetches=0;
 
 
 def test_trial_templates_are_extracted_instead_of_remaining_dynamic():
-    keys = {'trial.pill_hours', 'trial.pill_days', 'trial.modal_sub_days', 'trial.device',
+    keys = {'trial.pill_hours', 'trial.pill_days', 'trial.modal_sub_days', 'trial.offer.annual_device',
             'trial.pill_one_hour', 'trial.modal_sub_one_day', 'trial.per_year', 'trial.per_month',
             'banners.trial_ending_msg', 'banners.trial_ending_one_day_msg'}
     found = set()
-    for source in [APP, (ROOT / 'clawmetry/static/js/trial-pill.js').read_text()]:
+    for source in [APP] + [path.read_text() for path in (ROOT / 'clawmetry/static/js').glob('trial-*.js')]:
         for call in translations(source, {'tr': 2}):
             if call.key in keys:
                 assert call.fallback is not None and call.pending is None, call.key

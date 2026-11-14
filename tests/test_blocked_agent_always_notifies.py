@@ -197,7 +197,7 @@ def quiet_sinks(monkeypatch, tmp_path):
     monkeypatch.setattr(ia, "_MEMO", {})
     calls = {"desktop": [], "cloud": []}
     monkeypatch.setattr(ia, "send_desktop",
-                        lambda t, m: calls["desktop"].append((t, m)) or True)
+                        lambda t, m, u="": calls["desktop"].append((t, m, u)) or True)
     monkeypatch.setattr(ia, "send_cloud",
                         lambda inc, m: calls["cloud"].append(inc["kind"]) or True)
     return calls
@@ -230,10 +230,13 @@ def test_an_ordinary_warning_does_not_pop_up_or_email(quiet_sinks):
 
 
 def test_desktop_notification_passes_text_as_argv_not_script(monkeypatch):
+    """The osascript fallback, which is what a Mac without terminal-notifier
+    still gets. The incident text must stay argv and never reach the script."""
+    from clawmetry import desktop_notify as dn
     monkeypatch.setenv("CLAWMETRY_DESKTOP_ALERTS", "1")
-    monkeypatch.setattr(ia.sys, "platform", "darwin")
-    import shutil
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(dn.sys, "platform", "darwin")
+    monkeypatch.setattr(dn, "_macos_notifier", lambda: "")
+    monkeypatch.setattr(dn.shutil, "which", lambda name: "/usr/bin/" + name)
     seen = {}
 
     def fake_run(argv, **kw):
@@ -246,6 +249,21 @@ def test_desktop_notification_passes_text_as_argv_not_script(monkeypatch):
     script = " ".join(a for a in seen["argv"][:-2])
     assert "rm -rf" not in script, "incident text must never enter the AppleScript"
     assert seen["argv"][-2:] == [evil, "body"]
+
+
+def test_an_urgent_incident_carries_a_link_back_to_its_session(quiet_sinks,
+                                                               monkeypatch):
+    """The whole point of the pop-up: it takes you to the session it is about.
+
+    Burned 2026-10-15: the notification was a dead end on every platform, so a
+    CRITICAL alert left the reader to go and find the session themselves.
+    """
+    monkeypatch.setattr("clawmetry.claude_code_gate.dashboard_base",
+                        lambda: "http://127.0.0.1:8931")
+    res = ia.deliver_incident(_Latch(), _inc("blocked_on_user", "critical"))
+    assert "desktop" in res["delivered_via"]
+    _title, _msg, url = quiet_sinks["desktop"][0]
+    assert url == "http://127.0.0.1:8931/#session=claude_code%3As1", url
 
 
 def test_desktop_is_off_by_env(monkeypatch):

@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-10-05",
+    "synced_at": "2026-10-25",
     "synced_by": "codex"
   },
   "_scope": [
@@ -34,7 +34,8 @@
     "AC-STE-002.",
     "AC-STE-003.",
     "AC-STE-005.",
-    "AC-ASSIST-"
+    "AC-ASSIST-",
+    "AC-ASIMOV-"
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -1412,6 +1413,30 @@
       "text": "Before shortening the retention period, the system shall state what will be deleted and that the deletion is permanent, and shall require confirmation. Raising the period, or returning to the plan's period, destroys nothing and shall not require confirmation."
     },
     {
+      "id": "AC-OBS-LADC-005.1",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When an existing workspace memory, skill-file or transcript endpoint accesses a file, the system shall refuse a target outside that endpoint's configured root before reading or writing it, including a sibling directory with a matching name prefix."
+    },
+    {
+      "id": "AC-OBS-LADC-005.2",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When a configured file root is a symbolic link, the system shall preserve access within its resolved root and shall refuse file links that resolve outside it."
+    },
+    {
+      "id": "AC-OBS-LADC-005.3",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When a caller requests the dashboard's password-free loopback exemption, the system shall require a loopback socket peer, a loopback Host and no forwarding headers, including for reads and same-origin writes."
+    },
+    {
+      "id": "AC-OBS-LADC-005.4",
+      "doc": "Local Audit and Data Control",
+      "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
+      "text": "When direct localhost clients or authenticated reverse proxies access an allowed file, the system shall preserve their existing read and write behavior; token bootstrap shall still refuse proxied and foreign-host callers even with valid credentials."
+    },
+    {
       "id": "AC-OBS-OIA-001.1",
       "doc": "An OpenTelemetry sender knows what was kept",
       "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
@@ -2264,6 +2289,12 @@
       "text": "When a local receipt changes without a newer activity timestamp, the system shall ingest the changed content once and shall deduplicate subsequent unchanged reads."
     },
     {
+      "id": "AC-GOV-ERS-011.7",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "Until the connected-run and delivery release gates are satisfied, the system shall omit OpenDots from the released runtime catalogue, automatic adapter loading and advertised supported-runtime count. Existing stored observations shall retain their OpenDots attribution and remain readable without being reclassified as OpenClaw."
+    },
+    {
       "id": "AC-STE-002.1",
       "doc": "Clear English explanations",
       "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
@@ -2550,6 +2581,564 @@
       "doc": "Conversational dashboards grounded in local agent evidence",
       "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
       "text": "The same investigation shall work locally and through the existing encrypted hosted Assistant relay. Reads shall remain bounded, cancellable, session/node/runtime scoped, and read-only. Credentials and internal reasoning shall not be exported; arbitrary SQL payload access, filesystem reads and command execution remain unavailable."
+    },
+    {
+      "id": "AC-ASSIST-010.1",
+      "doc": "Investigate an Improve signal instead of browsing to Setup",
+      "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
+      "text": "When the operator chooses to investigate a candidate, the system shall open the Assistant with a question carrying that candidate's own evidence — what was said, how often and across how many conversations and projects it was observed, when it was last seen, its scope, the runtimes it came from, and the supporting excerpts — so the answer is grounded in the signal rather than in its one-line summary."
+    },
+    {
+      "id": "AC-ASSIST-010.2",
+      "doc": "Investigate an Improve signal instead of browsing to Setup",
+      "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
+      "text": "The investigation shall ask for the cause, whether the behaviour is still occurring, and the single instruction, skill, agent or hook to change, named as a file, and shall accept that the evidence may not support a change."
+    },
+    {
+      "id": "AC-ASSIST-010.3",
+      "doc": "Investigate an Improve signal instead of browsing to Setup",
+      "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
+      "text": "Investigating shall be offered on every candidate in the list and as the primary action of the review dialog. Browsing to Setup shall remain available as a secondary action, and shall no longer be the only thing a candidate offers."
+    },
+    {
+      "id": "AC-ASSIST-010.4",
+      "doc": "Investigate an Improve signal instead of browsing to Setup",
+      "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
+      "text": "When the Assistant cannot accept the question yet — the computer is unreachable, no engine is connected, or its status has not settled — the question shall remain visible and sendable with the reason stated, and shall not be discarded. A question the operator has edited or already sent shall not be re-sent."
+    },
+    {
+      "id": "AC-ASSIST-010.5",
+      "doc": "Investigate an Improve signal instead of browsing to Setup",
+      "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
+      "text": "Reviewing and investigating shall change no file on the operator's machine. Inference shall start only on an explicit press, never on opening the Improve screen or the review dialog, preserving AC-ASSIST-006.4."
+    },
+    {
+      "id": "AC-ASSIST-010.6",
+      "doc": "Investigate an Improve signal instead of browsing to Setup",
+      "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
+      "text": "The Improve screen shall state, in the words of someone who has not used an observability tool before, that each card is something the operator said to an agent and what pressing the action will do."
+    },
+    {
+      "id": "AC-OBS-NODE-001.1",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When the collector can read a source, the system shall store its observation time, coverage state, and available resource, process, listener, or login measurements."
+    },
+    {
+      "id": "AC-OBS-NODE-001.2",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When a value cannot be measured, the system shall retain an unknown value and explain its coverage limit."
+    },
+    {
+      "id": "AC-OBS-NODE-001.3",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When monitoring is disabled, the system shall stop new collection and retain the prior history with a disabled state."
+    },
+    {
+      "id": "AC-OBS-NODE-002.1",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When a scope is observed for the first time, the system shall establish an initial baseline without reporting existing entities as newly added threats."
+    },
+    {
+      "id": "AC-OBS-NODE-002.2",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When a later complete comparable observation changes an entity, the system shall record a stable change with its before and after evidence."
+    },
+    {
+      "id": "AC-OBS-NODE-002.3",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When a source is incomplete or unavailable, the system shall preserve prior evidence as stale and shall not infer entity removal or recovery from the gap."
+    },
+    {
+      "id": "AC-OBS-NODE-002.4",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When a process ID is reused with a different start identity, the system shall keep the process identities distinct."
+    },
+    {
+      "id": "AC-GOV-NODE-003.1",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When no supported session is independently matched, the system shall identify the activity as unattributed and shall not invent a human, agent, or attacker identity."
+    },
+    {
+      "id": "AC-GOV-NODE-003.2",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When a configuration fingerprint is collected, the system shall not copy file contents, command arguments, environment values, or reusable secret hashes into the public node payload."
+    },
+    {
+      "id": "AC-GOV-NODE-003.3",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When node detail is sent to hosted storage, the system shall include it only in the encrypted node snapshot."
+    },
+    {
+      "id": "AC-GOV-NODE-004.1",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When the operator changes a supported monitoring preference, the daemon shall validate and persist the preference and record the change for review."
+    },
+    {
+      "id": "AC-GOV-NODE-004.2",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When the operator marks a recorded change expected or requiring investigation, the system shall retain the original evidence and record the review separately."
+    },
+    {
+      "id": "AC-GOV-NODE-004.3",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When a preference or review write is unavailable, the system shall report that it was not saved and shall not show success."
+    },
+    {
+      "id": "AC-GOV-NODE-005.1",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When enabled review rules match a sensitive configuration change or a new non-loopback listener, the system shall present a finding with the matching evidence and its uncertainty."
+    },
+    {
+      "id": "AC-GOV-NODE-005.2",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When an activity has no independently matched supported session, the feature shall not expose arbitrary process termination as a Guard action."
+    },
+    {
+      "id": "AC-GOV-NODE-005.3",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When a node is observed through a container or restricted account, the system shall state that scope and shall not describe it as unrestricted host coverage."
+    },
+    {
+      "id": "AC-OBS-NODE-006.1",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When the tab loads locally, its handlers shall read persisted daemon observations without collecting live host data in a request."
+    },
+    {
+      "id": "AC-OBS-NODE-006.2",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When the tab loads for a hosted node, its client shall read the selected node's decrypted snapshot and shall not substitute the cloud server's host observations."
+    },
+    {
+      "id": "AC-OBS-NODE-006.3",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When the tab is hidden, inactive, or switched to another node, its polling and replay shall stop or discard obsolete results."
+    },
+    {
+      "id": "AC-OBS-NODE-006.4",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When the global runtime selection changes, the tab shall remain explicitly node-wide and shall not hide unrelated activity."
+    },
+    {
+      "id": "AC-OBS-NODE-007.1",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When an observed event is selected, the map, evidence, resource history, and replay position shall show the same event."
+    },
+    {
+      "id": "AC-OBS-NODE-007.2",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When motion is reduced or the tab is hidden, the interface shall stop travel animations while retaining the evidence."
+    },
+    {
+      "id": "AC-OBS-NODE-007.3",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When no observations are available, the tab shall show a useful unavailable state and shall not insert illustrative telemetry."
+    },
+    {
+      "id": "AC-OBS-NODE-007.4",
+      "doc": "Node activity: observe changes, review risk and show coverage",
+      "doc_id": "7619d6bd-85f0-4a34-be97-4e7710f64621",
+      "text": "When the view is used on a narrow screen, its controls and evidence shall remain accessible without page-level horizontal overflow."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-001.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a source scan is partial, the system shall place unique incoming rows before retained stale rows and apply that source's public cap after the merge."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-001.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a row is positively observed, the system shall mark it current with that observation time; retained stale rows shall keep their prior observation time or an explicit unknown time for legacy evidence."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-002.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a source first supplies readable process rows, including initialization after installation, migration, a source change or a collection gap, the system shall establish a quiet positive-sighting baseline."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-002.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a later partial scan observes a retainable process identity not known in the current retained-history context, the system shall record an informational first-observed sighting that explicitly does not prove an actual start, a complete inventory or malicious intent."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-002.3",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When an unexpired process identity is observed again after cap rotation, daemon restart, a same-source gap, disable/re-enable or transition between partial and complete coverage, the system shall suppress duplicate first-observed sightings while preserving the quiet-initialization rule."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-003.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When the identity budget cannot retain an unknown process identity, the system shall preserve unexpired known identities, suppress the untrackable positive event and expose limited sighting history until a safe quiet rebaseline."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-003.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When retained sighting history expires, the system shall apply its declared retention window and identity bound without representing a later retained-window observation as the process's lifetime first appearance."
+    },
+    {
+      "id": "AC-OBS-NODE-PART-004.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When the view contains current and stale rows or limited sighting history, the system shall show per-row observation age or unknown time, describe the mixed-age inventory honestly and display the reported sighting-history limit."
+    },
+    {
+      "id": "AC-GOV-NODE-ACK-001.1",
+      "doc": "Node activity hosted action acknowledgement ownership",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When the same hosted action nonce is delivered more than once, including delivery through both durable and fast relay paths, the system shall allow only the original successful nonce claimant to execute the mutation."
+    },
+    {
+      "id": "AC-GOV-NODE-ACK-001.2",
+      "doc": "Node activity hosted action acknowledgement ownership",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a delivery finds its action nonce already claimed, the system shall leave the original execution's acknowledgement result unchanged and shall not post a replacement result for that duplicate delivery."
+    },
+    {
+      "id": "AC-GOV-NODE-ACK-001.3",
+      "doc": "Node activity hosted action acknowledgement ownership",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a duplicate delivery's action envelope is expired but its prior nonce claim remains within the existing valid retention boundary, the system shall treat it as a duplicate without re-executing the action or replacing the original result with an expiry failure."
+    },
+    {
+      "id": "AC-GOV-NODE-ACK-001.4",
+      "doc": "Node activity hosted action acknowledgement ownership",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When the original claimant crashes or fails during apply or result publication and successful persistence is not confirmed, the system shall leave the save unconfirmed and require a fresh operator request rather than automatically replaying that claimed action."
+    },
+    {
+      "id": "AC-ASIMOV-001.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When Pro is absent and license enforcement is enabled, the connector shall still import supported recordings and display persisted telemetry locally."
+    },
+    {
+      "id": "AC-ASIMOV-001.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When the developer starts the connector without optional Menlo dependencies, the system shall explain the required installation without breaking ordinary ClawMetry commands."
+    },
+    {
+      "id": "AC-ASIMOV-001.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When live credentials are absent, the system shall offer the recording path and shall not invent a robot connection."
+    },
+    {
+      "id": "AC-ASIMOV-002.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When connected with the documented Observe credential, the collector shall receive state without calling a robot command or changing connection authority."
+    },
+    {
+      "id": "AC-ASIMOV-002.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When state is received, the system shall preserve available positions, velocities, currents and temperatures for all 25 actuators, orientation, battery and alerts with explicit units."
+    },
+    {
+      "id": "AC-ASIMOV-002.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When measurements are missing or null, the system shall preserve that uncertainty instead of showing zero."
+    },
+    {
+      "id": "AC-ASIMOV-002.4",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When a connection fails or telemetry stops advancing, the system shall show stale/disconnected evidence and record a bounded diagnostic without claiming current robot state."
+    },
+    {
+      "id": "AC-ASIMOV-003.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When tracing is explicitly installed, the system shall record the original application command requests, returns and exceptions without changing their result or control flow."
+    },
+    {
+      "id": "AC-ASIMOV-003.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When the SDK returns without an authoritative outcome, the system shall retain an unknown outcome and shall not claim command acceptance or successful movement."
+    },
+    {
+      "id": "AC-ASIMOV-003.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When tracing is not installed, the system shall not patch SDK methods automatically."
+    },
+    {
+      "id": "AC-ASIMOV-004.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When a valid official recording is imported, the system shall retain robot/run identity, source timing, telemetry and command distinctions."
+    },
+    {
+      "id": "AC-ASIMOV-004.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When records are malformed, truncated or outside supported bounds, the system shall continue safely where possible and report incomplete evidence."
+    },
+    {
+      "id": "AC-ASIMOV-004.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When the same imported evidence is replayed, persisted events shall not silently duplicate or overwrite conflicting identities."
+    },
+    {
+      "id": "AC-ASIMOV-005.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When a producer records evidence, its callback shall use a bounded nonblocking queue and shall not perform database or network work."
+    },
+    {
+      "id": "AC-ASIMOV-005.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When queue or disk bounds are reached, the system shall surface dropped/incomplete evidence and shall not falsely report a complete recording."
+    },
+    {
+      "id": "AC-ASIMOV-005.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When evidence is queried, the system shall read persisted DuckDB state through the daemon writer service rather than raw robot files in a request handler."
+    },
+    {
+      "id": "AC-ASIMOV-005.4",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When evidence is serialized for the existing robotics pipeline, the system shall preserve the robotics.v1 contract, nanosecond precision, source/receipt clocks and explicit environment."
+    },
+    {
+      "id": "AC-ASIMOV-006.1",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When hardware has not been exercised, documentation and UI shall explicitly avoid claiming hardware-qualified support."
+    },
+    {
+      "id": "AC-ASIMOV-006.2",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When Pro is installed, Asimov integration shall coexist with existing SO101/RoboSim/RP1 evidence and shall not replace unrelated plugin handlers."
+    },
+    {
+      "id": "AC-ASIMOV-006.3",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When the hosted Asimov view is opened, it shall render the emitted encrypted asimov snapshot slice after client-side decryption or explain unavailable evidence; server-side raw robot reads are forbidden."
+    },
+    {
+      "id": "AC-ASIMOV-006.4",
+      "doc": "Asimov 1 observation connector",
+      "doc_id": "a508a5c5-8821-4964-8930-3561b7d02f2b",
+      "text": "When packaging the connector, the system shall not raise the declared Python minimum or require numerical/media libraries for users who do not run Asimov collection."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-001.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When process or listener observations are available, the view shall display their positively observed count separately from any exact total, and shall state when the exact total is unknown because coverage is partial or bounded."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-001.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a source is empty, unavailable or stale, the view shall distinguish a measured complete zero, zero accessible observations with incomplete coverage, unavailable collection and retained stale rows without presenting any of them as the same current zero."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-002.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When two comparable cumulative CPU observations exist for the same measured PID and process-start identity, the system shall report CPU usage from their actual elapsed interval with its CPU-capacity convention and measurement interval available to the view."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-002.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When a process CPU baseline is absent or invalid after first observation, PID reuse, daemon restart, a collection gap or unreadable counters, the system shall report that interval unavailable with an explanation rather than inventing a rate or reporting zero."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-003.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When primary macOS listener collection is permission denied or unsupported and a documented permitted fallback is available, the collector shall obtain only accessible TCP listener observations within declared time, output and row bounds, without privilege escalation, and shall report the method and incomplete scope."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-003.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When fallback observations are malformed, truncated, interrupted or change collection method, the system shall preserve safe stable listener identities and partial/gap semantics without inferring removals, recovery or complete inventory from missing rows."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-004.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When an event is selected or replayed, the primary story shall explain what was observed, when and on which process or resource, state attribution only when supported, and expose relevant uncertainty without drawing unsupported actor relationships."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-004.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When technical evidence is available, the view shall keep before/after and source details accessible progressively without requiring those details to understand the primary event story or replacing the original recorded evidence."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-005.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When an Observe inventory has no current observations or a source is disabled, unsupported or unavailable, the view shall show the source-specific collection reason and a working link to its coverage explanation."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-006.1",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When this follow-up is verified for delivery, an owned harmless live process and TCP listener shall be observed through the actual collector and DuckDB, with a measured process CPU interval and the same evidence verified in local and encrypted hosted views."
+    },
+    {
+      "id": "AC-OBS-NODE-CLARITY-006.2",
+      "doc": "Node activity current rows and partial positive sightings",
+      "doc_id": "d33e1d0b-43c1-4d3f-8d0d-8de6628d0583",
+      "text": "When an older stored or hosted snapshot lacks the new count or CPU metadata, the view shall continue to render its available evidence with honest measurement and coverage limits rather than fail, invent a CPU rate or infer a complete total."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-001.1",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When a user enters a process name or PID, the system shall filter all retained process rows, regardless of the visible page."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-001.2",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When results exceed one page, the system shall offer navigation and show the result count. Clearing search shall restore the list."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-001.3",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When observations refresh, the system shall preserve the search text without an additional network request for search."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-002.1",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When collection succeeds, the system shall retain the collector process within the process budget even if normal enumeration omits it."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-002.2",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When a recognized ClawMetry process is observed, the system shall show its role, PID, CPU and resident memory in a dedicated section and include it in searches for ClawMetry."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-002.3",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When readings are incomplete, stale, disabled or unavailable, the system shall state that condition and shall not present an incomplete sum as total usage."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-002.4",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When process metadata is persisted or synchronized, the system shall omit command lines, environments and argument values while retaining role and measurement metadata."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-003.1",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When the Node view is visible and active, the system shall sample and display process CPU and memory about every two seconds independently of slow ingest or startup backfill."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-003.2",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When the view is hidden or left, the browser shall stop its live requests and the collector shall return to a slower cadence after a bounded viewing lease expires."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-003.3",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When live readings arrive, the system shall preserve the search text and distinguish fresh measurements, initial sampling, delayed updates and snapshot fallback."
+    },
+    {
+      "id": "AC-OBS-NODE-SEARCH-003.4",
+      "doc": "Process search and ClawMetry resource visibility",
+      "doc_id": "29fd5189-7479-4259-8b97-2f74a5d4031b",
+      "text": "When viewed through cloud, the system shall deliver the live measurements as encrypted bounded frames through the existing authenticated cache and relay, without increasing full system-snapshot frequency."
+    },
+    {
+      "id": "AC-GUX-TRR-001.1",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The expired-trial plan dialog shall fit a 1280 by 720 CSS viewport and keep actions reachable without horizontal overflow at narrow viewports."
+    },
+    {
+      "id": "AC-GUX-TRR-001.2",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The plan dialog shall show the selected billing period and per-node price, preserving the chosen tier when the billing period changes."
+    },
+    {
+      "id": "AC-GUX-TRR-001.3",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The primary action shall provide at least 4.5 to 1 text contrast."
+    },
+    {
+      "id": "AC-GUX-TRR-001.4",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The dialog shall preserve translated controls and offer optional feedback only after the user declines subscribing."
+    },
+    {
+      "id": "AC-GUX-TRR-001.5",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The dialog shall contain keyboard focus, support dismissal when optional, and keep license entry collapsed until requested."
+    },
+    {
+      "id": "AC-GUX-TRR-001.6",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The recovery flow shall request eligibility only on user intent and display the confirmed end date only after a successful claim."
+    },
+    {
+      "id": "AC-GUX-TRR-001.7",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "The local recovery endpoint shall keep credentials private, reject cross-site or identity-changing requests and confirm only successfully applied licenses."
+    },
+    {
+      "id": "AC-GUX-TRR-001.8",
+      "doc": "Trial dialog usability and recovery",
+      "doc_id": "TRR-001",
+      "text": "A trial license refresh shall never replace a current paid license or shorten a longer current trial, including concurrent processes."
     }
   ]
 }

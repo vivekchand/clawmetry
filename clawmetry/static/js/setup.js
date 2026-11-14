@@ -16,6 +16,50 @@ var _cmSetupState = {
   identity: null,
 };
 
+function _cmSetupSize(size) {
+  size = Number(size || 0);
+  if (size >= 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB';
+  return size >= 1024 ? (size / 1024).toFixed(1) + ' KB' : size + ' B';
+}
+
+function _cmSetupImageName(name) {
+  return /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(name || '');
+}
+
+function _cmSetupBinaryContent(content) {
+  return typeof content === 'string' && /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(content);
+}
+
+function _cmSetupMountPreview(host, data, name) {
+  data.binary = data.binary || _cmSetupBinaryContent(data.content);
+  var image = data.preview_type === 'image' || _cmSetupImageName(name);
+  var source = typeof data.data_url === 'string' && /^data:image\/(png|jpeg|gif|webp|svg\+xml|avif|bmp|x-icon);base64,[A-Za-z0-9+/]+=*$/.test(data.data_url) ? data.data_url : '';
+  var type = image ? 'Image' : (data.binary || data.preview_type === 'binary' ? 'Binary file' : data.language || 'text');
+  var head = '<div class="cm-setup-preview-head"><strong>' + _cmSetupEscape(name) + '</strong><span>'
+    + _cmSetupEscape(type) + ' · ' + _cmSetupSize(data.size) + '</span>';
+  if (image && source && !data.truncated) {
+    head += '<a class="cm-setup-save-image" href="' + _cmSetupEscape(source) + '" download="' + _cmSetupEscape(name.split('/').pop()) + '">Save image</a>';
+  }
+  head += '</div>';
+  if (image && source && !data.truncated) {
+    // SVG stays in an img element: never inject file contents into the page.
+    host.innerHTML = head + '<div class="cm-setup-preview-image"><img src="' + _cmSetupEscape(source) + '" alt="' + _cmSetupEscape(name) + '"></div>';
+    var imageElement = host.querySelector('img');
+    imageElement.addEventListener('error', function() {
+      if (!host.contains(imageElement)) return;
+      host.innerHTML = head + '<div class="cm-setup-preview-empty">This image could not be displayed. The file may be damaged or use an unsupported format.</div>';
+    }, { once: true });
+  } else if (image || data.binary || data.preview_type === 'binary') {
+    var message = image
+      ? (data.truncated ? 'This image is too large to preview.' : 'An image preview is not available for this file.')
+      : 'Preview is not available for this file type.';
+    host.innerHTML = head + '<div class="cm-setup-preview-empty"><div><strong>' + message + '</strong><p>Open the original file on the agent machine to view it.</p></div></div>';
+  } else {
+    host.innerHTML = head + (data.truncated ? '<div class="cm-setup-preview-notice">Showing the beginning of this file.</div>' : '')
+      + '<pre class="cm-setup-preview-code">' + _cmSetupEscape(data.content || '') + '</pre>';
+  }
+}
+
 function _cmSetupIdentity() {
   if (!window.CLOUD_MODE) return 'local';
   var node = window.CLOUD_NODE_ID || '', token = window.CLOUD_TOKEN || '', key = '';
@@ -298,12 +342,12 @@ async function setupSelectRuntime(runtimeId) {
     }
     list.innerHTML = groups.map(function(group, groupIndex) {
       var files = (group.files || []).map(function(file, fileIndex) {
-        var name = file.path || group.label || '(file)';
-        var size = Number(file.size || 0);
-        var sizeText = size >= 1024 ? (size / 1024).toFixed(1) + ' KB' : size + ' B';
-        return '<button type="button" class="cm-setup-file-row" onclick="setupOpenFile(' + groupIndex + ',' + fileIndex + ')">'
-          + '<span><strong>' + _cmSetupEscape(name.split('/').pop() || name) + '</strong><small>' + _cmSetupEscape(group.scope) + ' · ' + _cmSetupEscape(group.category) + '</small></span>'
-          + '<em>' + _cmSetupEscape(sizeText) + '</em></button>';
+        var name = file.path || (group.root || '').split('/').pop() || group.label || '(file)';
+        var folder = name.indexOf('/') >= 0 ? name.slice(0, name.lastIndexOf('/')) : group.scope + ' · ' + group.category;
+        return '<button type="button" class="cm-setup-file-row" data-setup-file="' + groupIndex + ':' + fileIndex + '" aria-pressed="false" title="' + _cmSetupEscape(name) + '" onclick="setupOpenFile(' + groupIndex + ',' + fileIndex + ')">'
+          + '<span class="cm-setup-file-icon" aria-hidden="true">' + (_cmSetupImageName(name) ? '▧' : '≡') + '</span>'
+          + '<span class="cm-setup-file-name"><strong>' + _cmSetupEscape(name.split('/').pop() || name) + '</strong><small>' + _cmSetupEscape(folder) + '</small></span>'
+          + '<em>' + _cmSetupSize(file.size) + '</em></button>';
       }).join('');
       return '<div class="cm-setup-file-group"><div class="cm-setup-file-group-title">' + _cmSetupEscape(group.label || group.category) + '</div>'
         + '<div class="cm-setup-file-group-path">' + _cmSetupEscape(group.root) + '</div>' + files + '</div>';
@@ -322,28 +366,36 @@ async function setupOpenFile(groupIndex, fileIndex) {
   var runtimeId = _cmSetupState.selectedRuntime;
   var preview = document.getElementById('setup-file-preview');
   if (!group || !file || !preview || !runtimeId) return;
+  var name = file.path || (group.root || '').split('/').pop() || group.label || 'file';
   var requestId = ++_cmSetupState.fileRequestId;
+  document.querySelectorAll('.cm-setup-file-row').forEach(function(row) {
+    var selected = row.getAttribute('data-setup-file') === groupIndex + ':' + fileIndex;
+    row.classList.toggle('is-selected', selected);
+    row.setAttribute('aria-pressed', String(selected));
+  });
   preview.innerHTML = '<div class="cm-setup-loading">Reading ' + _cmSetupEscape(file.path || group.label) + '…</div>';
   try {
     var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/file?root=' + encodeURIComponent(group.root) + '&path=' + encodeURIComponent(file.path || '');
     var data;
     if (window.CLOUD_MODE) {
+      if (_cmSetupImageName(file.path || group.root || group.label)) {
+        _cmSetupMountPreview(preview, {preview_type: 'image', size: file.size}, name);
+        return;
+      }
       if (file.content_available === false || typeof file.content !== 'string') {
         preview.textContent = file.omitted_reason === 'snapshot_budget'
           ? 'This file is listed, but its contents were omitted to keep sync within its size limit. Open it on the node to read the full file.'
           : 'This file is listed in the synced inventory, but its contents have not been synced. Refresh after the next node sync.';
         return;
       }
-      data = {content: file.content, language: file.language || 'text', truncated: !!file.truncated};
+      data = {content: file.content, language: file.language || 'text', size: file.size, truncated: !!file.truncated};
     } else {
       var response = await _cmSetupFetch(url, { credentials: 'same-origin' }, 8000);
       data = await response.json();
       if (!response.ok) throw new Error(data.error || 'File could not be read.');
     }
     if (requestId !== _cmSetupState.fileRequestId || _cmSetupState.selectedRuntime !== runtimeId) return;
-    preview.innerHTML = '<div class="cm-setup-preview-head"><strong>' + _cmSetupEscape(file.path || group.label) + '</strong><span>' + _cmSetupEscape(data.language || 'text') + '</span></div>'
-      + (data.truncated ? '<p class="cm-setup-section-note">Partial preview. This file exceeds the synced preview limit; open it on the node to read the full file.</p>' : '')
-      + '<pre class="cm-setup-preview-code">' + _cmSetupEscape(data.content || '') + '</pre>';
+    _cmSetupMountPreview(preview, data, name);
   } catch (error) {
     if (requestId !== _cmSetupState.fileRequestId || _cmSetupState.selectedRuntime !== runtimeId) return;
     preview.innerHTML = '<div class="cm-setup-error">Could not read this file. ' + _cmSetupEscape(error && error.message || error) + '</div>';

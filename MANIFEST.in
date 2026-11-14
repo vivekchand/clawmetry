@@ -7,6 +7,8 @@ include CLAUDE.md
 include ARCHITECTURE.md
 include CHANGELOG.md
 include LICENSE
+include clawmetry/asimov/NOTICE
+include clawmetry/asimov/LICENSE-MENLO
 include README.md
 include SUPPORTED_RUNTIMES.txt
 prune tests

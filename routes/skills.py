@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify
+from clawmetry.file_security import is_path_within
 
 bp_skills = Blueprint("skills", __name__)
 
@@ -685,7 +686,7 @@ def api_skill_file(skill_name):
     file_path = request.args.get("path", "SKILL.md")
     # Security: prevent directory traversal
     full_path = os.path.normpath(os.path.join(skill_dir, file_path))
-    if not full_path.startswith(os.path.normpath(skill_dir)):
+    if not is_path_within(full_path, skill_dir):
         return jsonify({"error": "invalid path"}), 400
 
     if not os.path.isfile(full_path):

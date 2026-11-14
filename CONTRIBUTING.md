@@ -4,6 +4,18 @@ Thanks for your interest in contributing! 🦞
 
 OpenClaw Dashboard is built to be **simple, fast, and useful** for personal AI agent observability. Contributions that align with these principles are always welcome.
 
+## Found a bug? You do not need a GitHub account
+
+Open the dashboard (local or hosted) and click **Report a bug** at the bottom
+of the sidebar. It collects the version, OS and runtime details for you, takes
+a screenshot if you drop or paste one, and hands back a tracking id like
+`CM-4F2K9Q1X`. You can check that id at `https://app.clawmetry.com/bug/<id>`,
+and if you leave an email address we write to you when it is fixed.
+
+Reports filed that way arrive here as ordinary issues, so a report and an issue
+end up in the same queue. Opening an issue yourself is still welcome, and is
+the better route when you already have a diagnosis or a patch in mind.
+
 ---
 
 ## 🚀 Quick Start (Development)

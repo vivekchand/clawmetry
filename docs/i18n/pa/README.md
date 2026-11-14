@@ -17,7 +17,7 @@
 ਇੱਕ ਹੀ ਵਿਊ ਵਿੱਚ ਪਾ ਦਿੰਦਾ ਹੈ — ਤਾਂ ਜੋ ਤੁਸੀਂ ਇੱਕ ਲੰਮੀ ਚੱਲ ਰਹੀ ਰਨ ਜੋ ਕੰਮ ਕਰ ਰਹੀ ਹੈ ਨੂੰ
 ਉਸ ਤੋਂ ਵੱਖ ਕਰ ਸਕੋ ਜੋ ਅਟਕ ਗਈ ਹੈ।
 
-**33 AI ਏਜੰਟ ਰਨਟਾਈਮਾਂ** ਨਾਲ ਕੰਮ ਕਰਦਾ ਹੈ — Claude Code, OpenAI Codex, Hermes, OpenClaw ਅਤੇ 29 ਹੋਰ। ਤੁਹਾਡੇ ਪੂਰੇ ਏਜੰਟ ਫਲੀਟ ਲਈ ਇੱਕ ਡੈਸ਼ਬੋਰਡ। ([ਪੂਰੀ ਸੂਚੀ](SUPPORTED_RUNTIMES.txt), ਕੈਟਾਲਾਗ ਤੋਂ ਤਿਆਰ ਕੀਤੀ ਗਈ।)
+**32 AI ਏਜੰਟ ਰਨਟਾਈਮਾਂ** ਨਾਲ ਕੰਮ ਕਰਦਾ ਹੈ — Claude Code, OpenAI Codex, Hermes, OpenClaw ਅਤੇ 28 ਹੋਰ। ਤੁਹਾਡੇ ਪੂਰੇ ਏਜੰਟ ਫਲੀਟ ਲਈ ਇੱਕ ਡੈਸ਼ਬੋਰਡ। ([ਪੂਰੀ ਸੂਚੀ](SUPPORTED_RUNTIMES.txt), ਕੈਟਾਲਾਗ ਤੋਂ ਤਿਆਰ ਕੀਤੀ ਗਈ।)
 
 > 🌐 **ਇਹ ਪੜ੍ਹੋ:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [ਹੋਰ →](docs/i18n/)
 
@@ -49,11 +49,11 @@ pip install clawmetry && clawmetry
 ਸਮਰੱਥਾ ਵਾਂਗ ਨਹੀਂ ਹੈ ([ਕਿਹੜੇ ਕੰਟਰੋਲ ਅਸਲੀ ਹਨ, ਹਰ ਰਨਟਾਈਮ ਲਈ](docs/APPROVALS.md))।
 
 
-## 33 ਏਜੰਟ ਰਨਟਾਈਮਾਂ ਨਾਲ ਕੰਮ ਕਰਦਾ ਹੈ
+## 32 ਏਜੰਟ ਰਨਟਾਈਮਾਂ ਨਾਲ ਕੰਮ ਕਰਦਾ ਹੈ
 
 **ਓਪਨ ਸੋਰਸ ਐਪ ਵਿੱਚ ਮੁਫ਼ਤ:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**ਕਿਸੇ ਭੁਗਤਾਨ ਵਾਲੇ ਪਲਾਨ 'ਤੇ:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**ਕਿਸੇ ਭੁਗਤਾਨ ਵਾਲੇ ਪਲਾਨ 'ਤੇ:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 ਹਰ ਰਨਟਾਈਮ ਨੂੰ ਇੱਕੋ ਡੈਸ਼ਬੋਰਡ ਮਿਲਦਾ ਹੈ। ਇੱਕੋ ਵੇਲੇ ਕਈ ਚਲਾਓ ਅਤੇ ਹੈਡਰ
 ਸਵਿੱਚਰ ਹਰ ਟੈਬ ਨੂੰ ਉਹਨਾਂ ਵਿੱਚੋਂ ਇੱਕ ਲਈ ਦੁਬਾਰਾ-ਸਕੋਪ ਕਰ ਦਿੰਦਾ ਹੈ।
@@ -82,7 +82,7 @@ pip install clawmetry && clawmetry
 ਉਪਯੋਗਤਾ ਪ੍ਰਤੀਸ਼ਤ ਸਿਰਫ਼ ਉਸੇ ਹੱਦ ਤੱਕ ਇਮਾਨਦਾਰ ਹੈ ਜਿੰਨਾ ਉਹ ਭਾਜਕ ਹੈ। ClawMetry
 ਹਰ ਪ੍ਰੋਵਾਈਡਰ ਲਈ [ਇੱਕ ਟੇਬਲ ਜਿਸ ਨੂੰ ਤੁਸੀਂ ਪੜ੍ਹ ਸਕਦੇ ਹੋ ਅਤੇ PR ਕਰ ਸਕਦੇ ਹੋ](clawmetry/context_windows.py)
 ਤੋਂ ਵਿੰਡੋ ਦਾ ਆਕਾਰ ਤੈਅ ਕਰਦਾ ਹੈ, ਜੋ Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama ਅਤੇ GLM ਨੂੰ ਕਵਰ ਕਰਦਾ ਹੈ। ਇਹ ਸਾਰੇ 33
+DeepSeek, Kimi, Qwen, Mistral, Llama ਅਤੇ GLM ਨੂੰ ਕਵਰ ਕਰਦਾ ਹੈ। ਇਹ ਸਾਰੇ 32
 ਰਨਟਾਈਮਾਂ ਨੂੰ ਇੱਕ ਹੀ ਵੈਂਡਰ ਦੇ ਸਕੇਲ ਨਾਲ ਨਹੀਂ ਮਾਪਦਾ। ਇਹ ਗੱਲ ਮਹੱਤਵ ਰੱਖਦੀ ਹੈ: ਇੱਕ
 300K GPT-5 ਵਾਰੀ ਨੂੰ Anthropic ਦੇ 200K ਦੇ ਵਿਰੁੱਧ ਪੜ੍ਹਿਆ ਜਾਵੇ ਤਾਂ ">100%, ਬਲੋਨ"
 ਪੜ੍ਹਿਆ ਜਾਂਦਾ ਹੈ ਜਦੋਂ ਕਿ ਇਹ ਅਸਲ ਵਿੱਚ GPT-5 ਦੇ 400K ਦਾ 75% ਹੈ। ਉਹੀ ਸਕੇਲ ਇੱਕ ਸੱਚਮੁੱਚ
@@ -103,7 +103,7 @@ ClawMetry ਕੁਝ ਰਨਟਾਈਮਾਂ 'ਤੇ ਹੀ ਕੰਪੈਕਸ�
 
 | ਪਾਥ | ਤੁਹਾਡੇ ਏਜੰਟ ਵਿੱਚ ਜੋੜਿਆ ਗਿਆ | ਮੂਲ? |
 |---|---|---|
-| ਸੈਸ਼ਨ-ਫਾਈਲ ਟੇਲਿੰਗ (ਸਾਰੇ 33 ਰਨਟਾਈਮ) | **0**। ਵੱਖਰੀ ਪ੍ਰਕਿਰਿਆ, ਤੁਹਾਡੇ ਏਜੰਟ ਵਿੱਚ ਕੋਈ ClawMetry ਕੋਡ ਨਹੀਂ | ਚਾਲੂ |
+| ਸੈਸ਼ਨ-ਫਾਈਲ ਟੇਲਿੰਗ (ਸਾਰੇ 32 ਰਨਟਾਈਮ) | **0**। ਵੱਖਰੀ ਪ੍ਰਕਿਰਿਆ, ਤੁਹਾਡੇ ਏਜੰਟ ਵਿੱਚ ਕੋਈ ClawMetry ਕੋਡ ਨਹੀਂ | ਚਾਲੂ |
 | HTTP ਇੰਟਰਸੈਪਟਰ (`CLAWMETRY_INTERCEPT=1`) | ਹਰ LLM ਕਾਲ ਲਈ **+0.44 ms**, ਜਾਂ 5s ਕਾਲ ਦਾ 0.009% | ਬੰਦ |
 | ਪ੍ਰੀ-ਟੂਲ ਹੁੱਕ ਗੇਟ (ਵਾਰਮ ਕੈਸ਼) | ਹਰ ਗੇਟਿਡ ਟੂਲ ਕਾਲ ਲਈ **+44 ms**, 36 ms ਇੰਟਰਪ੍ਰੈਟਰ ਫਲੋਰ ਤੋਂ ਵੱਧ | ਬੰਦ |
 | ਐਨਫੋਰਸਮੈਂਟ ਪ੍ਰੌਕਸੀ | ਹਰ LLM ਕਾਲ ਲਈ **+9.7 ms** | ਬੰਦ |

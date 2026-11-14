@@ -32,9 +32,19 @@ import logging
 
 from flask import Blueprint, jsonify, current_app
 
+from clawmetry.physical_ai.catalog import hardware_navigation, workbench_navigation
+
 logger = logging.getLogger("clawmetry.routes.extensions")
 
 bp_extensions = Blueprint("extensions", __name__)
+
+
+def physical_ai_navigation(entries):
+    """Preserve a declared installed workbench, with a built-in fallback."""
+    navigation = entries if isinstance(entries, list) else []
+    if "physical_ai.physical_ai_page" not in current_app.view_functions:
+        return navigation, []
+    return workbench_navigation(navigation)
 
 
 @bp_extensions.route("/api/extensions", methods=["GET"])
@@ -118,8 +128,11 @@ def api_extensions():
         events = list(_ext.registered_events())
         handler_counts = {evt: _ext.handler_count(evt) for evt in events}
         navigation = _ext.call("ui.navigation", {"endpoints": list(current_app.view_functions)}, default=[])
+        navigation, advanced = physical_ai_navigation(navigation)
         return jsonify({
-            "navigation": navigation if isinstance(navigation, list) else [],
+            "navigation": navigation,
+            "physical_ai_hardware": hardware_navigation(),
+            **({"physical_ai_advanced": advanced} if advanced else {}),
             "plugins": plugins,
             "plugin_count": len(plugins),
             "failed_plugins": failed,
@@ -133,7 +146,8 @@ def api_extensions():
         logger.warning("extensions: introspection failed: %s", exc)
         return jsonify({
             "plugins": [],
-            "navigation": [],
+            "navigation": physical_ai_navigation([])[0],
+            "physical_ai_hardware": hardware_navigation(),
             "plugin_count": 0,
             "failed_plugins": [],
             "failed_plugin_count": 0,

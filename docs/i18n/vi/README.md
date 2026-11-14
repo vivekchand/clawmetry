@@ -16,7 +16,7 @@
 các lệnh gọi công cụ cùng mọi dữ liệu token và chi phí mà runtime cung cấp vào một
 giao diện duy nhất — để bạn có thể phân biệt một phiên chạy dài đang hoạt động hiệu quả với một phiên bị kẹt.
 
-Hoạt động với **33 runtime AI agent** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 29 cái khác. Một bảng điều khiển duy nhất cho toàn bộ đội agent của bạn. ([danh sách đầy đủ](SUPPORTED_RUNTIMES.txt), được sinh ra từ danh mục.)
+Hoạt động với **32 runtime AI agent** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 cái khác. Một bảng điều khiển duy nhất cho toàn bộ đội agent của bạn. ([danh sách đầy đủ](SUPPORTED_RUNTIMES.txt), được sinh ra từ danh mục.)
 
 > 🌐 **Đọc bằng:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [thêm →](docs/i18n/)
 
@@ -47,11 +47,11 @@ cho biết cái nào, theo từng runtime), và việc quan sát một hành đ�
 có thể chặn nó ([những điều khiển nào là thật, theo từng runtime](docs/APPROVALS.md)).
 
 
-## Hoạt động với 33 runtime agent
+## Hoạt động với 32 runtime agent
 
 **Miễn phí trong ứng dụng mã nguồn mở:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**Trên gói trả phí:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**Trên gói trả phí:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 Mọi runtime đều nhận cùng một bảng điều khiển. Chạy nhiều runtime cùng lúc thì
 bộ chuyển đổi ở đầu trang sẽ định hướng lại mọi tab theo runtime đó.
@@ -80,7 +80,7 @@ Hai câu hỏi đáng được trả lời trước khi bạn tin tưởng bất
 Tỷ lệ phần trăm sử dụng chỉ trung thực khi mẫu số của nó trung thực. ClawMetry
 tính kích thước cửa sổ theo từng nhà cung cấp dựa trên [một bảng bạn có thể đọc và
 gửi PR](clawmetry/context_windows.py), bao gồm Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama và GLM. Nó không đo cả 33
+DeepSeek, Kimi, Qwen, Mistral, Llama và GLM. Nó không đo cả 32
 runtime bằng thước đo của một nhà cung cấp duy nhất. Điều này quan trọng: một lượt 300K token của GPT-5 nếu
 so với 200K của Anthropic sẽ đọc là ">100%, đã tràn" trong khi thực ra nó chỉ ở mức 75% của
 400K của GPT-5. Cùng cách đo đó lại che giấu một lượt 130K token của DeepSeek thực sự đã tràn
@@ -99,7 +99,7 @@ ClawMetry chỉ có thể nhìn thấy các sự kiện nén (compaction) trên 
 
 | Đường dẫn | Thêm vào agent của bạn | Mặc định? |
 |---|---|---|
-| Theo dõi tệp phiên làm việc (tất cả 33 runtime) | **0**. Tiến trình riêng biệt, không có mã ClawMetry trong agent của bạn | bật |
+| Theo dõi tệp phiên làm việc (tất cả 32 runtime) | **0**. Tiến trình riêng biệt, không có mã ClawMetry trong agent của bạn | bật |
 | Bộ chặn HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** mỗi lệnh gọi LLM, tức 0.009% của một lệnh gọi 5 giây | tắt |
 | Cổng hook tiền-công cụ (bộ nhớ đệm đã làm nóng) | **+44 ms** mỗi lệnh gọi công cụ bị chặn, trên nền 36 ms của trình thông dịch | tắt |
 | Proxy thực thi | **+9.7 ms** mỗi lệnh gọi LLM | tắt |

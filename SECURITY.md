@@ -4,17 +4,21 @@ ClawMetry runs on developer machines and reads AI agent transcripts. That is
 sensitive material, so this document states plainly what we protect, what we
 do not, how to report a problem, and how fast we will answer.
 
-- **Report a vulnerability:** security@clawmetry.com, or a
-  [private GitHub advisory](https://github.com/vivekchand/clawmetry/security/advisories/new).
-  Please do not open a public issue for a security bug.
+- **Report a vulnerability:** email security@clawmetry.com. GitHub's private
+  advisory form is not enabled on this repository, so email is the private
+  channel — a reporter following that link gets a 404, not a form. Please do
+  not open a public issue for a security bug. Advisories we have published are
+  listed at
+  [security/advisories](https://github.com/vivekchand/clawmetry/security/advisories).
 - **Network egress inventory:** [docs/EGRESS.md](docs/EGRESS.md) — every
   outbound destination, what it sends, and how to disable it.
 
 ## Reporting a vulnerability
 
-Email **security@clawmetry.com** or file a private advisory through GitHub.
-Include what you found, how to reproduce it, and what an attacker gains. A
-proof of concept helps but is not required to report.
+Email **security@clawmetry.com**. Include what you found, how to reproduce
+it, and what an attacker gains. A proof of concept helps but is not required
+to report. Reporting by email is not a lesser channel here: it is the only
+private one, because GitHub's advisory form is not open on this repository.
 
 ### What you can expect
 

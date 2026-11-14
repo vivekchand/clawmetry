@@ -51,8 +51,8 @@ def test_tier1_order_and_membership():
     # under Govern. Guard owns the Approvals and Alerts entry points
     # (REQ-GUX-003); existing tab ids remain usable for deep links.
     assert tier1 == [
-        "assistant", "overview", "inventory", "setup", "improve", "transcripts", "brain", "usage", "models",
-        "context-economics",
+        "assistant", "overview", "inventory", "transcripts", "node-activity", "setup", "improve", "brain", "usage", "delivery",
+        "models", "context-economics",
         "evals", "bench", "guard", "signals", "notifications",
     ], f"Tier-1 must be the beginner items in order, got {tier1}"
 

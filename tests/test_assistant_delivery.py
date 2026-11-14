@@ -438,3 +438,20 @@ def test_legacy_heartbeat_dispatches_assistant_before_slow_generic_query(monkeyp
         {'type': 'assistant_request', 'id': 'a'}, None,
         {'type': 'assistant_request', 'id': 'b'}, {'type': 'other', 'id': 'other'}])
     assert order == ['a', 'b', 'query', 'other']
+
+
+@pytest.mark.parametrize('ttl',[2,40,0,-1,41,True,'2',float('nan')])
+def test_live_resource_hint_is_bounded_and_executes_no_generic_action(delivery,monkeypatch,ttl):
+    from clawmetry import node_activity_service as service
+    worker=relay._DeliveryWorker()
+    touched=[]
+    class Stop:
+        stopped=False
+        def is_set(self):return self.stopped
+        def wait(self,seconds):self.stopped=True
+    worker.stop=Stop()
+    monkeypatch.setattr(worker,'poll',lambda *a:{'node_activity_live_ttl':ttl,'assistant_actions':[]})
+    monkeypatch.setattr(service,'touch_node_activity_view',lambda **kw:touched.append(kw))
+    monkeypatch.setattr(relay,'dispatch',lambda *a:pytest.fail('A resource hint is not a generic command'))
+    worker.run()
+    assert touched == ([{'remote':True,'lease_seconds':ttl}] if type(ttl) in (int,float) and 0<ttl<=40 else [])

@@ -16,7 +16,7 @@ liest die Session-Dateien, die eure Coding-Agenten bereits schreiben, und bringt
 die Tool-Aufrufe und alle Token- und Kostendaten, die die Runtime bereitstellt, in eine einzige
 Ansicht – so könnt ihr einen langen, erfolgreichen Durchlauf von einem unterscheiden, der feststeckt.
 
-Funktioniert mit **33 KI-Agent-Runtimes** – Claude Code, OpenAI Codex, Hermes, OpenClaw & 29 weitere. Ein Dashboard für eure gesamte Agenten-Flotte. ([die vollständige Liste](SUPPORTED_RUNTIMES.txt), aus dem Katalog generiert.)
+Funktioniert mit **32 KI-Agent-Runtimes** – Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 weitere. Ein Dashboard für eure gesamte Agenten-Flotte. ([die vollständige Liste](SUPPORTED_RUNTIMES.txt), aus dem Katalog generiert.)
 
 > 🌐 **Lies dies auf:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [mehr →](docs/i18n/)
 
@@ -47,11 +47,11 @@ zeigt, welche, pro Runtime), und eine Aktion zu beobachten ist nicht dasselbe wi
 können ([welche Kontrollen pro Runtime real sind](docs/APPROVALS.md)).
 
 
-## Funktioniert mit 33 Agent-Runtimes
+## Funktioniert mit 32 Agent-Runtimes
 
 **Kostenlos in der Open-Source-App:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**In einem kostenpflichtigen Plan:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**In einem kostenpflichtigen Plan:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 Jede Runtime erhält dasselbe Dashboard. Lasst mehrere gleichzeitig laufen, und der Umschalter in
 der Kopfzeile skaliert jeden Tab neu auf eine davon.
@@ -80,7 +80,7 @@ Zwei Fragen, die es wert sind, beantwortet zu werden, bevor ihr irgendeinem Agen
 Ein Auslastungsprozentsatz ist nur so ehrlich wie das, wodurch er dividiert. ClawMetry
 bemisst das Fenster pro Anbieter anhand [einer Tabelle, die ihr lesen und
 per PR ändern könnt](clawmetry/context_windows.py), die Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama und GLM abdeckt. Es misst nicht alle 33
+DeepSeek, Kimi, Qwen, Mistral, Llama und GLM abdeckt. Es misst nicht alle 32
 Runtimes mit dem Lineal eines einzigen Anbieters. Das ist wichtig: Ein 300K-GPT-5-Turn,
 gegen Anthropics 200K bewertet, liest sich als ">100%, geplatzt", obwohl er tatsächlich bei
 75% von GPT-5s 400K liegt. Dasselbe Lineal verbirgt einen wirklich überlaufenen
@@ -100,7 +100,7 @@ meldet `GET /api/context-coverage` pro Runtime, ob eine **Null "lief sauber" ode
 
 | Pfad | Zu eurem Agenten hinzugefügt | Standard? |
 |---|---|---|
-| Session-Datei-Tailing (alle 33 Runtimes) | **0**. Separater Prozess, kein ClawMetry-Code in eurem Agenten | an |
+| Session-Datei-Tailing (alle 32 Runtimes) | **0**. Separater Prozess, kein ClawMetry-Code in eurem Agenten | an |
 | HTTP-Interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** pro LLM-Aufruf, bzw. 0,009% eines 5-Sekunden-Aufrufs | aus |
 | Pre-Tool-Hook-Gate (warmer Cache) | **+44 ms** pro gegatetem Tool-Aufruf, über einem 36-ms-Interpreter-Sockel | aus |
 | Enforcement-Proxy | **+9,7 ms** pro LLM-Aufruf | aus |

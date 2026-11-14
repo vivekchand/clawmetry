@@ -40,7 +40,7 @@ concurrency:
 jobs:
   verify:
     name: ${{ matrix.os }} / py${{ matrix.python-version }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
