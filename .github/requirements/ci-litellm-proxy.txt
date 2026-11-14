@@ -1,6 +1,6 @@
 # Hash-pinned install set for the LiteLLM proxy in .github/workflows/litellm-gateway.yml.
 #
-# Direct requirements: litellm[proxy]==1.88.6 prisma==0.11.0
+# Direct requirements: litellm[proxy]==1.100.4 prisma==0.11.0
 #   opentelemetry-api==1.44.0 opentelemetry-sdk==1.44.0
 #   opentelemetry-exporter-otlp-proto-http==1.44.0
 #   (prisma is LiteLLM's own pin for its proxy database client, and the
@@ -331,9 +331,9 @@ botocore==1.43.101 \
     # via
     #   boto3
     #   s3transfer
-certifi==2026.7.22 \
-    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
-    --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
+certifi==2026.10.19 \
+    --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
+    --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
     # via
     #   httpcore
     #   httpx
@@ -1138,7 +1138,7 @@ jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
     # via jsonschema
-litellm==1.88.6 \
+litellm==1.100.4 \
     --hash=sha256:8c01f7e9aebded5b3509128be648518a2ec4f1feb8dfb87a539895091651898b
     # via -r ll.in
 litellm-enterprise==0.1.40 \
@@ -1441,9 +1441,9 @@ nodeenv==1.10.0 \
     --hash=sha256:5bb13e3eed2923615535339b3c620e76779af4cb4c6a90deccc9e36b274d3827 \
     --hash=sha256:996c191ad80897d076bdfba80a41994c2b47c68e224c542b48feba42ba00f8bb
     # via prisma
-oauthlib==4.0.0 \
-    --hash=sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd \
-    --hash=sha256:efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86
+oauthlib==4.0.1 \
+    --hash=sha256:3d73febdb6faa00f277c81fb04be7b7586fb96fc3b7f0b9c772dada69a25ede7 \
+    --hash=sha256:498a298876e996301950a5b053d12c31628bb7b895db03666430c69ce182eb61
     # via fastapi-sso
 openai==2.54.0 \
     --hash=sha256:89089789197ccdb87f173a03145ed1598d00795220c93e96cf712b1cbf5e5f2b \

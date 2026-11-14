@@ -25,6 +25,7 @@ Acceptance criteria proven here (docs/acceptance_criteria.json):
 from __future__ import annotations
 
 import importlib
+import os
 
 import pytest
 
@@ -49,7 +50,12 @@ _SHAPES = [
 
 def _duck():
     duckdb = pytest.importorskip("duckdb")
-    return duckdb.connect()
+    conn = duckdb.connect()
+    # Match Python's test clock after la_timezone changes TZ in this process.
+    # Production startup and older ICU caches do not have the same lifecycle.
+    if os.environ.get("TZ"):
+        conn.execute("SET TimeZone = ?", [os.environ["TZ"]])
+    return conn
 
 
 def _sql_day(conn, ts):
@@ -142,7 +148,7 @@ def test_utc_and_offset_spellings_of_one_instant_bucket_identically():
 
 # ── never crash on the input we do not control ──────────────────────────
 
-@pytest.mark.parametrize("bad", [None, "", "   ", "garbage", "not-a-date", 0, []])
+@pytest.mark.parametrize("bad", [None, "", "   ", "garbage", "not-a-date", True, []])
 def test_unparseable_input_yields_no_bucket_rather_than_today(bad):
     """An underivable bucket must not become today, or every unparsed row
     would pile onto whatever day the code happened to run."""

@@ -1,0 +1,40 @@
+<!-- DELIVERY: what the agent spend actually bought.
+     Every other cost view here is keyed on an input (a session, a runtime, a
+     model). This one is keyed on an output: the pull request. Strings use the
+     t(key, null, "English") form rather than data-i18n so the tab ships
+     without a 36-locale catalog edit; the translation bot picks them up on
+     its next pass, same as every other new string. -->
+<div class="page" id="page-delivery">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">What your agents delivered</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;max-width:720px;">
+        Your model bill says what the agents cost. This says what that money bought: the pull
+        requests they worked on, and what each one took. Spend is split between the pull requests
+        a session touched, never copied onto each.
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <select id="dlv-kind" onchange="loadDelivery()" title="Which kind of delivered artifact to list"
+              style="font-size:12px;padding:5px 8px;border:1px solid var(--border-primary);border-radius:7px;background:var(--bg-secondary);color:var(--text-primary);">
+        <option value="pr">Pull requests</option>
+        <option value="repo">Repositories</option>
+        <option value="branch">Branches</option>
+        <option value="commit">Commits</option>
+        <option value="file">Files</option>
+      </select>
+      <button class="refresh-btn" onclick="loadDelivery()">↻</button>
+    </div>
+  </div>
+
+  <!-- Attributed vs unattributed, side by side on purpose: attributed spend
+       shown alone reads as the whole bill, and on a real machine most of the
+       bill belongs to no pull request at all. -->
+  <div id="dlv-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
+
+  <div id="dlv-note" style="display:none;font-size:11px;color:var(--text-muted);margin-bottom:10px;max-width:760px;"></div>
+
+  <div class="card" id="dlv-table" style="color:var(--text-muted);font-size:13px;padding:16px;overflow:hidden;">
+    Loading delivery…
+  </div>
+</div>
