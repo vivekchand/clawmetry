@@ -598,6 +598,13 @@ def _graceful_shutdown(reason: str, *, force_exit: bool) -> None:
     from clawmetry.assistant_relay import stop_delivery
     stop_delivery()
 
+    from clawmetry.node_activity_service import stop_node_activity
+    stop_node_activity(timeout=0.2)
+
+    # Finish the journal tail before tearing down its shared writer connection.
+    from clawmetry.asimov.daemon import stop as _stop_asimov
+    _stop_asimov()
+
     # Run the flush on a background thread so we can enforce a wall-clock
     # timeout. A blocked DuckDB write must not hang launchctl/systemctl
     # for >5s — the orchestrator will SIGKILL us anyway after its own
@@ -1995,7 +2002,7 @@ def _sync_auto_update_with_plan(
                 _cfg2 = load_config() or {}
                 _ak2 = _cfg2.get("api_key", "")
                 if _ak2:
-                    _ok2, _ = _app2(_ak2, _cfg2.get("node_id"))
+                    _ok2, _ = _app2(_ak2, _cfg2.get("node_id"), background=True)
                     if _ok2:
                         log.info("clawmetry-pro provisioned on upgrade to %s — paid "
                                  "runtimes will sync on the next cycle", tier)
@@ -2080,24 +2087,33 @@ def _persist_cloud_plan_to_disk(
     _sync_auto_update_with_plan(tier, allow_provision=allow_provision)
     # Idempotent reconcile: this is now called on EVERY heartbeat (not just on a
     # plan change), so short-circuit when the on-disk cache already reflects this
-    # tier. We compare only the ``plan`` field (the entitlement-relevant part) so
-    # the trial ``expiry`` countdown doesn't churn a write + entitlement
-    # invalidation every cycle. Only an actual tier transition re-writes + flips
-    # the resolver, so paid runtimes start syncing the moment the plan upgrades.
+    # tier and authoritative trial verdict. A days-left estimate must not churn
+    # a write every cycle, but an exact cloud deadline must repair caches made
+    # by older clients that rounded a trial down to whole days.
     _trial_end_epoch = _parse_trial_end(trial_end)
     _trial_used = bool(trial_used) if trial_used is not None else None
+    _trial_deadline_applies = (
+        _trial_end_epoch is not None
+        and (tier == "trial" or tier not in _PAID_PLAN_TIERS)
+    )
     try:
         _existing_plan = None
         _existing_trial = None
+        _existing_expiry = None
         if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
             with open(_CLOUD_PLAN_CACHE_PATH, encoding="utf-8") as _fh:
                 _cached = json.load(_fh) or {}
             _existing_plan = _cached.get("plan")
             _existing_trial = (_cached.get("trial_used"), _cached.get("trial_end"))
+            _existing_expiry = _cached.get("expiry")
         if tier is None:
             if _existing_plan is None and not os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
                 return  # already absent; nothing to reconcile
-        elif _existing_plan == tier and _existing_trial == (_trial_used, _trial_end_epoch):
+        elif (
+            _existing_plan == tier
+            and _existing_trial == (_trial_used, _trial_end_epoch)
+            and (not _trial_deadline_applies or _existing_expiry == _trial_end_epoch)
+        ):
             # Cache already matches the live tier AND the trial verdict; no
             # write, no invalidate. The trial pair is part of the comparison
             # because a lapsing trial does NOT change ``plan`` (it stays
@@ -2121,18 +2137,18 @@ def _persist_cloud_plan_to_disk(
             except Exception:
                 expiry = None
             # An authoritative trial_end from the cloud wins over the derived
-            # days-left countdown for UNPAID tiers: it is the same value
+            # days-left countdown for trials and unpaid tiers: the same value
             # Stripe/billing reconcile against, and it keeps working after the
             # trial lapses (days_left goes to 0/None but trial_end stays
             # meaningful).
             #
-            # NEVER for a paid tier. Signup is trial-by-default, so essentially
-            # every paying customer carries trial_used=True and a trial_end
+            # Never for a purchased subscription. Signup is trial-by-default,
+            # so every paying customer carries trial_used=True and a trial_end
             # that is long past -- stamping that onto their entitlement makes
             # Entitlement.expired True and hard-blocks a subscriber who is
             # paying us right now. Their subscription expiry comes from the
             # plan, not from the trial they took before they bought.
-            if _trial_end_epoch is not None and tier not in _PAID_PLAN_TIERS:
+            if _trial_deadline_applies:
                 expiry = _trial_end_epoch
             payload = {"plan": tier, "node_limit": 1, "expiry": expiry}
             if _trial_used is not None:
@@ -2324,15 +2340,9 @@ def _maybe_install_license_from_heartbeat(resp: dict) -> None:
                 existing = ""
         if existing == key:
             return
-        os.makedirs(os.path.dirname(lic_path), exist_ok=True)
-        tmp = lic_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(key)
-        os.replace(tmp, lic_path)
-        try:
-            os.chmod(lic_path, 0o600)
-        except Exception:
-            pass
+        from clawmetry.license import _store_license_key
+        if not _store_license_key(key, path=lic_path):
+            return
         log.info(
             "✓ ClawMetry license installed from cloud — dashboard will unlock "
             "on the next resolver refresh (up to 60s)."
@@ -9687,6 +9697,8 @@ def send_heartbeat(config: dict) -> bool:
 # sync daemon without the dashboard module loaded).
 _PENDING_SHAPES = {
     "incidents", "investigation", "activity", "error_groups", "session_catalog",
+    "robotics_runs", "robotics_events",
+    "physical_ai_runs", "physical_ai_events",
     "events", "sessions", "aggregates", "health", "transcript",
     # Added in P4 (#2990): new live shapes from P2 materialized rollups.
     "runtimes", "models", "rollup_sessions",
@@ -9719,6 +9731,9 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     nodes, but the local DuckDB IS a single-node store). Filter to a
     per-shape allowlist so those extras don't surface as TypeErrors.
     """
+    if shape in ("physical_ai_runs", "physical_ai_events"):
+        from clawmetry.physical_ai.query_args import coerce_query_args
+        args = coerce_query_args(shape, args or {})
     from clawmetry import local_store
     store = local_store.get_store(read_only=True)
     if shape == "health":
@@ -9729,6 +9744,10 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
         "error_groups": "query_error_groups",
         "session_catalog": "query_session_catalog",
         "activity": "query_activity",
+        "robotics_runs": "robotics_runs",
+        "robotics_events": "robotics_events",
+        "physical_ai_runs": "query_physical_ai_runs",
+        "physical_ai_events": "query_physical_ai_events",
         "events":     "query_events",
         "sessions":   "query_sessions",
         "aggregates": "query_aggregates",
@@ -9770,6 +9789,10 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
 # but defined here so the daemon-only fallback path doesn't need the
 # routes package on sys.path.
 _SHAPE_ALLOWED_KWARGS = {
+    "physical_ai_runs": {"limit", "robot_id", "before_ns", "before_run_id"},
+    "physical_ai_events": {"run_id", "after", "limit"},
+    "robotics_runs": {"limit", "before_ns", "before_run_id"},
+    "robotics_events": {"run_id", "after", "limit", "before", "tail"},
     "events":     {"session_id", "agent_id", "event_type", "since", "until", "limit"},
     "sessions":   {"agent_id", "since", "until", "limit"},
     "aggregates": {"agent_id", "since", "until"},
@@ -10836,6 +10859,7 @@ CHANNEL_STATUS_CACHE_TTL_SEC = 3600
 # clawmetry-cloud/routes/alerts.py:_enqueue_alert_rule_change and the
 # approvals enqueue path.
 _PENDING_ACTIONS = frozenset({
+    "node_activity_update",
     "guard_check_update",
     "incident_acknowledge",
     "channel_config_upsert",
@@ -11096,6 +11120,9 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         from clawmetry.incident_actions import apply_acknowledgement
         apply_acknowledgement(config, action)
         return
+    if atype == "node_activity_update":
+        _action_node_activity(config, action)
+        return
     if atype == "guard_check_update":
         _action_guard_check(config, action)
         return
@@ -11149,6 +11176,85 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
     if atype in ("kill_session", "pause_session", "resume_session"):
         _action_process_control(config, action)
         return
+
+
+_NODE_ACTIVITY_ACTION_LOCK = threading.Lock()
+
+
+def _action_node_activity(config: dict, action: dict) -> None:
+    """Persist an authenticated sealed monitoring choice or event review."""
+    result = {"ok": False, "saved": False, "applied": False,
+              "message": "The node could not save this change. Try again."}
+    try:
+        from clawmetry import local_store
+        body = decrypt_payload(action.get("sealed"), config.get("encryption_key"))
+        if not isinstance(body, dict):
+            raise ValueError("unreadable request")
+        node_id, request_id = body.get("node_id"), body.get("request_id")
+        if (not node_id or node_id != config.get("node_id") or
+                not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id)):
+            raise ValueError("request binding invalid")
+        result.update(node_id=node_id, request_id=request_id)
+        store = local_store.get_store()
+        with _NODE_ACTIVITY_ACTION_LOCK:
+            # Claim before applying: a crash requires a fresh request, never
+            # a repeated mutation. Keep the ledger bounded and local.
+            ledger_rows = store._fetch("SELECT value FROM node_settings WHERE key=?", ["node_activity.request_ids"])
+            ledger = json.loads(ledger_rows[0][0]) if ledger_rows else {}
+            ledger = {k: v for k, v in ledger.items() if isinstance(v, (int, float)) and v >= time.time() - 600}
+            if request_id in ledger:
+                # Only the original claimant owns the acknowledgement. Both
+                # relay paths may deliver it; never replace its result, even
+                # when a retained duplicate's envelope has since expired.
+                return
+            sent_at = body.get("sent_at")
+            if isinstance(sent_at, bool) or not isinstance(sent_at, (float, int)) or not 0 <= time.time() - sent_at <= 300:
+                raise ValueError("expired request")
+            operation = body.get("operation")
+            binding = {"node_id", "request_id", "sent_at", "operation"}
+            if operation == "preferences":
+                if set(body) != binding | {"preferences"}:
+                    raise ValueError("unsupported request fields")
+            elif operation == "review":
+                if not binding | {"event_id", "decision"} <= set(body) or not set(body) <= binding | {"event_id", "decision", "reason"}:
+                    raise ValueError("unsupported request fields")
+            elif operation == "live" and set(body) == binding:
+                pass
+            else:
+                raise ValueError("unsupported operation")
+            if len(ledger) >= 512:
+                raise ValueError("too many monitoring updates; retry later")
+            ledger[request_id] = time.time()
+            store.set_node_setting("node_activity.request_ids", json.dumps(ledger))
+            if operation == "live":
+                from clawmetry.node_activity_service import touch_node_activity_view
+                touch_node_activity_view(remote=True)
+                result.update(ok=True, applied=True, saved=False, live=True)
+                result.pop("message", None)
+                _post_process_control_result(config, action, result)
+                return  # Ephemeral viewing lease, never a saved preference.
+            if operation == "preferences":
+                requested = body["preferences"]
+                saved = store.set_node_activity_preferences(requested)
+            else:
+                saved = store.review_node_activity_event(
+                    event_id=body["event_id"], decision=body["decision"], reason=body.get("reason", ""))
+            data = store.query_node_activity()
+            applied = isinstance(saved, dict) and saved.get("ok") is True and saved.get("saved") is True
+            if operation == "preferences" and applied:
+                applied = all(data.get("preferences", {}).get(key) is value for key, value in requested.items())
+            elif operation == "review" and applied:
+                applied = any(event.get("id") == body["event_id"] and
+                              event.get("review") == saved.get("review") and
+                              (event.get("review") or {}).get("decision") == body["decision"]
+                              for event in data.get("events", []))
+            if applied:
+                data.setdefault("capabilities", {}).update(remote_mutations=True)
+                result.update(ok=True, saved=True, applied=True, data=data)
+                result.pop("message", None)
+    except Exception as exc:
+        log.warning("node activity update failed: %s", type(exc).__name__)
+    _post_process_control_result(config, action, result)
 
 
 def _action_guard_check(config: dict, action: dict) -> None:
@@ -12622,7 +12728,8 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                 "blob": blob,
                 "shape": shape,
                 "args_hash": _canonical_args_hash(args),
-                "ttl": 15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600,
+                "ttl": (5 if shape in {"robotics_runs", "robotics_events", "physical_ai_runs", "physical_ai_events"} else
+                        15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600),
             }, api_key)
         except Exception as e:
             log.warning("pending_query dispatch failed (id=%s shape=%s): %s",
@@ -15171,7 +15278,6 @@ _FAMILY_ADAPTER_SPECS = (
     # the audit log with per-call usage, and the outbound sends its scheduler
     # has queued. The store has no fixed home, so the adapter discovers it.
     ("clawmetry_pro.adapters.openexecutive", "OpenExecutiveAdapter"),
-    ("clawmetry_pro.adapters.opendots", "OpenDotsAdapter"),
 )
 
 
@@ -17093,9 +17199,11 @@ def _build_runtime_records():
     failure yields ``{}`` and the UI keeps its older, vaguer wording.
     """
     try:
-        from clawmetry.runtime_records import RUNTIME_RECORDS, SIGNALS, coverage_payload
+        from clawmetry.runtime_records import (
+            RUNTIME_RECORDS, HISTORICAL_RUNTIME_RECORDS, SIGNALS, coverage_payload,
+        )
         out = {}
-        for rt in RUNTIME_RECORDS:
+        for rt in RUNTIME_RECORDS.keys() | HISTORICAL_RUNTIME_RECORDS.keys():
             base = coverage_payload(rt, has_data=False)
             out[rt] = {
                 "runtime_label": base["runtime_label"],
@@ -17630,9 +17738,41 @@ def _build_agent_inventory(
         except Exception as _be:
             log.debug("inventory billing enrichment skipped: %s", _be)
 
+        # GROUND TRUTH for the hosted dashboard. Everything above infers
+        # liveness from how recently a transcript was WRITTEN, which fails
+        # while an agent sits in a long tool call and fails again whenever
+        # ingest lags. On 2026-10-07 seven Claude Code processes were running
+        # against a store whose newest row was 6.1 hours old, and the hero
+        # said "It's idle right now."
+        #
+        # The local dashboard can settle that by reading the process table
+        # (routes/sessions.py::api_live_sessions). The HOSTED one cannot: the
+        # container has no access to this machine. So the node has to carry
+        # the answer, or app.clawmetry.com is left asserting "idle" with no
+        # way to know better. Pid-backed, ~3ms cold, counted per runtime so a
+        # scoped hosted hero can use it without borrowing another runtime's.
+        procs_by_rt = {}
+        procs_total = None
+        try:
+            from clawmetry import process_control as _pc
+            _live_procs = _pc.live_sessions() or []
+            procs_total = len(_live_procs)
+            for _p in _live_procs:
+                _rt = str((_p or {}).get("runtime") or "").strip().lower()
+                if _rt:
+                    procs_by_rt[_rt] = procs_by_rt.get(_rt, 0) + 1
+        except Exception as _pe:
+            # Unknown is not zero: a reader must not turn a failed probe into
+            # "no agents are running".
+            procs_total = None
+            log.debug("inventory process probe skipped: %s", _pe)
+
         node_wide = {
             "nodeId": node_id,
             "agents": agents,
+            # None means "could not look", which a reader must treat as
+            # unknown rather than as zero.
+            "processesLive": procs_total,
             # NODE-WIDE (not per-agent): tool provenance counts + eval summary
             # are cross-runtime (query_eval_summary has no runtime param; the
             # tool_catalog groups are cross-runtime). They live in the header
@@ -17671,6 +17811,8 @@ def _build_agent_inventory(
                 # a slice-served roster still leads with a live headline instead
                 # of falling back to a "nothing is running" default.
                 "liveKnown": live_known,
+                "processesLive": (procs_by_rt.get(rt, 0)
+                                  if procs_total is not None else None),
                 "liveCounts": {
                     "working": int(a.get("liveWorking") or 0),
                     "waiting": int(a.get("liveWaiting") or 0),
@@ -22550,6 +22692,108 @@ def _git_scan_tick(store) -> int:
     return done
 
 
+# ── Delivery attribution (session -> pull request + cost split) ─────────────
+
+#: Seconds between attribution passes. Faster than the repository scan
+#: because this only reads DuckDB, slower than ingest because a pull request
+#: does not change at tool-call cadence.
+ATTRIBUTION_INTERVAL_SEC = int(
+    os.environ.get("CLAWMETRY_ATTRIBUTION_INTERVAL", "300"))
+#: Sessions attributed per tick. The whole backlog on a busy node is
+#: thousands of sessions; doing them all in one tick is how a background job
+#: becomes a foreground problem (the daemon-stays-light budget). At this rate
+#: a 2,000-session backlog is cleared in about an hour of wall clock and then
+#: the pass idles, because only changed sessions come back.
+ATTRIBUTION_MAX_SESSIONS_PER_TICK = int(
+    os.environ.get("CLAWMETRY_ATTRIBUTION_MAX_SESSIONS", "25"))
+#: Events read per session. Attribution needs the WHOLE session for its cost
+#: split to sum to the session's own cost, so this is a safety ceiling for a
+#: pathological transcript rather than a window.
+ATTRIBUTION_MAX_EVENTS = int(
+    os.environ.get("CLAWMETRY_ATTRIBUTION_MAX_EVENTS", "20000"))
+
+
+def _attribution_runtime(session_id: str, row: dict) -> str:
+    """Which runtime a session belongs to, for the runtime switcher.
+
+    NOT ``events.agent_type``. On a real multi-runtime node that column reads
+    ``openclaw`` for almost everything: 77,323 of 77,474 events on the node
+    this was measured on, while the session ids said claude_code, codex,
+    cursor, copilot, opencode, goose, pi and qwen_code. Filing every artifact
+    under ``openclaw`` left the Delivered tab empty under every runtime the
+    switcher offered, which is most of a paying node's runtimes.
+
+    The session id prefix is the product's existing answer, so this defers to
+    ``pr_provenance.runtime_of`` rather than parsing it again. The column is
+    kept as the fallback for a bare id that genuinely is OpenClaw's.
+    """
+    try:
+        from clawmetry.pr_provenance import runtime_of
+        derived = runtime_of(session_id)
+    except Exception:
+        derived = ""
+    if derived and derived != "openclaw":
+        return derived
+    return str((row or {}).get("agent_type") or "") or "openclaw"
+
+
+def _attribution_tick(store) -> int:
+    """Attribute changed sessions to what they delivered. Returns rows written.
+
+    Reads only this node's own DuckDB: no git, no network, no checkout. That
+    is the point of this pass as opposed to ``_git_scan_tick`` above, and it
+    is why it works on history that is already ingested and on machines
+    where the repository has since been deleted.
+
+    Bounded three ways (sessions per tick, events per session, and the
+    watermark that skips unchanged sessions) and never raises into the
+    daemon loop.
+    """
+    if os.environ.get("CLAWMETRY_ATTRIBUTION", "1") == "0":
+        return 0
+    try:
+        from clawmetry import attribution as _attr
+    except Exception as e:  # noqa: BLE001
+        log.warning("attribution: import failed: %s", e)
+        return 0
+    try:
+        pending = store.sessions_pending_attribution(
+            limit=ATTRIBUTION_MAX_SESSIONS_PER_TICK) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("attribution: pending read failed: %s", e)
+        return 0
+    if not pending:
+        return 0
+
+    # Same accessor the Agent Inventory pass uses; a missing node id is a
+    # blank column, not a failed tick.
+    try:
+        node_id = str(store._node_id() or "")
+    except Exception:
+        node_id = ""
+
+    written = 0
+    for row in pending:
+        sid = row.get("session_id") or ""
+        if not sid:
+            continue
+        try:
+            events = store.query_events(
+                session_id=sid, limit=ATTRIBUTION_MAX_EVENTS) or []
+            result = _attr.extract_session_delivery(
+                events, sid, runtime=_attribution_runtime(sid, row))
+            # The event count the WATERMARK stores is the one we compared
+            # against, not the number the extractor happened to see, so a
+            # transcript truncated by the ceiling above is not re-read on
+            # every tick forever.
+            result["event_count"] = int(row.get("event_count") or 0)
+            written += store.persist_session_attribution(
+                result, node_id=node_id or None)
+        except Exception as e:  # noqa: BLE001
+            log.warning("attribution: session %s failed: %s", sid, e)
+    return written
+
+
 # ── Trail lazy back-fill (schema v15) ──────────────────────────────────────
 
 #: Seconds between back-fill batches. Short on purpose: each batch is small.
@@ -23827,6 +24071,36 @@ def _build_evals_judge_status() -> dict | None:
         return None
 
 
+def _build_delivery_snapshot(runtime: str | None = None) -> dict:
+    """Delivery roll-up for the hosted Delivered tab's snapshot slice.
+
+    The cloud container has no ``~/.openclaw`` and no DuckDB, so a tab that
+    fetches ``/api/delivery`` there renders blank unless the daemon bakes the
+    answer into the snapshot. Same rows the local handler serves, so the two
+    dashboards cannot disagree.
+
+    Bounded to the top rows by attributed spend: the point of the tab is the
+    expensive end, and an unbounded slice is how a snapshot stops fitting.
+    Returns ``{}`` on any failure, which the hosted card renders as its
+    honest empty rather than a blank card.
+    """
+    try:
+        from clawmetry import local_store as _ls_dlv
+        body = _ls_dlv.get_store().query_delivery(
+            kind="pr", runtime=runtime, limit=50)
+        if not isinstance(body, dict):
+            return {}
+        return {
+            "rows": body.get("rows") or [],
+            "totals": body.get("totals") or {},
+            "available": True,
+            "kind": "pr",
+        }
+    except Exception as e:
+        log.debug("snapshot: delivery slice failed: %s", e)
+        return {}
+
+
 _COHORT_SLICE_CACHE: dict = {"at": 0.0, "body": None}
 _COHORT_SLICE_TTL_SECS = 600
 
@@ -23946,6 +24220,19 @@ def _build_detected_otel_apps() -> dict:
         return {"apps": [], "suggestable": [], "degraded": False,
                 "degradedReason": None, "checkedPorts": [],
                 "instruction": "", "scannedAtMs": 0}
+
+
+def _build_node_activity_snapshot() -> dict:
+    """Stored node observations, only used inside the encrypted snapshot."""
+    try:
+        from clawmetry import local_store
+        data = local_store.get_store().query_node_activity()
+        data.setdefault("capabilities", {}).update(remote_mutations=True)
+        return data
+    except Exception:
+        log.warning("node activity snapshot unavailable", exc_info=False)
+        return {"schema_version": 1, "available": False,
+                "reason": "Node observations are not available yet."}
 
 
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
@@ -24568,6 +24855,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         _autonomy_by_rt = {}
         log.debug("snapshot: per-runtime autonomy failed: %s", _e_aut)
 
+    # Delivery, node-wide plus per runtime, so the hosted Delivered tab
+    # follows the global switcher instead of showing node-wide money under a
+    # single runtime (the per-runtime-honesty gate).
+    _delivery_node = _build_delivery_snapshot()
+    _delivery_by_rt: dict = {}
+    try:
+        for _rtk in (list(_runtime_summary.keys())
+                     if isinstance(_runtime_summary, dict) else []):
+            _d = _build_delivery_snapshot(runtime=_rtk)
+            if _d and (_d.get("rows") or _d.get("totals")):
+                _delivery_by_rt[_rtk] = _d
+    except Exception as _e_dlv:
+        log.debug("snapshot: per-runtime delivery failed: %s", _e_dlv)
+
     # Agent Inventory roster (single-pane control-tower view). Built ENTIRELY
     # from rollups already computed above (runtime_summary / outcomes / activity
     # / tool-catalog groups / eval summary / detectedRuntimes) plus ONE cheap
@@ -24850,6 +25151,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "activityHeatmap": _build_activity_heatmap_snapshot(),
         "outcomes": _outcomes_slice_for_snapshot(),
         "outcomesByRuntime": _outcomes_by_rt,
+        # What the spend bought. Read by the cloud cm-cloud-delivery
+        # interceptor, which serves deliveryByRuntime[rt] for ?runtime= and
+        # falls back to the node-wide slice.
+        "delivery": _delivery_node,
+        "deliveryByRuntime": _delivery_by_rt,
         # 7d-over-7d trend behind the Quality tab's "is it getting better?"
         # line. Read by the cloud cm-cloud-outcomes-trend interceptor, which
         # serves trendByRuntime[rt] for ?runtime= and falls back to node-wide.
@@ -24858,6 +25164,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Agent Inventory roster: node-wide roster (one row per runtime) + a
         # per-runtime slice the cloud cm-cloud-inventory interceptor returns for
         # ?runtime=<rt> (only that runtime's row — the no-leak contract).
+        "nodeActivity": _build_node_activity_snapshot(),
         "agentInventory": _inv_node_wide,
         "agentInventoryByRuntime": _inv_by_rt,
         "spending": spending,
@@ -24970,6 +25277,42 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # renders its honest collecting state, never a silent blank).
     if _spend_flow_slice is not None:
         payload["spendFlow"] = _spend_flow_slice
+
+    # Project Asimov DuckDB evidence directly on this daemon's writer handle.
+    # No view, journal scan, SDK or robot connection mediates the encrypted slice.
+    try:
+        from clawmetry.asimov.daemon import snapshot as _asimov_snapshot
+        from clawmetry.local_store import get_store as _asimov_store
+        _asimov_slice = _asimov_snapshot(_asimov_store())
+        if _asimov_slice.get("runs"):
+            payload["asimov"] = _asimov_slice
+    except Exception:
+        log.warning("Asimov snapshot could not be read")
+
+    try:
+        from clawmetry.asimov.store import physical_ai_snapshot
+        from clawmetry.local_store import get_store as _physical_ai_store
+        _physical_ai_slice = physical_ai_snapshot(_physical_ai_store())
+        payload["physical_ai"] = _physical_ai_slice
+    except Exception:
+        log.warning("Physical AI snapshot could not be read")
+
+    # UI capability declarations are node-scoped and share the encrypted payload.
+    try:
+        from clawmetry.physical_ai.catalog import snapshot_metadata as _physical_ai_ui
+        payload["ui"] = _physical_ai_ui()
+    except Exception:
+        log.warning("Physical AI navigation metadata could not be read")
+
+    # Paid robotics summary shares the normal encrypted envelope.
+    try:
+        from clawmetry.extensions import call as _robotics_snapshot
+        from clawmetry.local_store import get_store as _robotics_store
+        _robotics_slice = _robotics_snapshot("robotics.snapshot", {"store": _robotics_store()})
+        if _robotics_slice is not None:
+            payload["robotics"] = _robotics_slice
+    except Exception as _robotics_error:
+        log.warning("Robotics snapshot unavailable: %s", _robotics_error)
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
     # Detect NemoClaw and add optional sandbox metadata to the snapshot.
@@ -25630,7 +25973,7 @@ def run_daemon() -> None:
         _ak = config.get("api_key", "")
         if _ak:
             from clawmetry.license import auto_provision_pro as _auto_pro
-            _pro_ok, _pro_msg = _auto_pro(_ak, config.get("node_id"))
+            _pro_ok, _pro_msg = _auto_pro(_ak, config.get("node_id"), background=True)
             if _pro_ok:
                 log.info("clawmetry-pro present (entitled account) — all runtimes enabled")
                 try:
@@ -25749,6 +26092,39 @@ def run_daemon() -> None:
             log.info("local query server: listening on 127.0.0.1:%d", _ls_port)
     except Exception as _e:
         log.warning("local query server: failed to start: %s", _e)
+
+    # Node metrics must not wait for cloud I/O or a long session backfill.
+    try:
+        from clawmetry.node_activity_service import start_node_activity
+        def _publish_node_live(frame):
+            from clawmetry.config import is_cloud_disabled
+            if is_cloud_disabled() or not _sync_allowed() or not config.get("api_key") or not config.get("encryption_key"):
+                return
+            owner = _owner_hash_for_token(config["api_key"])
+            _post("/ingest/cache", {"node_id": config["node_id"],
+                  "cache_key": "node_activity_live:" + owner + ":" + config["node_id"],
+                  "shape": "node_activity_live", "ttl": 12,
+                  "blob": encrypt_payload(frame, config["encryption_key"])}, config["api_key"], timeout=3)
+        from clawmetry import local_store as _node_store
+        start_node_activity(_node_store.get_store(read_only=False), node_id=config.get("node_id", ""), publish=_publish_node_live)
+    except Exception as exc:
+        log.warning("Node measurement worker could not start: %s", type(exc).__name__)
+
+    # Tail existing local Asimov journals without a license or private package.
+    # SDK tracing and live Observe connections require separate explicit setup.
+    try:
+        from clawmetry.asimov.daemon import start as _start_asimov
+        _start_asimov(_startup_store)
+    except Exception:
+        log.warning("Asimov collection could not start. Other collectors will continue.")
+
+    # Local collectors must not wait for cloud I/O or historical backfill.
+    # The daemon already owns its store and has published the query service.
+    try:
+        from clawmetry import extensions as _store_extensions
+        _store_extensions.emit("daemon.store.ready", {"node_id": config.get("node_id")})
+    except Exception as _e:
+        log.warning("local extension collectors could not start: %s", _e)
 
     # ── Startup sync: recent-first so Brain feed shows current activity ──
     try:
@@ -26129,7 +26505,7 @@ def run_daemon() -> None:
                             from clawmetry.license import (
                                 refresh_pro_from_license as _rpl,
                             )
-                            _up, _rmsg = _rpl(config.get("node_id"))
+                            _up, _rmsg = _rpl(config.get("node_id"), background=True)
                             if _up:
                                 log.info("clawmetry-pro refreshed: %s", _rmsg)
                                 from clawmetry.extensions import (
@@ -26158,7 +26534,7 @@ def run_daemon() -> None:
                         )
                         if _sdp():
                             if _pv():
-                                _rm, _rmsg = _dpp("trial lapsed")
+                                _rm, _rmsg = _dpp("trial lapsed", background=True)
                                 log.info(
                                     "clawmetry-pro removal: %s", _rmsg
                                 ) if _rm else log.warning(
@@ -26167,7 +26543,7 @@ def run_daemon() -> None:
                             _pro_stop.wait(timeout=1800)
                             continue  # never re-provision on the same tick
                         _was = bool(_pv())
-                        _ok, _msg = _wp(_ak, config.get("node_id"))
+                        _ok, _msg = _wp(_ak, config.get("node_id"), background=True)
                         if _ok and not _was:
                             log.info("clawmetry-pro just installed (account became "
                                      "entitled) — paid runtimes now enabled")
@@ -26324,6 +26700,7 @@ def run_daemon() -> None:
     except Exception as _be:
         log.debug("briefs: scheduler not started: %s", _be)
     last_git_scan = 0.0
+    last_attribution = 0.0
     last_replay_tick = 0.0
     last_trail_backfill = 0.0
 
@@ -26369,6 +26746,7 @@ def run_daemon() -> None:
                 sync_runtime_memory_files(config, state, paths)
             except Exception as _rme:
                 log.warning("runtime memory/skills sync error: %s", _rme)
+            # Independent worker persists Node measurements even during this ingest pass.
             snap = 0
             now_snap = time.time()
             if now_snap - last_snapshot > snapshot_interval:
@@ -26813,6 +27191,29 @@ def run_daemon() -> None:
                 except Exception as _ge:
                     log.warning("git-outcomes: tick errored: %s", _ge)
                 last_git_scan = now_git
+                try:
+                    save_state(state)
+                except Exception:
+                    pass
+
+            # ── Delivery attribution ──
+            # The other half of the same question, from the opposite side:
+            # _git_scan_tick reads what a REPOSITORY shipped, this reads what
+            # a SESSION delivered, straight out of DuckDB. It needs no
+            # checkout, so it is the only one of the two that can attribute
+            # history already ingested or work whose clone is long gone.
+            # Watermarked (unchanged sessions cost one SQL comparison), capped
+            # per tick, off with CLAWMETRY_ATTRIBUTION=0.
+            now_attr = time.time()
+            if (now_attr - last_attribution) >= ATTRIBUTION_INTERVAL_SEC:
+                try:
+                    from clawmetry import local_store as _ls_attr
+                    n_art = _attribution_tick(_ls_attr.get_store())
+                    if n_art:
+                        log.info("attribution: %d artifact row(s) written", n_art)
+                except Exception as _ae:
+                    log.warning("attribution: tick errored: %s", _ae)
+                last_attribution = now_attr
                 try:
                     save_state(state)
                 except Exception:

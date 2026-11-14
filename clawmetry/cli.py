@@ -188,91 +188,60 @@ if _root not in sys.path:
 
 
 def _is_sync_running() -> bool:
-    """Check if clawmetry.sync is running — no pgrep needed."""
-    import os
+    """Check the daemon recorded as owner of this user's local store.
 
-    try:
-        import psutil
+    A process-wide search can match another Unix user's collector. The PID
+    lock is scoped to ``~/.clawmetry`` and includes a process start token, so
+    it is the source of truth for this CLI's daemon.
+    """
+    return _sync_daemon_pid() is not None
 
-        for p in psutil.process_iter(["cmdline"]):
-            try:
-                cmd = " ".join(p.info.get("cmdline") or [])
-                if "clawmetry.sync" in cmd or "clawmetry/sync.py" in cmd:
-                    return True
-            except Exception:
-                pass
-        return False
-    except ImportError:
-        pass
+
+def _sync_daemon_pid() -> int | None:
+    """Return this home directory's verified sync-lock holder, if it is alive."""
     try:
-        for pid_str in os.listdir("/proc"):
-            if not pid_str.isdigit():
-                continue
-            try:
-                cmdline = open(f"/proc/{pid_str}/cmdline").read().replace("\x00", " ")
-                if "clawmetry.sync" in cmdline or "clawmetry/sync.py" in cmdline:
-                    return True
-            except Exception:
-                pass
+        from clawmetry.sync import _lock_holder_verdict, _pid_file, _read_lock_record
+
+        pid_path = _pid_file()
+        record = _read_lock_record(pid_path)
+        if not record:
+            return None
+        verdict, _reason = _lock_holder_verdict(record, pid_path)
+        if verdict in {"held", "wedged"}:
+            return int(record["pid"])
     except Exception:
         pass
-    return False
+    return None
 
 
 def _count_sync_daemons() -> int:
-    """Return number of running clawmetry.sync processes (best-effort)."""
-    import subprocess as _sp
-    try:
-        r = _sp.run(
-            ["pgrep", "-f", "clawmetry.sync"],
-            capture_output=True, text=True, check=False,
-        )
-        if r.returncode == 0:
-            return len([l for l in r.stdout.splitlines() if l.strip()])
-    except Exception:
-        pass
-    return 0
+    """Return the number of daemons owning this user's store (zero or one)."""
+    return int(_sync_daemon_pid() is not None)
 
 
-def _kill_sync_daemon() -> None:
-    """Kill clawmetry.sync processes — no pkill needed."""
-    import os
+def _kill_sync_daemon(timeout: float = 10.0) -> bool:
+    """Gracefully stop only the daemon that owns this user's store."""
     import signal
+    import time
 
+    pid = _sync_daemon_pid()
+    if pid is None:
+        return True
     try:
-        import psutil
-
-        for p in psutil.process_iter(["pid", "cmdline"]):
-            try:
-                cmd = " ".join(p.info.get("cmdline") or [])
-                if "clawmetry.sync" in cmd or "clawmetry/sync.py" in cmd:
-                    os.kill(p.pid, signal.SIGTERM)
-            except Exception:
-                pass
-        return
-    except ImportError:
-        pass
-    try:
-        for pid_str in os.listdir("/proc"):
-            if not pid_str.isdigit():
-                continue
-            try:
-                cmdline = open(f"/proc/{pid_str}/cmdline").read().replace("\x00", " ")
-                if "clawmetry.sync" in cmdline or "clawmetry/sync.py" in cmdline:
-                    os.kill(int(pid_str), signal.SIGTERM)
-            except Exception:
-                pass
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
     except Exception:
-        pass
-    # macOS without psutil + no /proc — fall back to pkill (universally
-    # available on Darwin/Linux/BSD).
-    import shutil as _sh
-    import subprocess as _sp2
-    if _sh.which("pkill"):
-        _sp2.run(
-            ["pkill", "-f", "clawmetry.sync"],
-            check=False, capture_output=True,
-        )
+        return False
+
+    from clawmetry.sync import _process_is_gone
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        if _process_is_gone(pid):
+            return True
+        time.sleep(0.1)
+    return _process_is_gone(pid)
 
 
 def _kill_dashboard_processes() -> int:
@@ -1337,7 +1306,7 @@ def _cmd_connect(args) -> None:
         from clawmetry.license import auto_provision_pro
         _pro_installed, _pro_msg = auto_provision_pro(api_key, node_id)
         if _pro_installed:
-            print("  Pro adapters installed - all 33 runtimes available.")
+            print("  Pro adapters installed - all 32 runtimes available.")
         elif _pro_msg:
             # Entitled but the wheel could not be installed right now; surface a
             # quiet hint without alarming the user (connect still succeeded).
@@ -1618,19 +1587,11 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
 </plist>"""
             plist_path.parent.mkdir(parents=True, exist_ok=True)
             plist_path.write_text(plist)
-            uid = os.getuid()
-            r = _sp.run(
-                ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-                capture_output=True, check=False,
-            )
-            if r.returncode != 0:
-                # Already bootstrapped (e.g. re-onboard) — restart it; legacy
-                # load for pre-10.11 launchctl.
-                _sp.run(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
-                        capture_output=True, check=False)
-                _sp.run(["launchctl", "load", "-w", str(plist_path)],
-                        capture_output=True, check=False)
-            started = True
+            # bootout → bootstrap, so a re-onboard that changed the pinned
+            # interpreter is actually re-read. `kickstart -k` restarts the
+            # job launchd already holds in memory and would silently keep
+            # the stale ProgramArguments.
+            started = _launchd_reload(plist_path, label)
         except Exception:
             started = False
 
@@ -1719,8 +1680,12 @@ def _activate_signup_trial(deployment: str = "") -> bool:
         return False
 
 
-def _start_daemon(config: dict, args) -> None:
-    """Start the sync daemon (as background process or system service)."""
+def _start_daemon(config: dict, args) -> bool:
+    """Start the sync daemon (as background process or system service).
+
+    Returns False when the supervisor refused the job, so callers do not
+    print a success line over a daemon that never came up.
+    """
 
     system = __import__("platform").system()
 
@@ -1729,12 +1694,28 @@ def _start_daemon(config: dict, args) -> None:
         from clawmetry.sync import run_daemon
 
         run_daemon()
-        return
+        return True
 
     if system == "Darwin":
-        _register_launchd(config)
+        return _register_launchd(config)
     elif system == "Linux":
-        _register_systemd(config)
+        restart = bool(getattr(args, "restart", False))
+        if _register_systemd(config, restart=restart):
+            return True
+        if restart:
+            if not _kill_sync_daemon():
+                print("❌  The current sync daemon did not stop; the store was left untouched.")
+                return False
+        elif _is_sync_running():
+            print("  Sync daemon is already running for this user and store.")
+            return True
+        if sys.stdout.isatty():
+            print("  Starting a background process because systemd is unavailable…")
+        _start_subprocess()
+        if not _wait_for_sync_daemon():
+            print("❌  The sync daemon did not claim this user's store.")
+            return False
+        return True
     elif os.name == "nt":
         # Windows has no launchd/systemd equivalent short of Task Scheduler.
         # Without a registered task the daemon (and with it, all auto-update
@@ -1749,6 +1730,7 @@ def _start_daemon(config: dict, args) -> None:
             _start_subprocess()
     else:
         _start_subprocess()
+    return True
 
 
 def _cmd_sync(args) -> None:
@@ -1774,7 +1756,9 @@ def _cmd_sync(args) -> None:
     print(f"  {_verb} sync daemon for {config.get('node_id', '<unknown>')}…")
     # _start_daemon already bootout+bootstraps (launchd) / restarts (systemd),
     # so it is itself a safe restart — `--restart` just makes the intent explicit.
-    _start_daemon(config, args)
+    ok = _start_daemon(config, args)
+    if not ok:
+        sys.exit(1)
     if getattr(args, "restart", False):
         print("  ✅  Daemon restarted — re-checking entitlement & provisioning runtimes.")
     if not getattr(args, "foreground", False):
@@ -1891,7 +1875,70 @@ def _register_nemoclaw_sandbox_daemons() -> None:
         print(f"  ✅  Sandbox daemon registered (launchd: {label})")
 
 
-def _register_launchd(config: dict) -> None:
+def _launchd_reload(plist_path, label: str) -> bool:
+    """Load a (re)written LaunchAgent plist and report whether it took.
+
+    ``launchctl bootstrap`` FAILS when the label is already registered, and
+    the legacy ``load -w`` fallback fails too — while still exiting 0, so a
+    returncode check cannot see it. The practical effect is that a rewritten
+    plist is never re-read: launchd keeps the job definition it already has
+    in memory. ``kickstart -k`` does not help either; it restarts the OLD
+    definition. Only bootout → bootstrap makes launchd re-read the file.
+
+    That is why a daemon whose pinned interpreter lost the ``clawmetry``
+    package could not be repaired by `clawmetry sync --restart`: the fixed
+    plist landed on disk, launchd kept crash-looping the stale one, and we
+    printed a success line over it (founder live-hit 2026-10-14 — the node
+    sat dead for ~5h while the dashboard showed "Step: starting").
+
+    Returns True only when the job is actually registered afterwards.
+    """
+    import os as _os
+    import subprocess as _sp
+    import time as _time
+
+    uid = _os.getuid()
+    target = f"gui/{uid}"
+
+    # Unload first in case it was already registered, so bootstrap re-reads
+    # the plist (this is what re-pins a stale interpreter path).
+    _sp.run(
+        ["launchctl", "bootout", target, str(plist_path)],
+        capture_output=True,
+        check=False,
+    )
+
+    # bootout is asynchronous; bootstrapping too eagerly loses a race with
+    # the teardown ("Operation already in progress"). Retry briefly.
+    for attempt in range(5):
+        r = _sp.run(
+            ["launchctl", "bootstrap", target, str(plist_path)],
+            capture_output=True,
+            check=False,
+        )
+        if r.returncode == 0:
+            return True
+        _time.sleep(0.3 * (attempt + 1))
+
+    # Legacy launchctl (pre-10.11) has no bootstrap/bootout.
+    _sp.run(
+        ["launchctl", "load", "-w", str(plist_path)],
+        capture_output=True,
+        check=False,
+    )
+
+    # `load -w` exits 0 even when it failed, so trust only a real lookup.
+    return (
+        _sp.run(
+            ["launchctl", "print", f"{target}/{label}"],
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def _register_launchd(config: dict) -> bool:
     from clawmetry.sync import LOG_FILE
 
     label = "com.clawmetry.sync"
@@ -1934,24 +1981,27 @@ def _register_launchd(config: dict) -> None:
 
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_text(plist)
-    import subprocess as _sp
-    import os as _os
 
-    uid = _os.getuid()
-    # Use modern bootstrap (macOS 10.11+), fall back silently to legacy
-    r = _sp.run(
-        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-        capture_output=True,
-        check=False,
-    )
-    if r.returncode != 0:
-        _sp.run(
-            ["launchctl", "load", "-w", str(plist_path)],
-            capture_output=True,
-            check=False,
-        )
-    print(f"  Running in the background. {_daemon_mode_line(config)}")
-    print("  To stop: clawmetry disconnect")
+    if _launchd_reload(plist_path, label):
+        print(f"  Running in the background. {_daemon_mode_line(config)}")
+        print("  To stop: clawmetry disconnect")
+        return True
+    else:
+        # Never claim it is syncing when launchd did not take the job —
+        # a false "Running in the background" is how a dead daemon stays
+        # invisible for hours (founder live-hit 2026-10-14).
+        #
+        # Say that nothing is registered RIGHT NOW, because the reload
+        # unloaded the old job before trying to load the new one. The
+        # previous code could not make things worse (it never unloaded);
+        # this one can, for as long as it takes to try again, so the
+        # operator is told rather than left to infer it.
+        print("  ⚠️   Could not start the background helper.")
+        print("      No sync daemon is registered right now, so nothing")
+        print("      is being collected until this succeeds.")
+        print(f"      Check the log: {LOG_FILE}")
+        print("      Then try again: clawmetry sync --restart")
+        return False
 
 
 def _daemon_mode_line(config: dict) -> str:
@@ -1970,7 +2020,7 @@ def _daemon_mode_line(config: dict) -> str:
             else "Your data is syncing to the cloud.")
 
 
-def _register_systemd(config: dict) -> None:
+def _register_systemd(config: dict, *, restart: bool = False) -> bool:
     from clawmetry.sync import LOG_FILE
     import subprocess
     import shutil
@@ -1979,12 +2029,9 @@ def _register_systemd(config: dict) -> None:
 
     label = "clawmetry-sync"
     python = sys.executable  # current interpreter (venv-aware)
-    # `systemctl --user` needs a per-user D-Bus session, which root over SSH on a
-    # VPS usually does NOT have (enable --now then fails with "Failed to connect
-    # to bus" and the daemon silently never starts). So for root we install a
-    # SYSTEM service (persists across reboots + actually starts); non-root uses a
-    # --user service. Either way we VERIFY it came up and fall back to a detached
-    # background subprocess if systemd is unavailable / failed.
+    # `systemctl --user` needs a per-user D-Bus session, which may be missing in
+    # SSH sessions. The caller handles the detached-process fallback. A running
+    # clawmetry.sync process alone is not proof that systemd owns this service.
     try:
         _is_root = _os.geteuid() == 0
     except Exception:
@@ -2019,34 +2066,40 @@ StandardError=append:{LOG_FILE}
 WantedBy={wanted_by}
 """
 
-    _installed = False
+    installed = False
     if shutil.which("systemctl"):
         try:
             service_dir.mkdir(parents=True, exist_ok=True)
             (service_dir / f"{label}.service").write_text(unit)
             subprocess.run(["systemctl", *scope, "daemon-reload"],
-                           check=False, capture_output=True)
-            subprocess.run(["systemctl", *scope, "enable", "--now", label],
-                           check=False, capture_output=True)
-            # Verify it actually started (systemd may have refused, e.g. no
-            # --user bus). Give it a moment, then check active OR the process.
+                           check=False, capture_output=True, timeout=10)
+            if restart:
+                result = subprocess.run(["systemctl", *scope, "restart", label],
+                                        check=False, capture_output=True, timeout=10)
+                if result.returncode != 0:
+                    subprocess.run(["systemctl", *scope, "enable", "--now", label],
+                                   check=False, capture_output=True, timeout=10)
+            else:
+                subprocess.run(["systemctl", *scope, "enable", "--now", label],
+                               check=False, capture_output=True, timeout=10)
+            # Verify systemd itself reports the unit active. Do not mistake a
+            # detached process, or another user's daemon, for service success.
             import time as _t
             _t.sleep(1.0)
-            _chk = subprocess.run(["systemctl", *scope, "is-active", label],
-                                  capture_output=True, text=True)
-            _installed = _chk.stdout.strip() == "active" or _is_sync_running()
+            check = subprocess.run(["systemctl", *scope, "is-active", label],
+                                   capture_output=True, text=True, timeout=10)
+            installed = check.returncode == 0 and check.stdout.strip() == "active"
         except Exception:
-            _installed = False
+            installed = False
 
-    if _installed:
+    if installed:
         _how = "system service" if _is_root else "user service"
         print(f"  Running in the background as a systemd {_how}. {_daemon_mode_line(config)}")
         print("  To stop: clawmetry disconnect")
     else:
         if sys.stdout.isatty():
-            print("  systemd unavailable here (container, or root with no --user session)")
-            print("  — starting a background process instead…")
-        _start_subprocess()
+            print("  systemd is unavailable here (container or missing user D-Bus session).")
+    return installed
 
 
 def _start_subprocess() -> None:
@@ -2101,6 +2154,18 @@ def _start_subprocess() -> None:
         except Exception:
             pass
     print(f"✅  Sync daemon started (pid {proc.pid})")
+
+
+def _wait_for_sync_daemon(timeout: float = 10.0) -> bool:
+    """Wait until this user's lock records a live daemon after a subprocess start."""
+    import time
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        if _is_sync_running():
+            return True
+        time.sleep(0.1)
+    return _is_sync_running()
 
 
 def _cmd_disconnect(args) -> None:
@@ -4363,7 +4428,7 @@ def _cmd_onboard(args) -> None:
     print()
     print(f"  {BOLD('Plans')} {DIM('(same either way; each tier includes the one before):')}")
     print(f"    {DIM('Free    $0          watch OpenClaw + NVIDIA NemoClaw, forever')}")
-    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 33 runtimes')}")
+    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 32 runtimes')}")
     print(f"    {DIM('Pro    $19/node/mo  everything in Starter + governance (alerts, approvals, evals)')}")
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
@@ -8309,6 +8374,15 @@ def _cmd_export(args) -> None:
 
 def main() -> None:
     import argparse
+    if len(sys.argv) > 1 and sys.argv[1] == "jumper":
+        from clawmetry.physical_ai.cli import main as _jumper_cli
+        raise SystemExit(_jumper_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "asimov":
+        from clawmetry.asimov.cli import main as _asimov_cli
+        raise SystemExit(_asimov_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "robot":
+        from clawmetry.robotics import cli_main as _robot_cli
+        raise SystemExit(_robot_cli(sys.argv[2:]))
     # FAST PATH — `clawmetry hooks …` must dispatch before the dashboard
     # import below (~300ms): `hooks run pretooluse` executes on EVERY Claude
     # Code tool call, and a policy-miss must cost ~40ms, not a third of a

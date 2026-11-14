@@ -64,7 +64,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       version: ${{ steps.resolve.outputs.version }}
@@ -110,7 +110,7 @@ jobs:
   canary:
     name: canary (${{ matrix.os }}, py${{ matrix.python-version }})
     needs: wait-for-propagation
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -187,7 +187,7 @@ jobs:
     name: Bad release alarm
     needs: [wait-for-propagation, canary]
     if: always() && contains(needs.*.result, 'failure')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The only job that writes. `gh issue list` reads before it writes, so
     # keep read alongside the write it actually needs.
     permissions:

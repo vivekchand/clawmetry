@@ -15,6 +15,7 @@ name: PR Screenshots -- Visual Diff
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - "dashboard.py"
       - "routes/**"
@@ -39,7 +40,7 @@ env:
   # clawmetry/templates/tabs/*.html and be reachable via window.switchTab().
   # See routes/* for the API endpoints each tab calls.
   # Must stay in sync with CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py.
-  PR_SCREENSHOT_TABS: "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,limits,history,channels,harness,inventory,assistant,setup,improve,nemoclaw,guard,signals,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents,dives,evals,bench,trail,compliance,price-book"
+  PR_SCREENSHOT_TABS: "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,limits,history,channels,harness,inventory,node-activity,assistant,setup,improve,nemoclaw,guard,signals,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents,dives,evals,bench,trail,compliance,price-book,delivery"
   HEAD_PORT: "8082"
   BASE_PORT: "8081"
   # Local-store fast-paths must be on so the dashboard renders the seeded
@@ -55,7 +56,8 @@ env:
 
 jobs:
   visual-diff:
-    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'visual-review') && !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
     permissions:
       contents: write       # push to orphan pr-screenshots branch
       pull-requests: write  # post comment
@@ -403,12 +405,12 @@ jobs:
       # -- 12. Belt + suspenders: upload PNGs as artefact ----------------------
       - name: Upload screenshots artefact
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: visual-diff-pr-${{ github.event.pull_request.number }}
           path: screenshots/
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
 
       # -- 13. Tail server logs on failure ------------------------------------
       - name: Tail dashboard logs on failure
