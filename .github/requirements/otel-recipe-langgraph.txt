@@ -2,8 +2,8 @@
 # (examples/otel/langgraph/), run by ci.yml's otel-recipe-langgraph job.
 #
 # Direct requirements (the versions the recipe page records as verified):
-#   langgraph==1.2.20 langchain-core==1.7.6
-#   opentelemetry-instrumentation-langchain==0.63.0
+#   langgraph==1.2.14 langchain-core==1.6.3
+#   opentelemetry-instrumentation-langchain==0.62.3
 #   opentelemetry-sdk==1.45.2 opentelemetry-exporter-otlp-proto-http==1.45.2
 #
 # Installed into its OWN virtualenv in that job, never next to the dashboard.
@@ -270,30 +270,36 @@ langgraph-prebuilt==1.1.1 \
 langgraph-sdk==0.4.14 \
     --hash=sha256:13eb1fee92504d87c1f0f43c8e213e7ba0a46bd23a07e3198e413d48efac5833 \
     --hash=sha256:d47a6755890ae537aa80613a3138680ac77f5d256a2d3953af95a96328e6964d
-langsmith==0.14.17 \
-    --hash=sha256:0aa2c79936c93c7cea9c55656f05e21cc5da715fecbdbda439d084adc08429be \
-    --hash=sha256:53efa2db8293d0a8d60efebe0945c595b635873774b302066ed0a746ddf87562
+langsmith==0.12.4 \
+    --hash=sha256:b2edaa49baeec0c7347a84ca0f755039dcff9e9e52f0b9dc26423ec2a98a4dab \
+    --hash=sha256:f486435323eeb0c525087cc694f0b7cd92e255f340db08db643204c789f4f1c4
 opentelemetry-api==1.45.2 \
     --hash=sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34 \
     --hash=sha256:d7b0008e21e5fd61cbe7a7f34ca3b6905a78ab677d9bc395e299359c75cda6b4
+opentelemetry-exporter-http-transport==0.66b2 \
+    --hash=sha256:66d6ed810a515432c8891da9a834464332fd70badeca45bdeeae81b4280c903b \
+    --hash=sha256:fd5f5b490c099acda1cd7b909d5e8981436bf18cc8c6098d302d114c271720e9
+opentelemetry-exporter-otlp-common==0.66b2 \
+    --hash=sha256:06f5a9b88638e310efa1f1d206cdf6b75393e112aba4e174a963416192bd1028 \
+    --hash=sha256:ace86efb75489f925f1ef809856ae5f0c7db534e4afdc624530222228b1236a5
 opentelemetry-exporter-otlp-proto-common==1.45.2 \
     --hash=sha256:af483b24217028892f017096731b794b196b785025d2e6808874720fd0b05a80 \
     --hash=sha256:f1f2806f3f28ce7938033823e50934fcd91595a39de38e69a28a51e19f40fc6d
 opentelemetry-exporter-otlp-proto-http==1.45.2 \
-    --hash=sha256:838592fce774c1c8bb7b9a0a7facbfa82e17be5a8a4e94cef10cb84ae026bae3 \
-    --hash=sha256:c633d7270ad6b57cd4cfbe8b0007a9e2e7c0cb50bd6c50fe2a7b245f721a09d8
+    --hash=sha256:5984a3fb46bc4628e4e2b85d4a6e72637e03962aae6cf372791137768a4ad939 \
+    --hash=sha256:6e4d025138829d0ee57946930c2ccad6491ad4d92a958e9c7eea69278fe60cfc
 opentelemetry-instrumentation==0.66b2 \
     --hash=sha256:02b094150e53b76f5906d75e628dbb3833bbc6e62fa109b5c7ba0c081865e923 \
     --hash=sha256:fa9ccfdab147a14af8107d19ef0a7b5015675273c5adced7a1fc38f28b42ec4c
-opentelemetry-instrumentation-langchain==0.63.0 \
+opentelemetry-instrumentation-langchain==0.62.3 \
     --hash=sha256:1832c280d2a2cb5db4c1b8d062958020ab4ca04e0df976634b54b959acb9ee63 \
     --hash=sha256:b36d3cec030a5fdac44381ae8a6fda4072d53c9afa42caba8a0bcf386571157c
 opentelemetry-proto==1.45.2 \
     --hash=sha256:03a7ca1b43f89fd5b965d5975902bb2515c0c86e2428b456836e9a6149c6235a \
     --hash=sha256:bd8d23cf770605b0af9b7be2071d26a464fea289d35429abfd2a66226114ad64
 opentelemetry-sdk==1.45.2 \
-    --hash=sha256:cebe7f65dc12f26ead75c6064de12fd2a9052e5060c0272d402cfa203aae123b \
-    --hash=sha256:df081c4c6bcfdb1211e3e86140376792643128a25f8d72d1d27675936e7e96ad
+    --hash=sha256:7eec4de13dd21ff3a1670dcb0e02079e692736f94d733dfdce5af461d884248d \
+    --hash=sha256:ff974ea70ee4f1d51e2ec152db37c2b626c7bf82bb3f7d86114fd8704e7199c6
 opentelemetry-semantic-conventions==0.66b2 \
     --hash=sha256:4cbe61e5f9275d57ab31708446e7938ef4291ebbe6a7fca6f7a629c5acae87d8 \
     --hash=sha256:7da5f1a5dc4383eb66711d4d3d3e71824d9403ac1559fea021cc103c1a4c4976
