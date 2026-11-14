@@ -1276,16 +1276,123 @@
     parent.appendChild(wrap);
   }
 
+  // The assistant already ends most answers by proposing the next question
+  // ("Follow-up: would you like to compare Codex sessions with and without
+  // compaction?"). We rendered that as a sentence, so the one moment the
+  // product invites you further was a dead end you had to retype by hand.
+  // Pull it out and make it the thing you can press.
+  //
+  // Conservative on purpose: only a trailing line that literally announces
+  // itself, and only when it reads as a question. A false positive would
+  // delete prose from the answer, which is far worse than missing a chip.
+  var FOLLOW_UP_LINE = /^\s*follow[-\s]?ups?\s*:\s*(.+)$/i;
+
+  function splitFollowUps(content) {
+    var text = String(content == null ? '' : content);
+    var lines = text.split('\n');
+    var last = -1;
+    for (var i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].trim()) { last = i; break; }
+    }
+    if (last < 0) return { body: text, questions: [] };
+    var match = FOLLOW_UP_LINE.exec(lines[last]);
+    if (!match) return { body: text, questions: [] };
+    var proposal = match[1].trim();
+    // A follow-up that is not a question is a statement about what we did
+    // next, not an offer. Leave it in the prose where it belongs.
+    if (proposal.indexOf('?') < 0) return { body: text, questions: [] };
+    var questions = proposal.split(/(?<=\?)\s+/)
+      .map(function (q) { return q.trim(); })
+      .filter(function (q) { return q.length > 8 && q.length <= 180 && q.indexOf('?') >= 0; });
+    if (!questions.length) return { body: text, questions: [] };
+    return { body: lines.slice(0, last).join('\n').replace(/\s+$/, ''), questions: questions.slice(0, 3) };
+  }
+
+  function askQuestion(text) {
+    var input = el('cm-assistant-input');
+    var form = el('cm-assistant-composer');
+    if (!input || !form) return;
+    input.value = text;
+    resizeInput();
+    input.focus();
+    // Go through the composer's own submit path so every guard it applies
+    // (busy state, scope, conversation readiness) applies here too.
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+  }
+
+  // Public entry point for the rest of the dashboard ("Investigate this in
+  // Assistant"). The caller hands us a question; we open the tab, start a
+  // clean conversation and send it through the composer's own submit path so
+  // every guard it applies still applies here. A question we cannot send yet
+  // stays visible in the composer next to the reason, never silently dropped.
+  function assistantAsk(question, options) {
+    options = options || {};
+    var text = String(question == null ? '' : question).trim().slice(0, MAX_MESSAGE);
+    if (!text) return Promise.resolve(false);
+    if (typeof window.switchTab === 'function') window.switchTab('assistant');
+    else loadAssistantPage();
+    if (!page()) return Promise.resolve(false);
+    if (options.fresh !== false) newConversation();
+    var input = el('cm-assistant-input');
+    if (!input) return Promise.resolve(false);
+    input.value = text;
+    resizeInput();
+    input.focus();
+    setStatusMessage('Investigating this from your agent data...', 'success');
+    // waitMs 0 means "send now or tell me why" - the caller wants the
+    // answer in one tick, not a question parked in a composer.
+    var waitMs = Number(options.waitMs);
+    if (!(waitMs >= 0)) waitMs = 12000;
+    var deadline = Date.now() + waitMs;
+    return new Promise(function (resolve) {
+      (function attempt() {
+        if (!state.mounted || !page()) return resolve(false);
+        var box = el('cm-assistant-input');
+        // The reader took it over - edited the question, or sent it already.
+        if (!box || String(box.value || '').trim() !== text) return resolve(false);
+        var settled = state.statusLoadedAt > 0 || !state.statusRequest;
+        if (settled && state.conversationReady && state.dataAvailable !== false && !state.chatRequest) {
+          askQuestion(text);
+          return resolve(true);
+        }
+        if (Date.now() >= deadline) {
+          setStatusMessage(state.dataStatusMessage ||
+            'Your question is ready. Press Send once the assistant is connected.', 'warning');
+          return resolve(false);
+        }
+        setTimeout(attempt, 150);
+      }());
+    });
+  }
+
+  function appendFollowUps(messageNode, questions) {
+    if (!questions || !questions.length) return;
+    var wrap = make('div', 'cm-assistant-followups');
+    wrap.setAttribute('aria-label', 'Suggested next questions');
+    questions.forEach(function (q) {
+      var chip = make('button', 'cm-assistant-followup', q);
+      chip.type = 'button';
+      chip.addEventListener('click', function () { askQuestion(q); });
+      wrap.appendChild(chip);
+    });
+    messageNode.body.appendChild(wrap);
+  }
+
   function appendResult(messageNode, data, question) {
     var response = data || {};
     var content = response.answer || (Array.isArray(response.panels) && response.panels.length ? 'I found these views from the available evidence.' : 'The assistant returned no answer.');
-    setAnswerText(messageNode.content, content);
+    var split = splitFollowUps(content);
+    setAnswerText(messageNode.content, split.body || content);
     var stack = make('div', 'cm-assistant-result-stack');
     (Array.isArray(response.panels) ? response.panels : []).forEach(function (panel) {
       stack.appendChild(renderPanel(panel, question));
     });
     appendSources(stack, response.sources);
     if (stack.childElementCount) messageNode.body.appendChild(stack);
+    // After the sources, so the offer is the last thing on the page and sits
+    // directly above the composer it fills.
+    appendFollowUps(messageNode, split.questions);
   }
 
   function renderConversationMessage(message) {
@@ -1707,6 +1814,7 @@
   }
 
   window.loadAssistantPage = loadAssistantPage;
+  window.assistantAsk = assistantAsk;
   window.assistantLeave = assistantLeave;
 
   if (typeof window.addEventListener === 'function') window.addEventListener('cm-assistant-scope-changed', function () {

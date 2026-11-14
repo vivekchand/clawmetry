@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, Response, jsonify, request
 from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
+from clawmetry.file_security import is_path_within
 
 bp_logs = Blueprint('logs', __name__)
 bp_memory = Blueprint('memory', __name__)
@@ -1465,13 +1466,15 @@ def api_view_file():
     """Return the contents of a memory file."""
     import dashboard as _d
     path = request.args.get("path", "")
+    if "\0" in path:
+        return jsonify({"error": "Invalid path"}), 400
+    full = os.path.abspath(os.path.join(_d.WORKSPACE, path))
+    if not is_path_within(full, _d.WORKSPACE):
+        return jsonify({"error": "Access denied"}), 403
     if is_local_store_read_enabled() and path:
         fast = _try_local_store_file(path)
         if fast is not None:
             return jsonify(fast)
-    full = os.path.normpath(os.path.join(_d.WORKSPACE, path))
-    if not full.startswith(os.path.normpath(_d.WORKSPACE)):
-        return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(full):
         return jsonify({"error": "File not found"}), 404
     try:
@@ -1492,14 +1495,16 @@ def api_write_file():
     """Write content to a memory file (user-initiated edit)."""
     import dashboard as _d
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "path and content (string) are required"}), 400
     path = body.get("path", "")
     content = body.get("content")
-    if not path or content is None or not isinstance(content, str):
+    if not isinstance(path, str) or not path or "\0" in path or not isinstance(content, str):
         return jsonify({"error": "path and content (string) are required"}), 400
     if len(content.encode("utf-8")) > 500_000:
         return jsonify({"error": "File too large (>500 KB)"}), 413
-    full = os.path.normpath(os.path.join(_d.WORKSPACE, path))
-    if not full.startswith(os.path.normpath(_d.WORKSPACE)):
+    full = os.path.abspath(os.path.join(_d.WORKSPACE, path))
+    if not is_path_within(full, _d.WORKSPACE):
         return jsonify({"error": "Access denied"}), 403
     try:
         os.makedirs(os.path.dirname(full) or ".", exist_ok=True)

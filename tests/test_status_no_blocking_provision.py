@@ -87,10 +87,10 @@ def test_provision_still_runs_by_default(monkeypatch):
     monkeypatch.setattr("clawmetry.license._pro_installed_version", lambda: None)
     monkeypatch.setattr(
         "clawmetry.license.auto_provision_pro",
-        lambda key, node=None: (ran.append(key), (False, ""))[1],
+        lambda key, node=None, *, background=False: (ran.append((key, background)), (False, ""))[1],
     )
     monkeypatch.setattr(sync, "load_config", lambda: {"api_key": "cm_test", "node_id": "n1"})
 
     sync._sync_auto_update_with_plan("cloud_pro")
 
-    assert ran == ["cm_test"]
+    assert ran == [("cm_test", True)]

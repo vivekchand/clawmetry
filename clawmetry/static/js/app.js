@@ -114,7 +114,6 @@
   var PAYING_WINDOW_MS = 10 * 60 * 1000;  // fast-poll for 10 min after click
   var _checkoutClickedAt = 0;
   var OVERLAY_ID     = 'cm-hard-block-overlay';
-  var STYLE_ID       = 'cm-hard-block-overlay-style';
 
   // Plan picker state + copy.
   //
@@ -133,8 +132,8 @@
   // Kept deliberately close to /pricing so the overlay and the public page
   // make the same promise in the same words.
   var PLAN_BLURB = {
-    starter: 'Every agent, every session, and every dollar in one dashboard.',
-    pro: 'The governance layer: gate tools before they fire, score runs with evals, catch runaway waste.',
+    starter: window.CMTrialOffer.tr('trial.offer.starter_blurb', null, 'See every agent, session, and cost in one place.'),
+    pro: window.CMTrialOffer.tr('trial.offer.pro_blurb', null, 'Set tool rules, check output quality, and spot wasted spend.'),
   };
   var PLAN_FEATURES = {
     starter: ['Unlimited channels + cloud sync', 'Approval queue'],
@@ -154,207 +153,9 @@
     deviceValue: 149,
   };
   var _selTier = 'starter';
-  var _selInterval = 'year';   // annual preselected: better retention + the device perk
-  // Filled from /api/entitlement (allowlisted, so it answers while blocked).
-  // Never hardcode a runtime count -- it has drifted every time it was.
-  var _paidRuntimeCount = 0;
-
-  function planPriceHtml() {
-    var p = PLAN_PRICES[_selTier] || PLAN_PRICES.starter;
-    var yearly = _selInterval === 'year';
-    var amt = yearly ? p.year : p.month;
-    var was = (yearly && p.was)
-      ? '<span class="cm-hbo-was">$' + p.was + '</span> ' : '';
-    return was + '$' + amt
-      + '<span class="cm-hbo-per"> / node / ' + (yearly ? 'year' : 'month') + '</span>';
-  }
-
-  function featsHtml() {
-    var rows = [runtimesLine()].concat(PLAN_FEATURES[_selTier] || PLAN_FEATURES.starter);
-    return rows.map(function (r) { return '<li>' + escapeHtml(r) + '</li>'; }).join('');
-  }
-
-  function runtimesLine() {
-    return _paidRuntimeCount
-      ? ('All ' + _paidRuntimeCount + ' runtimes (Claude Code, Codex, Cursor +'
-         + Math.max(0, _paidRuntimeCount - 3) + ')')
-      : 'Every supported runtime (Claude Code, Codex, Cursor, …)';
-  }
-
-  function injectStyles() {
-    if (document.getElementById(STYLE_ID)) return;
-    var st = document.createElement('style');
-    st.id = STYLE_ID;
-    st.textContent = ''
-      + '#' + OVERLAY_ID + ' {'
-      + '  position: fixed; inset: 0; z-index: 2147483647;'
-      + '  background: rgba(15,17,20,0.92); backdrop-filter: blur(6px);'
-      + '  -webkit-backdrop-filter: blur(6px);'
-      // align-items:center clips BOTH ends once the card is taller than the
-      // window, and a fixed inset:0 box does not scroll, so the overflow is
-      // unreachable rather than merely hidden. That took out the headline at
-      // the top and the "continue on free runtimes" escape at the bottom on a
-      // laptop-height desktop window. flex-start + overflow-y:auto lets a tall
-      // card scroll; the auto margins on the card keep it optically centred
-      // whenever it does fit.
-      + '  display: flex; align-items: flex-start; justify-content: center;'
-      + '  overflow-y: auto; overscroll-behavior: contain;'
-      + '  padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-card {'
-      + '  max-width: 460px; width: 100%; background: #1a1d22;'
-      + '  border: 1px solid #2a2f36; border-radius: 14px;'
-      + '  box-shadow: 0 24px 60px rgba(0,0,0,0.55);'
-      + '  padding: 22px 26px; color: #e8eaed;'
-      + '  margin: auto;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-eyebrow {'
-      + '  color: #ffb020; font-size: 11px; font-weight: 700;'
-      + '  text-transform: uppercase; letter-spacing: 1.3px;'
-      + '  margin: 0 0 6px 0;'
-      + '}'
-      + '#' + OVERLAY_ID + ' h2 {'
-      + '  margin: 0 0 8px 0; font-size: 19px; line-height: 1.25;'
-      + '  color: #ffffff; font-weight: 700;'
-      + '}'
-      + '#' + OVERLAY_ID + ' p.cm-hbo-body {'
-      + '  margin: 0 0 14px 0; font-size: 13px; line-height: 1.5;'
-      + '  color: #b5b8be;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-cta {'
-      + '  display: block; width: 100%; padding: 11px 18px;'
-      + '  border-radius: 10px; border: 0; background: #ff9500;'
-      + '  color: #1a1d22; font-size: 15px; font-weight: 700;'
-      + '  cursor: pointer; text-align: center; text-decoration: none;'
-      + '  box-sizing: border-box; margin: 0 0 10px 0;'
-      + '  transition: background 120ms ease;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-cta:hover { background: #ffa726; }'
-      // ── plan picker ──────────────────────────────────────────────────
-      + '#' + OVERLAY_ID + ' .cm-hbo-seg {'
-      + '  display: flex; gap: 4px; padding: 3px; margin: 0 0 10px 0;'
-      + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-seg button {'
-      + '  flex: 1; padding: 7px 10px; border: 0; border-radius: 7px;'
-      + '  background: transparent; color: #b5b8be; font-size: 13px;'
-      + '  font-weight: 600; cursor: pointer; font-family: inherit;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-seg button[aria-pressed="true"] {'
-      + '  background: #ff9500; color: #1a1d22;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-seg .cm-hbo-save {'
-      + '  font-weight: 400; opacity: 0.85; margin-left: 4px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier {'
-      + '  display: flex; align-items: center; gap: 11px; width: 100%;'
-      + '  padding: 10px 13px; margin: 0 0 6px 0; text-align: left;'
-      + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
-      + '  color: #e8eaed; cursor: pointer; font-family: inherit;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier[aria-pressed="true"] {'
-      + '  border-color: #ff9500; background: #211a12;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-radio {'
-      + '  width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;'
-      + '  border: 2px solid #4a4f57;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier[aria-pressed="true"] .cm-hbo-radio {'
-      + '  border-color: #ff9500; box-shadow: inset 0 0 0 3px #ff9500;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier-name {'
-      + '  font-size: 14px; font-weight: 700; color: #fff; display: block;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-tier-sub {'
-      + '  font-size: 12px; color: #9aa0a8; display: block; margin-top: 2px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-feats {'
-      + '  margin: 9px 0 10px 0; padding: 0; list-style: none;'
-      + '  font-size: 12.5px; color: #b5b8be;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-feats li { margin: 0 0 4px 0; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-feats li::before {'
-      + '  content: "+"; color: #22c55e; font-weight: 700; margin-right: 8px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-price {'
-      + '  text-align: center; margin: 0 0 10px 0;'
-      + '  font-size: 23px; font-weight: 700; color: #fff;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-device {'
-      + '  margin: 0 0 10px 0; padding: 9px 12px; border-radius: 9px;'
-      + '  border: 1px solid #33406b; background: #151a2b;'
-      + '  font-size: 12.5px; color: #b9c2dd; line-height: 1.45;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-device strong { color: #22c55e; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-was {'
-      + '  color: #6b7078; text-decoration: line-through;'
-      + '  font-size: 17px; font-weight: 600; margin-right: 4px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-per {'
-      + '  font-size: 13px; font-weight: 500; color: #9aa0a8;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-price small {'
-      + '  display: block; margin-top: 4px; font-size: 12px;'
-      + '  font-weight: 500; color: #22c55e;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-divider {'
-      + '  display: flex; align-items: center; gap: 10px;'
-      + '  color: #6b7078; font-size: 11px; text-transform: uppercase;'
-      + '  letter-spacing: 1.2px; margin: 12px 0;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-divider::before,'
-      + '#' + OVERLAY_ID + ' .cm-hbo-divider::after {'
-      + '  content: ""; flex: 1; height: 1px; background: #2a2f36;'
-      + '}'
-      + '#' + OVERLAY_ID + ' label.cm-hbo-label {'
-      + '  display: block; font-size: 12px; color: #b5b8be;'
-      + '  margin: 0 0 6px 0;'
-      + '}'
-      + '#' + OVERLAY_ID + ' textarea.cm-hbo-key {'
-      + '  width: 100%; min-height: 52px; padding: 8px 11px;'
-      + '  border-radius: 8px; border: 1px solid #2a2f36;'
-      + '  background: #12141a; color: #e8eaed;'
-      + '  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;'
-      + '  font-size: 12px; box-sizing: border-box; resize: vertical;'
-      + '}'
-      + '#' + OVERLAY_ID + ' button.cm-hbo-activate {'
-      + '  margin-top: 8px; width: 100%; padding: 9px 14px;'
-      + '  border-radius: 10px; border: 1px solid #2a2f36;'
-      + '  background: transparent; color: #e8eaed;'
-      + '  font-size: 14px; font-weight: 600; cursor: pointer;'
-      + '}'
-      + '#' + OVERLAY_ID + ' button.cm-hbo-activate:hover { border-color: #4a5058; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-status {'
-      + '  min-height: 16px; margin-top: 9px; font-size: 11.5px;'
-      + '  color: #b5b8be; text-align: center;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-status.err { color: #ff6b6b; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-status.ok  { color: #59d18d; }'
-      + '#' + OVERLAY_ID + ' .cm-hbo-foot {'
-      + '  margin-top: 18px; font-size: 11px; color: #6b7078;'
-      + '  text-align: center;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-foot code {'
-      + '  font-family: "JetBrains Mono", ui-monospace, monospace;'
-      + '  color: #b5b8be; background: #12141a; padding: 1px 5px;'
-      + '  border-radius: 3px;'
-      + '}'
-      + '#' + OVERLAY_ID + ' button.cm-hbo-free {'
-      + '  margin-top: 12px; width: 100%; padding: 11px 14px;'
-      + '  border-radius: 10px; border: 1px solid #2a2f36;'
-      + '  background: transparent; color: #b5b8be;'
-      + '  font-size: 13px; font-weight: 600; cursor: pointer;'
-      + '  transition: color 120ms ease, border-color 120ms ease;'
-      + '}'
-      + '#' + OVERLAY_ID + ' button.cm-hbo-free:hover {'
-      + '  color: #e8eaed; border-color: #4a5058;'
-      + '}'
-      + '#' + OVERLAY_ID + ' .cm-hbo-free-note {'
-      + '  margin-top: 8px; font-size: 11px; color: #6b7078;'
-      + '  text-align: center; line-height: 1.45;'
-      + '}';
-    document.head.appendChild(st);
-  }
+  var _selInterval = 'month';  // show the lowest commitment before annual billing
+  // Shared dialog styles live in dashboard.css.
+  function injectStyles() {}
 
   function buildOverlay(state) {
     var el = document.createElement('div');
@@ -365,11 +166,6 @@
     el.setAttribute('data-cm-locked', '1');
     var upgradeUrl = (state && (state.checkout_url || state.upgrade_url)) || 'https://app.clawmetry.com/upgrade';
     var reason = (state && state.reason) || 'A valid ClawMetry subscription is required to continue.';
-    var eyebrow = state && state.expired ? 'Trial ended' : 'Subscription required';
-    var daysLeft = state && typeof state.days_until_expiry === 'number' ? state.days_until_expiry : null;
-    var subline = daysLeft !== null && daysLeft > 0
-      ? ('Your trial ends in ' + daysLeft + ' day' + (daysLeft === 1 ? '' : 's') + '. Upgrade now to keep syncing without interruption.')
-      : 'Complete checkout to unlock the dashboard, or paste a license key you already own.';
     var freeEndpoint = (state && state.free_only_endpoint) || '/api/trial/continue-free';
     var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
       ? state.free_runtimes
@@ -383,48 +179,14 @@
     var freeRuntimesLabel = freeRuntimes
       .map(function (r) { return RT_LABELS[r] || r; })
       .join(' + ');
-    el.innerHTML = ''
-      + '<div class="cm-hbo-card">'
-      + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
-      + '  <h2 id="cm-hbo-title">' + escapeHtml(reason) + '</h2>'
-      + '  <p class="cm-hbo-body">' + escapeHtml(subline) + '</p>'
-      + '  <div class="cm-hbo-seg" role="group" aria-label="Billing interval">'
-      + '    <button type="button" data-interval="month" aria-pressed="' + (_selInterval === 'month') + '">Monthly</button>'
-      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">Annual<span class="cm-hbo-save">2 months free</span></button>'
-      + '  </div>'
-      + '  <button type="button" class="cm-hbo-tier" data-tier="starter" aria-pressed="' + (_selTier === 'starter') + '">'
-      + '    <span class="cm-hbo-radio"></span>'
-      + '    <span><span class="cm-hbo-tier-name">Starter</span>'
-      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.starter) + '</span></span>'
-      + '  </button>'
-      + '  <button type="button" class="cm-hbo-tier" data-tier="pro" aria-pressed="' + (_selTier === 'pro') + '">'
-      + '    <span class="cm-hbo-radio"></span>'
-      + '    <span><span class="cm-hbo-tier-name">Pro</span>'
-      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.pro) + '</span></span>'
-      + '  </button>'
-      + '  <ul class="cm-hbo-feats" id="cm-hbo-feats">' + featsHtml() + '</ul>'
-      // Annual-only perk. The cloud already collects a shipping address on
-      // annual checkouts for this (_annual_device_checkout_extras), and it
-      // ships on the first PAID invoice, so this is not a promise we invent
-      // here. Hidden on monthly.
-      + '  <div class="cm-hbo-device" id="cm-hbo-device" style="' + (_selInterval === 'year' ? '' : 'display:none;') + '">'
-      + '    Includes a free <strong>$149 desk device</strong>.'
-      + '  </div>'
-      + '  <div class="cm-hbo-price" id="cm-hbo-price">' + planPriceHtml() + '</div>'
-      + '  <a class="cm-hbo-cta" href="' + escapeAttr(upgradeUrl) + '" target="_blank" rel="noopener">'
-      + '    Continue to Stripe  →'
-      + '  </a>'
-      + '  <div class="cm-hbo-divider">or</div>'
-      + '  <label class="cm-hbo-label" for="cm-hbo-key">Paste license key</label>'
-      + '  <textarea id="cm-hbo-key" class="cm-hbo-key" spellcheck="false" autocomplete="off" placeholder="header.payload.signature"></textarea>'
-      + '  <button type="button" class="cm-hbo-activate">Activate license</button>'
-      + '  <div class="cm-hbo-status" id="cm-hbo-status" aria-live="polite">Waiting for payment — the dashboard will unlock automatically once your license lands.</div>'
-      + '  <button type="button" class="cm-hbo-free" data-endpoint="' + escapeAttr(freeEndpoint) + '">'
-      + '    Continue free with ' + escapeHtml(freeRuntimesLabel) + ' only'
-      + '  </button>'
-      + '  <div class="cm-hbo-free-note">Free mode keeps ' + escapeHtml(freeRuntimesLabel) + ' observability working. Paid runtimes (Claude Code, Codex, Cursor, …) stay locked until you upgrade.</div>'
-      + '  <div class="cm-hbo-foot">Prefer the CLI? Run <code>clawmetry activate &lt;KEY&gt;</code></div>'
-      + '</div>';
+    el.className = 'cm-trial-offer';
+    el.innerHTML = window.CMTrialOffer.html({
+      prefix: 'cm-hbo', title: window.CMTrialOffer.tr('trial.offer.continue_title', null, 'Choose how to continue'), body: reason,
+      tier: _selTier, interval: _selInterval, checkoutUrl: upgradeUrl,
+      showFree: true, freeLabel: freeRuntimesLabel,
+      recoverable: !!(state && state.expired && ['trial', 'oss', 'cloud_free'].indexOf(state.tier) !== -1),
+    });
+    el.querySelector('.cm-hbo-free').setAttribute('data-endpoint', freeEndpoint);
 
     // Emit paywall telemetry so the fleet dashboard sees a "user hit hard block"
     // count. Fire-and-forget; failure never blocks the render.
@@ -452,21 +214,8 @@
     // Plan picker. Selection lives in module state (not the DOM) so a
     // re-render from the background poll never silently resets the user's
     // choice back to the default mid-checkout.
-    var priceEl = el.querySelector('#cm-hbo-price');
     function repaintPicker() {
-      Array.prototype.forEach.call(
-        el.querySelectorAll('.cm-hbo-seg button'), function (b) {
-          b.setAttribute('aria-pressed', String(b.getAttribute('data-interval') === _selInterval));
-        });
-      Array.prototype.forEach.call(
-        el.querySelectorAll('.cm-hbo-tier'), function (b) {
-          b.setAttribute('aria-pressed', String(b.getAttribute('data-tier') === _selTier));
-        });
-      if (priceEl) priceEl.innerHTML = planPriceHtml();
-      var featsEl = el.querySelector('#cm-hbo-feats');
-      if (featsEl) featsEl.innerHTML = featsHtml();
-      var devEl = el.querySelector('#cm-hbo-device');
-      if (devEl) devEl.style.display = (_selInterval === 'year') ? '' : 'none';
+      window.CMTrialOffer.repaint(el, 'cm-hbo', _selTier, _selInterval);
     }
     Array.prototype.forEach.call(
       el.querySelectorAll('.cm-hbo-seg button'), function (b) {
@@ -483,37 +232,21 @@
         });
       });
 
-    // Runtime count for the copy. /api/entitlement is allowlisted so it
-    // answers even while blocked; on failure we keep the countless wording
-    // rather than printing a number we cannot stand behind.
-    if (!_paidRuntimeCount) {
-      try {
-        fetch('/api/entitlement')
-          .then(function (r) { return r.json().catch(function () { return {}; }); })
-          .then(function (ent) {
-            var all = ent && ent.all_runtimes;
-            if (Array.isArray(all) && all.length) {
-              _paidRuntimeCount = all.length;
-              var fe = el.querySelector('#cm-hbo-feats');
-              if (fe) fe.innerHTML = featsHtml();
-            }
-          })
-          .catch(function () {});
-      } catch (e) { /* noop */ }
-    }
-
     var ctaEl = el.querySelector('.cm-hbo-cta');
     var statusElForCta = el.querySelector('.cm-hbo-status');
     ctaEl.addEventListener('click', function (ev) {
       ev.preventDefault();
       _checkoutClickedAt = Date.now();
+      var desktop = !!(window.pywebview && window.pywebview.api && window.pywebview.api.open_external);
       var payTab = null;
-      try { payTab = window.open('about:blank', '_blank'); } catch (e) { payTab = null; }
+      if (!desktop) {
+        try { payTab = window.open('about:blank', '_blank'); } catch (e) { payTab = null; }
+      }
       function go(url) {
         if (payTab) { try { payTab.location = url; return; } catch (e) { /* fall through */ } }
         try { window.open(url, '_blank', 'noopener'); } catch (e) { window.location.href = url; }
       }
-      statusElForCta.className = 'cm-hbo-status';
+      statusElForCta.className = 'cm-hbo-status cm-offer-status';
       statusElForCta.textContent = 'Opening secure checkout…';
       fetch('/api/trial/checkout', {
         method: 'POST',
@@ -554,11 +287,11 @@
       var ta = el.querySelector('#cm-hbo-key');
       var key = (ta && ta.value || '').trim();
       if (!key) {
-        statusEl.className = 'cm-hbo-status err';
+        statusEl.className = 'cm-hbo-status cm-offer-status err';
         statusEl.textContent = 'Paste a license key first.';
         return;
       }
-      statusEl.className = 'cm-hbo-status';
+      statusEl.className = 'cm-hbo-status cm-offer-status';
       statusEl.textContent = 'Verifying key…';
       activateBtn.disabled = true;
       fetch('/api/license/activate', {
@@ -570,17 +303,17 @@
         .then(function (resp) {
           activateBtn.disabled = false;
           if (resp && resp.ok === false) {
-            statusEl.className = 'cm-hbo-status err';
+            statusEl.className = 'cm-hbo-status cm-offer-status err';
             statusEl.textContent = resp.message || resp.error || 'License activation failed.';
             return;
           }
-          statusEl.className = 'cm-hbo-status ok';
+          statusEl.className = 'cm-hbo-status cm-offer-status ok';
           statusEl.textContent = 'The license was installed. The page will reload.';
           return refreshAndMaybeUnblock(true);
         })
         .catch(function (err) {
           activateBtn.disabled = false;
-          statusEl.className = 'cm-hbo-status err';
+          statusEl.className = 'cm-hbo-status cm-offer-status err';
           statusEl.textContent = 'Activation failed: ' + (err && err.message || err);
         });
     });
@@ -595,41 +328,38 @@
     // stays down. Paid-runtime tabs on the free scope render a locked
     // padlock CTA (handled by the existing paywall banner system).
     var freeBtn = el.querySelector('.cm-hbo-free');
-    if (freeBtn) {
-      freeBtn.addEventListener('click', function () {
-        var ep = freeBtn.getAttribute('data-endpoint') || '/api/trial/continue-free';
-        statusEl.className = 'cm-hbo-status';
-        statusEl.textContent = 'Switching to free mode…';
-        freeBtn.disabled = true;
-        activateBtn.disabled = true;
-        fetch(ep, { method: 'POST' })
-          .then(function (r) { return r.json().catch(function () { return {}; }); })
-          .then(function () {
-            statusEl.className = 'cm-hbo-status ok';
-            statusEl.textContent = 'Free mode enabled — reloading with OpenClaw scope…';
-            // Force the URL onto a free runtime so the gate lets the page
-            // in even though the entitlement is still expired.
-            try {
-              var url = new URL(window.location.href);
-              url.searchParams.set('runtime', 'openclaw');
-              window.location.replace(url.toString());
-            } catch (e) {
-              window.location.replace('/?runtime=openclaw');
-            }
-          })
-          .catch(function (err) {
-            freeBtn.disabled = false;
-            activateBtn.disabled = false;
-            statusEl.className = 'cm-hbo-status err';
-            statusEl.textContent = 'Could not switch to free mode: ' + (err && err.message || err);
-          });
+    function continueFree() {
+      var ep = freeBtn.getAttribute('data-endpoint') || '/api/trial/continue-free';
+      return fetch(ep, {method: 'POST'}).then(function (response) {
+        if (!response.ok) throw new Error('Could not switch to free mode.');
+        try {
+          var url = new URL(window.location.href);
+          url.searchParams.set('runtime', 'openclaw');
+          window.location.replace(url.toString());
+        } catch (e) { window.location.replace('/?runtime=openclaw'); }
       });
     }
+    if (freeBtn) freeBtn.addEventListener('click', function () {
+      freeBtn.disabled = true;
+      statusEl.textContent = window.CMTrialOffer.tr('trial.offer.switching_free', null, 'Switching to free mode...');
+      continueFree().catch(function () {
+        statusEl.textContent = window.CMTrialOffer.tr('trial.offer.free_failed', null, 'Could not switch to free mode. Please try again.');
+      }).finally(function () { freeBtn.disabled = false; });
+    });
 
-    // Belt & braces: block ESC / TAB-out / right-click chrome from letting
-    // the user reach controls behind the overlay while it's mounted.
-    el.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); }
+    var keyLink = el.querySelector('#cm-hbo-havekey');
+    var keyWrap = el.querySelector('#cm-hbo-keywrap');
+    keyLink.addEventListener('click', function () {
+      var open = keyWrap.style.display === 'none';
+      keyWrap.style.display = open ? 'block' : 'none';
+      keyLink.setAttribute('aria-expanded', String(open));
+      if (open) el.querySelector('#cm-hbo-key').focus();
+    });
+    var more = el.querySelector('.cm-offer-more');
+    if (more) more.addEventListener('click', function () {
+      window.CMTrialOffer.recover(el, function () {
+        refreshAndMaybeUnblock(true).then(function () { window.location.reload(); });
+      }, continueFree);
     });
     return el;
   }
@@ -646,15 +376,17 @@
   function mount(state) {
     injectStyles();
     var existing = document.getElementById(OVERLAY_ID);
-    if (existing) existing.remove();
+    if (existing) { if (existing._cmReleaseFocus) existing._cmReleaseFocus(); existing.remove(); }
+    if (window.cmCloseUpgradeModal) window.cmCloseUpgradeModal();
     var el = buildOverlay(state);
     document.body.appendChild(el);
+    el._cmReleaseFocus = window.CMTrialOffer.trap(el);
     try { document.body.style.overflow = 'hidden'; } catch (e) { /* noop */ }
   }
 
   function unmount() {
     var existing = document.getElementById(OVERLAY_ID);
-    if (existing) existing.remove();
+    if (existing) { if (existing._cmReleaseFocus) existing._cmReleaseFocus(); existing.remove(); }
     try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
   }
 
@@ -2139,6 +1871,7 @@ function switchTab(name) {
   // run on their own screen instead of on every tab.
   if (name !== 'assistant' && typeof assistantLeave === 'function') assistantLeave();
   if (name !== 'overview' && typeof customDashboardLeave === 'function') customDashboardLeave();
+  if (name !== 'node-activity' && typeof nodeActivityStop === 'function') nodeActivityStop();
   _cmCurrentTab = name;
   if (window.cmActivityVisibilityChanged) window.cmActivityVisibilityChanged();
   if (window.cmErrorGroupsVisibilityChanged) window.cmErrorGroupsVisibilityChanged();
@@ -2221,6 +1954,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'inventory') { if (typeof renderInventory === 'function') renderInventory(); }
+  if (name === 'node-activity') { if (typeof loadNodeActivity === 'function') loadNodeActivity(); }
   if (name === 'setup') { if (typeof loadSetup === 'function') loadSetup(); }
   if (name === 'improve') { if (typeof loadImprove === 'function') loadImprove(); }
   if (name === 'overview') loadAll();
@@ -2271,6 +2005,7 @@ function switchTab(name) {
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
   if (name === 'tool-catalog') { if (typeof loadToolCatalog === 'function') loadToolCatalog(); }
+  if (name === 'delivery') { if (typeof loadDelivery === 'function') loadDelivery(); }
   if (name === 'harness') { if (typeof loadHarness === 'function') loadHarness(); }
   if (name === 'context-economics') { if (typeof loadContextEconomics === 'function') loadContextEconomics(); }
   if (name === 'brain') loadBrainPage();
@@ -2564,7 +2299,17 @@ function cmRenderNeedsYou(d) {
       sub = t('needs.n_quiet', { n: quiet },
               "{n} agents are open but have gone quiet");
     } else {
-      sub = t('needs.none_running', null, 'No agents running');
+      // Scoped, this count covers ONE runtime, so an unqualified "No agents
+      // running" reads as a claim about the machine. Founder report
+      // 2026-10-07: it said exactly that under a Codex filter while a Claude
+      // Code agent ran, with a red CRITICAL banner about that agent directly
+      // above. Name the runtime and the two stop contradicting each other.
+      var _nrRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+      var _nrName = (_nrRt && _nrRt !== 'all' && typeof _cmRuntimeLabel === 'function')
+        ? (_cmRuntimeLabel(_nrRt) || '') : '';
+      sub = _nrName
+        ? t('needs.none_running_runtime', { runtime: _nrName }, 'No {runtime} agents running')
+        : t('needs.none_running', null, 'No agents running');
     }
     // Some runtimes have no permission prompt at all (Pi's trust machinery
     // guards loading config, not running tools). Filtered to one of those,
@@ -4809,6 +4554,12 @@ function _cmLoadLiveSessions(cb) {
       rt: rt, ts: Date.now(),
       sessions: (d && d.sessions) || [],
       counts: (d && d.counts) || { working: 0, waiting: 0 },
+      // Ground truth from the process table, and why we may be refusing to
+      // answer. `processes_live` > 0 with nothing live in the store means our
+      // evidence is behind reality, not that the machine is idle.
+      processesLive: (d && typeof d.processes_live === 'number') ? d.processes_live : null,
+      staleReason: (d && d.reason) || '',
+      evidenceAge: (d && typeof d.evidence_age_seconds === 'number') ? d.evidence_age_seconds : null,
       // `available:false` means the daemon could not be reached — that is
       // "we don't know", not "nothing is running", and the hero says so.
       available: !(d && d.available === false)
@@ -4973,25 +4724,58 @@ function _renderOverviewHero() {
 
   // Headline. Say the number and let it carry the news; fall back to the old
   // single-boolean sentence only when the session list can't be read.
+  //
+  // NAME THE RUNTIME WHEN SCOPED. These counts come from
+  // /api/live-sessions?runtime=<id>, so under a filter they describe ONE
+  // runtime while the sentence described the machine. Founder report
+  // 2026-10-07: with the switcher on Codex (genuinely idle) the hero read
+  // "It's idle right now." directly beneath a red CRITICAL banner about a
+  // Claude Code agent that was running at that moment. Both were true and
+  // the screen still contradicted itself, because only one of them said
+  // which runtime it meant. FLYWHEEL section 0a.2 is the rule: a number
+  // shown under a runtime filter either scopes or says it is node-wide,
+  // and a scoped number phrased node-wide breaks it from the other side.
+  // NB: `_scoped` is declared further down, so it is hoisted-but-undefined
+  // here and would silently disable this. Derive it from _liveRt, which is
+  // already in hand.
+  // The endpoint refuses the realtime claim when the process table shows
+  // agents the store has not caught up with. Honour that refusal here: the
+  // recency fallback below would otherwise step in and assert "working"
+  // from the same stale data the endpoint just disowned.
+  var _evidenceBehind = !!(_live && _live.staleReason === 'evidence_behind_processes');
+  var _procsLive = (_live && typeof _live.processesLive === 'number') ? _live.processesLive : null;
+  var _rtScoped = !!(_liveRt && _liveRt !== 'all');
+  var _rtName = (_rtScoped && typeof _cmRuntimeLabel === 'function')
+    ? (_cmRuntimeLabel(_liveRt) || '') : '';
+  var _subject = _rtName || 'It';
+  var _isIt = !_rtName;
   var headline;
   if (_liveKnown && _working > 0) {
     headline = _working === 1
-      ? 'It’s working right now.'
-      : _working + ' sessions are working right now.';
+      ? (_isIt ? 'It’s working right now.' : _subject + ' is working right now.')
+      : _working + (_isIt ? ' sessions are working right now.'
+                          : ' ' + _subject + ' sessions are working right now.');
   } else if (_liveKnown && _waiting > 0) {
     // Age-based only (last output 2-10 min ago), so it cannot claim "waiting
     // on you" — that is the needs-you strip's claim, and it has evidence.
     // Both render on Overview, so a mismatch here is two components
     // contradicting each other on one screen.
     headline = _waiting === 1
-      ? 'One session has gone quiet.'
-      : _waiting + ' sessions have gone quiet.';
+      ? (_isIt ? 'One session has gone quiet.'
+               : 'One ' + _subject + ' session has gone quiet.')
+      : _waiting + (_isIt ? ' sessions have gone quiet.'
+                          : ' ' + _subject + ' sessions have gone quiet.');
+  } else if (_evidenceBehind) {
+    // Say what the OS can prove and nothing more. No "right now".
+    headline = (_procsLive === 1)
+      ? 'One agent is open on this machine.'
+      : _procsLive + ' agents are open on this machine.';
   } else if (!_liveKnown && busy) {
-    headline = 'It’s working right now.';
+    headline = _isIt ? 'It’s working right now.' : _subject + ' is working right now.';
   } else if (!_liveKnown) {
     headline = 'Nothing to report yet.';
   } else {
-    headline = 'It’s idle right now.';
+    headline = _isIt ? 'It’s idle right now.' : _subject + ' is idle right now.';
   }
 
   var _liveRows = _liveKnown ? _cmLiveRowsHtml(_live) : '';
@@ -5038,10 +4822,23 @@ function _renderOverviewHero() {
   var sayText = say && say.text ? String(say.text).replace(/\s+/g, ' ').trim() : '';
   if (sayText.length > 90) sayText = sayText.slice(0, 90) + '…';
 
-  var lastLine = sayText
-    ? 'Last thing it did: replied <strong style="color:var(--text-primary);">“' + escHtml(sayText) + '”</strong>.'
-    : (busy ? 'It’s working on something right now.'
-            : 'Send it a message and you’ll see what it does, right here.');
+  var lastLine;
+  if (_evidenceBehind) {
+    // Name the gap in plain words and in real units, so the reader can judge
+    // it. "It's working on something right now" would be the same unbacked
+    // claim the headline just refused to make.
+    var _evAge = (_live && typeof _live.evidenceAge === 'number') ? _live.evidenceAge : null;
+    var _evTxt = (_evAge === null) ? 'has not caught up yet'
+      : ('is ' + (_evAge >= 3600 ? Math.round(_evAge / 3600) + 'h'
+                                 : Math.max(1, Math.round(_evAge / 60)) + 'm') + ' behind');
+    lastLine = 'Their live status ' + _evTxt
+      + ', so ClawMetry cannot say whether they are working right now.';
+  } else {
+    lastLine = sayText
+      ? 'Last thing it did: replied <strong style="color:var(--text-primary);">“' + escHtml(sayText) + '”</strong>.'
+      : (busy ? 'It’s working on something right now.'
+              : 'Send it a message and you’ll see what it does, right here.');
+  }
   var stats = [];
   // When scoped to a runtime, `sessions` is that runtime's TOTAL footprint
   // (matches the switcher), so don't append "today" — the runtime may have 0
@@ -12902,6 +12699,7 @@ var _CM_RT_NODEWIDE = {
   // carries the honest node-wide scope note (FLYWHEEL HARD GATE 2). The DATA
   // path still honours per-runtime via agentInventoryByRuntime.
   inventory: 1,
+  'node-activity': 1,
   // Bench IS the cross-runtime comparison (Harness Engineering): hiding
   // other harnesses under a runtime filter would defeat the tab's purpose,
   // so it declares node-wide and carries the honesty banner.
@@ -13012,10 +12810,10 @@ var _CM_CAP_TABS = {
 // text in the store and states its coverage per runtime, so it is node-level.
 // compliance: framework controls are evaluated over every runtime's findings
 // for the node, so selecting a runtime must not hide the tab.
-var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','memory','skills','signals','compliance'];
+var _CM_NODE_TABS = ['node-activity','alerts','notifications','security','approvals','guard','memory','skills','signals','compliance'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
-var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
+var _CM_RT_ALL_TABS = ['node-activity','flow','brain','models','tracing','turn-anatomy',
   'context-economics','approvals','guard','signals','compliance','alerts','usage','crons','memory',
   'notifications','security','policy','skills','selfevolve',
   'nemoclaw','logs','version-impact','agents'];
@@ -23194,7 +22992,7 @@ function _cmSyncRender(prog, health) {
   // Hard fail-safe: if no progress for 90s after start, surface an error.
   if (!hasErr && elapsed > 90 && (!prog || !prog.phase)) {
     errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + t("app.sync_hasn_t_reported_progress_yet", null, "The collector has not reported progress yet.") + '</div>'
-      + '<div style="font-size:12px;">Check that the daemon is running. On macOS: <code>launchctl kickstart -k gui/$(id -u)/com.clawmetry.sync</code></div>';
+      + '<div style="font-size:12px;">The background helper may have stopped. Run <code>clawmetry sync --restart</code> to start it again, then <code>clawmetry status</code> to see what it reports.</div>';
     errBox.style.display = 'block';
   }
 
@@ -23332,6 +23130,110 @@ async function loadToolCatalog() {
   }
   // Per-MCP-server rollup (#2007) — independent of the provenance filter.
   loadMcpServers();
+}
+
+
+// ── Delivery: what the agent spend bought (pull requests) ───────────────────
+// Server-side runtime filtering: the ?runtime= param is passed through to
+// query_delivery, which scopes in SQL. Slicing a pre-aggregated blob in the
+// browser is how a view silently shows node-wide numbers under a runtime
+// filter, so this tab never does that.
+async function loadDelivery() {
+  var tableEl = document.getElementById('dlv-table');
+  var sumEl = document.getElementById('dlv-summary');
+  var noteEl = document.getElementById('dlv-note');
+  if (!tableEl) return;
+  var kindSel = document.getElementById('dlv-kind');
+  var kind = (kindSel && kindSel.value) ? kindSel.value : 'pr';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var qs = '?kind=' + encodeURIComponent(kind);
+  if (rt && rt !== 'all') qs += '&runtime=' + encodeURIComponent(rt);
+  try {
+    var data = await fetch('/api/delivery' + qs).then(function(r) { return r.json(); });
+    var rows = data.rows || [];
+    var totals = data.totals || {};
+
+    if (sumEl) {
+      function chip(label, val, color) {
+        return '<span style="font-size:12px;color:var(--text-muted);background:var(--bg-secondary);' +
+               'border:1px solid var(--border-primary);border-radius:8px;padding:5px 11px;">' +
+               '<strong style="color:' + color + ';">' + val + '</strong> ' + escHtml(label) + '</span>';
+      }
+      function usd(v) { return '$' + (Number(v) || 0).toFixed(2); }
+      var chips = '';
+      chips += chip(t('delivery.attributed', null, 'attributed to a pull request'),
+                    usd(totals.attributed_usd), 'var(--text-primary)');
+      // Shown with equal weight, not hidden in a tooltip: the user has to be
+      // able to see how much of the bill is NOT accounted for here.
+      chips += chip(t('delivery.unattributed', null, 'not tied to any pull request'),
+                    usd(totals.unattributed_usd), '#d97706');
+      chips += chip(t('delivery.prs', null, 'pull requests'), rows.length, 'var(--text-primary)');
+      chips += chip(t('delivery.sessions', null, 'sessions'),
+                    totals.sessions_attributed || 0, 'var(--text-primary)');
+      sumEl.innerHTML = chips;
+    }
+    if (noteEl && data.cost_note) {
+      noteEl.textContent = data.cost_note;
+      noteEl.style.display = '';
+    }
+
+    if (!rows.length) {
+      tableEl.innerHTML = '<div style="padding:18px;font-size:13px;color:var(--text-muted);">' +
+        escHtml(data.reason || t('delivery.empty', null,
+          'Nothing attributed yet.')) + '</div>';
+      return;
+    }
+
+    var roleColor = { authored: '#16a34a', reviewed: '#0ea5e9', explored: 'var(--text-muted)' };
+    var h = '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+      '<thead><tr style="text-align:left;color:var(--text-muted);">' +
+      '<th style="padding:9px 12px;font-weight:600;">' + escHtml(t('delivery.col_what', null, 'What')) + '</th>' +
+      '<th style="padding:9px 12px;font-weight:600;">' + escHtml(t('delivery.col_role', null, 'Worked on it')) + '</th>' +
+      '<th style="padding:9px 12px;font-weight:600;text-align:right;">' + escHtml(t('delivery.col_sessions', null, 'Sessions')) + '</th>' +
+      '<th style="padding:9px 12px;font-weight:600;text-align:right;">' + escHtml(t('delivery.col_cost', null, 'Cost')) + '</th>' +
+      '<th style="padding:9px 12px;font-weight:600;">' + escHtml(t('delivery.col_evidence', null, 'How we know')) + '</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function(r) {
+      var label = (r.kind === 'pr' || !r.kind)
+        ? ((r.repo ? escHtml(r.repo) + ' ' : '') + '#' + escHtml(r.ref))
+        : escHtml(r.ref);
+      var title = r.title ? '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' +
+                            escHtml(r.title) + '</div>' : '';
+      var link = r.url ? '<a href="' + escHtml(r.url) + '" target="_blank" rel="noopener noreferrer" ' +
+                         'style="color:var(--text-primary);">' + label + '</a>' : label;
+      var state = r.state ? '<span style="font-size:10px;color:var(--text-muted);border:1px solid var(--border-primary);' +
+                            'border-radius:5px;padding:1px 5px;margin-left:6px;">' + escHtml(r.state) + '</span>' : '';
+      // A soft match must not look as solid as an explicit reference.
+      var conf = (Number(r.confidence) || 0);
+      var confNote = conf < 1 ? '<span title="' +
+        escHtml(t('delivery.soft_match', null,
+          'Part of this link was inferred rather than read directly, so it may be wrong.')) +
+        '" style="color:#d97706;margin-left:5px;">~</span>' : '';
+      h += '<tr style="border-top:1px solid var(--border-primary);">' +
+        '<td style="padding:9px 12px;">' + link + state + title + '</td>' +
+        '<td style="padding:9px 12px;color:' + (roleColor[r.role] || 'var(--text-muted)') + ';">' +
+          escHtml(r.role || '') + confNote + '</td>' +
+        '<td style="padding:9px 12px;text-align:right;">' + (r.sessions || 0) + '</td>' +
+        '<td style="padding:9px 12px;text-align:right;color:var(--text-primary);">' +
+          (r.cost_usd > 0 ? '$' + Number(r.cost_usd).toFixed(2)
+                          : '<span style="color:var(--text-muted);" title="' +
+                            escHtml(t('delivery.no_cost', null,
+                              'No model spend fell inside the stretch that touched this.')) +
+                            '">' + escHtml(t('delivery.not_measured', null, 'not measured')) +
+                            '</span>') + '</td>' +
+        '<td style="padding:9px 12px;color:var(--text-muted);font-family:ui-monospace,monospace;font-size:11px;' +
+          'max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' +
+          escHtml(r.evidence || '') + '">' + escHtml(r.evidence || '') + '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    tableEl.innerHTML = h;
+  } catch (e) {
+    tableEl.innerHTML = '<div style="padding:16px;font-size:13px;color:var(--text-muted);">' +
+      escHtml(t('delivery.failed', null,
+        'Delivery could not be loaded just now. It is usually the sync daemon restarting.')) +
+      '</div>';
+  }
 }
 
 // ── Per-MCP-server rollup (#2007) ───────────────────────────────────────────
@@ -30579,7 +30481,8 @@ async function checkUpdateStatus() {
       var current = (data.latest_check && data.latest_check.current) || '';
       msg.textContent = t("app.update_available_v", null, "Update available: v") + latest + ' is out. You are on v' + current + '.';
       banner.style.display = 'flex';
-      _renderAutoUpdateToggle(!!(data.config && data.config.auto_update));
+      _renderAutoUpdateToggle(!!(data.config && data.config.auto_update),
+                              !!(data.updater && data.updater.env_disabled));
     }
   } catch(e) {}
 }
@@ -30587,7 +30490,16 @@ async function checkUpdateStatus() {
 // Reflect the persisted auto_update preference in the banner toggle. On the
 // hosted cloud (CLOUD_MODE) the local pip-updater doesn't apply — the cloud
 // stays current centrally — so show that instead of a functional switch.
-function _renderAutoUpdateToggle(isOn) {
+// `envDisabled` is the node's CLAWMETRY_AUTO_UPDATE=0 kill switch, which
+// outranks the stored preference. The status endpoint has always reported it
+// as `updater.env_disabled`; this function used to read only the stored flag,
+// so a machine that could never update rendered a ticked "Auto-update on"
+// beside a permanent "update available" banner. Founder node 2026-10-06: the
+// banner said auto-update was on while the daemon sat four releases behind,
+// its last attempt having failed days earlier. A checkbox that reports a
+// preference the machine cannot honour is the same defect as a card that
+// reports a zero it cannot stand behind.
+function _renderAutoUpdateToggle(isOn, envDisabled) {
   var wrap = document.getElementById('update-banner-auto');
   var box = document.getElementById('update-banner-auto-toggle');
   var label = document.getElementById('update-banner-auto-label');
@@ -30601,6 +30513,19 @@ function _renderAutoUpdateToggle(isOn) {
     return;
   }
   wrap.style.display = 'flex';
+  if (envDisabled) {
+    // Say what is true and why, and hide a control that cannot take effect.
+    if (box) box.style.display = 'none';
+    wrap.style.cursor = 'default';
+    wrap.title = t('app.auto_update_env_off_tip', null,
+      'CLAWMETRY_AUTO_UPDATE=0 is set for this process, so updates are not '
+      + 'installed automatically however this is set. Update with the button, '
+      + 'or restart the daemon without that variable.');
+    if (label) label.textContent = t('app.auto_update_env_off', null,
+      'Auto-update off on this machine');
+    return;
+  }
+  wrap.style.cursor = '';
   if (box) { box.style.display = ''; box.checked = !!isOn; }
   if (label) label.textContent = isOn ? 'Auto-update on' : 'Auto-update';
 }
@@ -30906,7 +30831,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 33 runtimes side by side. Respects the global
+// the headline demo path — the 32 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -32097,6 +32022,11 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       var r = await fetch(url);
       d = await r.json();
       if (!r.ok) throw new Error(d.error || ('http ' + r.status));
+    }
+    if (d.binary || d.preview_type === 'image' || _cmSetupImageName(file.path || group.root || group.label) || _cmSetupBinaryContent(d.content)) {
+      var host = document.getElementById(hostId);
+      if (host) _cmSetupMountPreview(host, d, file.path || (group.root || '').split('/').pop() || group.label || 'file');
+      return;
     }
     var content = d.content || '';
     var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
@@ -34975,7 +34905,7 @@ async function renderFirstRunReport(overview) {
   // at: it probes local runtime paths and prescribes `clawmetry connect` /
   // `clawmetry --sample`. On a hosted node page the probe runs inside the
   // cloud container, which has no runtimes and never will, so it reported
-  // "No supported runtime was detected ... checked 33 runtimes" about the
+  // "No supported runtime was detected ... checked 32 runtimes" about the
   // server while the reader was looking at their own laptop's sessions.
   // A local-machine diagnostic has no honest answer to give here.
   if (window.CLOUD_MODE) { el.style.display = 'none'; return; }
@@ -35036,7 +34966,7 @@ async function renderFirstRunReport(overview) {
 
   // How widely we looked, and where to get the detail.
   //
-  // This used to render the expanded probe path for all 33 runtimes. Two
+  // This used to render the expanded probe path for all 32 runtimes. Two
   // problems with putting that on a screen. It carries the account name
   // (`/Users/<name>/...`) into every screenshot, screen-share and pasted
   // issue of an empty dashboard, which is the rule the detector surface
@@ -35102,3 +35032,39 @@ async function renderFirstRunReport(overview) {
   el.innerHTML = h;
   el.style.display = 'block';
 }
+// Optional private-package views. Shared by the local extension response and
+// cloud's decrypted, node-scoped snapshot. Never discover through a standing poller.
+window.cmInstallWorkbenchNavigation = function (entries) {
+    var sidebar = document.querySelector('.nav-tabs');
+    (Array.isArray(entries) ? entries : []).slice(0, 8).forEach(function (entry) {
+        if (!entry || typeof entry.href !== 'string' || !/^\/[a-zA-Z0-9][a-zA-Z0-9/_-]*$/.test(entry.href)) return;
+        if (entry.view_group === 'physical_ai') {
+            // The workbench is Asimov 1's home now; retire the dashboard rail link.
+            if (typeof window.cmPhysicalAiWorkbenchPresent === 'function') window.cmPhysicalAiWorkbenchPresent();
+            if (document.getElementById('cm-ai-view-switch')) return;
+            var runtime = document.getElementById('cm-global-runtime-wrap');
+            var top = runtime && runtime.parentNode || document.querySelector('.nav');
+            if (!top) return;
+            var group = document.createElement('nav'); group.id = 'cm-ai-view-switch';
+            group.className = 'cm-ai-view-switch'; group.setAttribute('aria-label', 'AI view');
+            var digital = document.createElement('a'); digital.textContent = 'Digital AI';
+            digital.href = window.CLOUD_MODE ? '/cloud/node/' + encodeURIComponent(window.CLOUD_NODE_ID) : '/';
+            digital.setAttribute('aria-current', 'page');
+            var physical = document.createElement('a'); physical.id = 'cm-robotics-link';
+            physical.textContent = 'Physical AI'; physical.href = entry.href;
+            group.appendChild(digital); group.appendChild(physical);
+            if (runtime) top.insertBefore(group, runtime); else top.appendChild(group);
+        } else if (sidebar) {
+            var link = document.createElement('a'); link.className = 'nav-tab'; link.href = entry.href;
+            link.textContent = String(entry.label || 'Workbench').slice(0, 40); sidebar.appendChild(link);
+        }
+    });
+};
+document.addEventListener('DOMContentLoaded', function () {
+    if (window.CLOUD_MODE) return;
+    fetch('/api/extensions', {credentials: 'same-origin'}).then(function (response) {
+        return response.ok ? response.json() : {};
+    }).then(function (body) {
+        window.cmInstallWorkbenchNavigation(body.navigation);
+    }).catch(function () {});
+});

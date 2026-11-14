@@ -1,0 +1,53 @@
+name: Physical AI host contracts
+
+on:
+  pull_request:
+    paths:
+      - 'clawmetry/local_store.py'
+      - 'clawmetry/query_contract.py'
+      - 'clawmetry/robotics.py'
+      - 'clawmetry/sync.py'
+      - 'clawmetry/trial_enforcement.py'
+      - 'clawmetry/extensions.py'
+      - 'clawmetry/static/js/app.js'
+      - 'clawmetry/static/css/dashboard.css'
+      - 'routes/local_query.py'
+      - 'tests/*robotics*'
+      - 'tests/*query_contract*'
+      - 'tests/test_sync_cloud_plan_cache.py'
+      - 'tests/test_expired_license_does_not_shadow_cloud_plan.py'
+      - '.github/workflows/robotics-contracts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - name: Install the pinned CI dependencies and package under test
+        run: |
+          python -m pip install --require-hashes -r .github/requirements/ci-tests.txt
+          python -m pip install --no-deps -e .
+      - name: Verify paid seams, encrypted reads, navigation and trial continuation
+        env:
+          CLAWMETRY_AUTO_UPDATE: '0'
+          CLAWMETRY_NO_CLOUD: '1'
+        run: >-
+          python -m pytest tests/test_robotics_plugin_operations.py
+          tests/test_robotics_mutation_rpc_auth.py
+          tests/test_robotics_stop_entitlement.py tests/test_extensions_introspection.py
+          tests/test_query_contract_drift.py tests/test_query_contract_goldens.py
+          tests/test_local_query_dispatch_edge_cases.py tests/test_sync_cloud_plan_cache.py
+          tests/test_expired_license_does_not_shadow_cloud_plan.py -q

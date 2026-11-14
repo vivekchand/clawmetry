@@ -71,6 +71,8 @@ setup(
         "clawmetry": [
             "resources/*.sh",
             "py.typed",
+            "asimov/NOTICE",
+            "asimov/LICENSE-MENLO",
             # Curated third-party benchmark pairs for the Harness Engineering
             # tab (clawmetry/published_benchmarks.py). No runtime fetch.
             "data/*.json",
@@ -93,6 +95,7 @@ setup(
     install_requires=[
         "flask>=2.0,<4",
         "waitress>=2.0",
+        "psutil>=7.2.2",  # portable bounded node observation
         # AES-256-GCM for the cloud-sync snapshot envelope, so it is on the
         # data path. The floor was >=3.0, which accepts 42 releases carrying
         # published advisories. An open floor never FORCES an upgrade -- pip

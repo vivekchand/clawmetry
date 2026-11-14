@@ -139,6 +139,12 @@ class _DeliveryWorker:
                         _wake_hint.clear()
                         delay = 1.0
                     elif isinstance(response, dict):
+                        # A bounded viewing hint accelerates stored metrics only;
+                        # no generic command is executed on the wake thread.
+                        live_ttl = response.get('node_activity_live_ttl', 0)
+                        if type(live_ttl) in (int, float) and 0 < live_ttl <= 40:
+                            from clawmetry.node_activity_service import touch_node_activity_view
+                            touch_node_activity_view(remote=True, lease_seconds=live_ttl)
                         # Hints are coalesced, never executed on this thread.
                         if _wake_says_heartbeat(response):
                             _wake_hint.set()
