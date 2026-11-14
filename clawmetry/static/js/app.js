@@ -23167,7 +23167,16 @@ async function loadDelivery() {
       // able to see how much of the bill is NOT accounted for here.
       chips += chip(t('delivery.unattributed', null, 'not tied to any pull request'),
                     usd(totals.unattributed_usd), '#d97706');
-      chips += chip(t('delivery.prs', null, 'pull requests'), rows.length, 'var(--text-primary)');
+      // The count follows the view: it said "100 pull requests" over a table
+      // of repositories, which is a number that reads as an answer to a
+      // question nobody asked.
+      var countWord = { pr: ['delivery.prs', 'pull requests'],
+                        repo: ['delivery.repos', 'repositories'],
+                        branch: ['delivery.branches', 'branches'],
+                        commit: ['delivery.commits', 'commits'],
+                        file: ['delivery.files', 'files'] }[kind] ||
+                      ['delivery.rows', 'rows'];
+      chips += chip(t(countWord[0], null, countWord[1]), rows.length, 'var(--text-primary)');
       chips += chip(t('delivery.sessions', null, 'sessions'),
                     totals.sessions_attributed || 0, 'var(--text-primary)');
       sumEl.innerHTML = chips;
@@ -23194,9 +23203,23 @@ async function loadDelivery() {
       '<th style="padding:9px 12px;font-weight:600;">' + escHtml(t('delivery.col_evidence', null, 'How we know')) + '</th>' +
       '</tr></thead><tbody>';
     rows.forEach(function(r) {
-      var label = (r.kind === 'pr' || !r.kind)
-        ? ((r.repo ? escHtml(r.repo) + ' ' : '') + '#' + escHtml(r.ref))
-        : escHtml(r.ref);
+      // The row carries no kind of its own: query_delivery puts it on the
+      // envelope, so `!r.kind` was true for EVERY row and every row rendered
+      // in pull-request form. On the Repositories view that read
+      // `vivekchand/clawmetry #vivekchand/clawmetry`, because a repo row's
+      // ref IS its name. Fall back to the view's kind, never to 'pr'.
+      var rowKind = r.kind || kind || 'pr';
+      var label;
+      if (rowKind === 'pr') {
+        label = (r.repo ? escHtml(r.repo) + ' ' : '') + '#' + escHtml(r.ref);
+      } else if (rowKind === 'repo') {
+        label = escHtml(r.ref || r.repo || '');
+      } else {
+        // A branch, commit or path, shown under its repository when the row
+        // knows one and is not already that name.
+        label = (r.repo && r.repo !== r.ref ? escHtml(r.repo) + ' ' : '') +
+                escHtml(r.ref || '');
+      }
       var title = r.title ? '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' +
                             escHtml(r.title) + '</div>' : '';
       var link = r.url ? '<a href="' + escHtml(r.url) + '" target="_blank" rel="noopener noreferrer" ' +
@@ -30173,7 +30196,12 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 //: The tab the dashboard opens on. One place, because the nav markup's
-//: `active` class and the e2e landing guards have to agree with it.
+//: `active` class and the e2e landing guards have to agree with it -- and
+//: because local and hosted are the same product. Hosted used to fork to the
+//: roster here, from a time when Assistant could not reach the user's node at
+//: all; it can now, over the cloud relay, and a relay that cannot reach the
+//: machine says so on the screen with a retry rather than rendering nothing.
+//: One constant, one landing tab, every deployment.
 var CM_LANDING_TAB = 'assistant';
 
 function _cmTabFromHash() {
@@ -30191,7 +30219,7 @@ function _cmBootLanding() {
     if (typeof switchTab === 'function') switchTab('transcripts');
     return;
   }
-  if (typeof switchTab === 'function') switchTab(window.CLOUD_MODE ? 'inventory' : CM_LANDING_TAB);
+  if (typeof switchTab === 'function') switchTab(CM_LANDING_TAB);
 }
 
 // Hash router. Tab links and `#trail=` route here; `#session=` is consumed by
