@@ -64,6 +64,8 @@ DISPATCH_ARGS = {
     "robotics_runs": {},
     "robotics_events": {"run_id": "a" * 32},
     "robotics_incidents": {"run_id": "a" * 32},
+    "physical_ai_runs": {},
+    "physical_ai_events": {"run_id": "a" * 32},
 }
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.

@@ -264,3 +264,43 @@ def test_trial_pill_js_suite() -> None:
     output = (proc.stdout or "") + (proc.stderr or "")
     assert proc.returncode == 0, "trial-pill JS tests failed:\n" + output
     assert "PASS" in output, "no PASS line in output:\n" + output
+
+
+def test_shared_offer_loads_before_both_consumers():
+    """TRR-01/12: both dialogs must ship the same compact component.
+
+    AC-GUX-TRR-001.1
+    """
+    html = _read(DASHBOARD).split('DASHBOARD_HTML =', 1)[1]
+    scripts = re.findall(r'<script[^>]*src=[^>]+>', html)
+    joined = '\n'.join(scripts)
+    assert joined.index('js/trial-offer.js') < joined.index('js/app.js') < joined.index('js/trial-pill.js')
+    for path in (APP_JS, PILL_JS):
+        assert 'window.CMTrialOffer.html(' in _read(path)
+    css = _read(REPO_ROOT / 'clawmetry/static/css/dashboard.css')
+    assert 'max-width: 440px' in css
+
+
+def test_shared_offer_translation_keys_resolve():
+    """
+    AC-GUX-TRR-001.4
+    """
+    src = _read(REPO_ROOT / 'clawmetry/static/js/trial-offer.js')
+    used = set(re.findall(r"tr\(\s*['\"]([^'\"]+)['\"]", src))
+    assert len(used) > 20
+    catalog = json.loads(_read(LOCALE))
+    assert not (used - set(catalog))
+
+
+def test_primary_action_has_accessible_contrast():
+    """
+    AC-GUX-TRR-001.3
+    """
+    css = _read(REPO_ROOT / 'clawmetry/static/css/dashboard.css')
+    rule = re.search(r'\.cm-trial-offer \.cm-offer-primary \{([^}]+)', css).group(1)
+    background = re.search(r'background: (#[0-9a-f]{6})', rule).group(1)
+    assert 'color: #fff;' in rule
+    values = [int(background[i:i+2], 16)/255 for i in (1,3,5)]
+    linear = [v/12.92 if v <= .04045 else ((v+.055)/1.055)**2.4 for v in values]
+    luminance = sum(v*w for v,w in zip(linear, (.2126,.7152,.0722)))
+    assert 1.05/(luminance+.05) >= 4.5

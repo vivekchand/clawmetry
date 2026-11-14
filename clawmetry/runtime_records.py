@@ -53,7 +53,7 @@ _STATES = frozenset({ON_DISK, DERIVED, UNAVAILABLE, UNKNOWN, PARTIAL})
 
 # Signals a surface can ask about. Deliberately short: these are the three the
 # broken-looking panels actually depend on. Adding a fourth means being able to
-# answer it for all 33 runtimes, which is the bar that keeps this table true.
+# answer it for all 32 runtimes, which is the bar that keeps this table true.
 SIGNALS = ("tokens", "cost", "model")
 
 
@@ -69,8 +69,9 @@ def _e(tokens, cost, model, evidence, *, note="", doc_label=None, doc_file="docs
     }
 
 
-# Keyed by the runtime ids in ``clawmetry.entitlements.ALL_RUNTIMES``.
-RUNTIME_RECORDS: dict[str, dict] = {
+# Coverage retained for stored evidence from an unreleased adapter. These
+# entries do not advertise availability or add a runtime to the catalogue.
+HISTORICAL_RUNTIME_RECORDS: dict[str, dict] = {
     "opendots": _e(
         UNAVAILABLE, UNAVAILABLE, UNAVAILABLE,
         "No model IDs, token usage or costs in the local workspace",
@@ -78,6 +79,10 @@ RUNTIME_RECORDS: dict[str, dict] = {
              "call receipts. Normal chat history is held in CopilotKit Intelligence; "
              "model usage, cost and reasoning are not recorded locally.",
     ),
+}
+
+# Keyed by the runtime ids in ``clawmetry.entitlements.ALL_RUNTIMES``.
+RUNTIME_RECORDS: dict[str, dict] = {
     # ── OpenClaw family ──────────────────────────────────────────────────
     "openclaw": _e(
         ON_DISK, ON_DISK, ON_DISK,
@@ -335,7 +340,7 @@ def record_for(runtime: str | None) -> dict:
     rather than an exception — a surface asking about a runtime we have never
     heard of must still render something honest."""
     key = (runtime or "").strip().lower()
-    entry = RUNTIME_RECORDS.get(key)
+    entry = RUNTIME_RECORDS.get(key) or HISTORICAL_RUNTIME_RECORDS.get(key)
     if entry is None:
         return {"tokens": UNKNOWN, "cost": UNKNOWN, "model": UNKNOWN,
                 "evidence": "", "note": "", "doc_label": None,

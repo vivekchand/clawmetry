@@ -16,6 +16,7 @@ import pytest
 from flask import Flask
 
 import clawmetry.extensions as ext
+from clawmetry.physical_ai.catalog import hardware_navigation
 
 
 class _FakeEntryPoint:
@@ -260,6 +261,7 @@ def test_api_extensions_shape_empty(client, monkeypatch):
     body = json.loads(resp.data)
     assert body == {
         "navigation": [],
+        "physical_ai_hardware": hardware_navigation(),
         "plugins": [],
         "plugin_count": 0,
         "failed_plugins": [],
@@ -316,6 +318,7 @@ def test_api_extensions_never_raises(client, monkeypatch):
     body = json.loads(resp.data)
     assert body == {
         "navigation": [],
+        "physical_ai_hardware": hardware_navigation(),
         "plugins": [],
         "plugin_count": 0,
         "failed_plugins": [],
