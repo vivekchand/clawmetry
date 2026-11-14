@@ -691,6 +691,10 @@ email-validator==2.3.0 \
     --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4 \
     --hash=sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426
     # via pydantic
+expression==5.8.0 \
+    --hash=sha256:3420f0ed06e2282f1f030ab8eefb70f06ed62365cd1988ad3b7c6525db9df179 \
+    --hash=sha256:2286e4ff71802420a69b235fa78fffdd21f404958524c1cb95133419f7f64e5f
+    # via litellm
 fastapi==0.141.1 \
     --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3 \
     --hash=sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1
