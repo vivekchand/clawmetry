@@ -23394,6 +23394,10 @@ def _emit_detector_incidents(store, state: dict) -> int:
                 from clawmetry.incident_evidence import reconcile_session
                 nodes = {e.get("node_id") for e in events if isinstance(e, dict) and e.get("node_id")}
                 node_id = s.get("node_id") or (next(iter(nodes)) if len(nodes) == 1 else "")
+                if node_id:
+                    for _inc in incidents:
+                        if not _inc.get("node_id"):
+                            _inc["node_id"] = node_id
                 if len(nodes) > 1 or (nodes and node_id not in nodes):
                     log.warning("Incident evidence spans multiple nodes; reconciliation withheld")
                 else:
@@ -23415,6 +23419,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
             if inspection_complete:
                 incidents = [inc for inc in incidents
                              if inc.get("kind") not in DURABLE_KINDS
+                             or inc.get("kind") == "inspection_incomplete"
                              or (inc.get("kind") in episodes
                                  and episodes[inc["kind"]].get("state") == "active")]
             else:
