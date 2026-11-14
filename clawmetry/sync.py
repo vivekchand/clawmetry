@@ -23404,7 +23404,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
         except Exception as exc:
             log.warning("Incident reconciliation unavailable for %s: %s", sid, exc, exc_info=True)
         if hasattr(store, "record_incident_observation"):
-            from clawmetry.incident_store import DURABLE_KINDS
+            from clawmetry.incident_store import DURABLE_KINDS, SECURITY_EPISODE_KINDS as _SEC_KINDS
             # Both producers share one durable graph. The filter depends on
             # whether the scan completed. A complete scan that returned no
             # episode for a DURABLE_KIND means the write failed — that kind
@@ -23494,6 +23494,13 @@ def _emit_detector_incidents(store, state: dict) -> int:
             # its own signature (agent_inventory.CONFIG_CHANGE_SIGNATURE) so
             # the two do not overwrite each other every tick.
             signature = str(inc.get("signal_signature") or f"daemon_detect_{kind}")
+            if kind in _SEC_KINDS and episodes and kind in episodes:
+                from hashlib import sha256 as _sha256
+                _ep = episodes[kind]
+                _sig_scope = json.dumps(
+                    [_ep.get("node_id", ""), str(inc.get("runtime") or "openclaw"), sid],
+                    separators=(",", ":"))
+                signature = f"daemon_detect_{kind}:" + _sha256(_sig_scope.encode()).hexdigest()[:24]
             memo_key = f"{sid}::{signature}"
             last = memo.get(memo_key)
             if isinstance(last, (int, float)) and (now - last) < reemit:
