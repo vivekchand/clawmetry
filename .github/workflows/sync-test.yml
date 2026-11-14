@@ -33,7 +33,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         python: ['3.11', '3.12', '3.13']
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     name: Sync ${{ matrix.os }} / Python ${{ matrix.python }}
 
     steps:

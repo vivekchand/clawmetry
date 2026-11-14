@@ -15,6 +15,7 @@ Both checks derive their scope from the workflow files, so a NEW step or
 trigger is covered without editing this test.
 """
 import glob
+from fnmatch import fnmatchcase
 import os
 import re
 import shutil
@@ -109,23 +110,70 @@ def _declared_workflow_names():
     return names
 
 
+def _resolve_workflow_run_names(refs, declared):
+    """Resolve ordered include/exclude filters against actual workflow names.
+
+    GitHub permits glob filters here, including a leading ! exclusion:
+    https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onworkflow_runworkflows
+    Keep exact-name handling for existing names containing brackets.
+    """
+    selected = set()
+    included = False
+    for ref in refs:
+        exclude = ref.startswith('!')
+        pattern = ref[1:] if exclude else ref
+        matches = ({pattern} if pattern in declared else
+                   {name for name in declared if fnmatchcase(name, pattern)})
+        assert matches, (
+            f"workflow_run references {ref!r}, which matches no declared workflow. "
+            f"Declared names: {sorted(declared)}"
+        )
+        if exclude:
+            assert included, 'workflow_run exclusion requires an earlier positive filter'
+            selected.difference_update(matches)
+        else:
+            included = True
+            selected.update(matches)
+    assert selected, 'workflow_run filters select no declared workflow and will never fire'
+    return selected
+
+
 def test_workflow_run_triggers_name_a_real_workflow():
-    """A workflow_run naming a non-existent workflow never fires, silently."""
+    """A workflow_run with no matching declared workflow never fires, silently."""
     declared = _declared_workflow_names()
     checked = 0
     for wf in WORKFLOWS:
         for m in _WF_RUN_RE.finditer(_read(wf)):
-            for a, b in _QUOTED_RE.findall(m.group("names")):
-                ref = (a or b).strip()
-                if not ref:
-                    continue
-                checked += 1
-                assert ref in declared, (
-                    f"{os.path.basename(wf)}: workflow_run references "
-                    f"{ref!r}, which is not the `name:` of any workflow. "
-                    f"It will never fire. Declared names: {sorted(declared)}"
-                )
+            refs = [(a or b).strip() for a, b in _QUOTED_RE.findall(m.group("names"))]
+            checked += len(refs)
+            try:
+                _resolve_workflow_run_names(refs, declared)
+            except AssertionError as error:
+                raise AssertionError(f'{os.path.basename(wf)}: {error}') from error
     assert checked > 0, "no workflow_run trigger found to validate"
+
+
+def test_workflow_run_glob_exclusion_keeps_real_targets_and_excludes_self():
+    declared = {'CI', 'Queue priority (main first)', 'Product record'}
+    assert _resolve_workflow_run_names(['*', '!Queue priority (main first)'], declared) == {
+        'CI', 'Product record',
+    }
+    assert _resolve_workflow_run_names(['Prod*'], declared) == {'Product record'}
+    assert _resolve_workflow_run_names(['*', '!Prod*', 'Product record'], declared) == declared
+
+
+def test_workflow_run_preserves_exact_bracketed_name():
+    release = 'Auto-release on [RELEASE] merge'
+    assert _resolve_workflow_run_names([release], {release, 'CI'}) == {release}
+
+
+@pytest.mark.parametrize('refs', [
+    ['typo'], ['Missing*'], ['*', '!Typo'], ['*', '!Missing*'],
+    ['!CI'], ['*', '!CI'], [],
+])
+def test_workflow_run_rejects_dead_or_misspelled_filters(refs):
+    with pytest.raises(AssertionError):
+        _resolve_workflow_run_names(refs, {'CI'})
 
 
 def test_cloud_pin_can_follow_a_release():

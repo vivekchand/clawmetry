@@ -16,7 +16,7 @@ kodlama ajanlarınızın zaten yazdığı oturum dosyalarını okur ve zaman çi
 araç çağrılarını ve çalışma zamanının gösterdiği token ile maliyet verilerini tek
 bir görünümde toplar; böylece çalışan uzun bir koşuyu takılı kalmış olandan ayırt edebilirsiniz.
 
-**33 AI ajan çalışma zamanıyla** çalışır: Claude Code, OpenAI Codex, Hermes, OpenClaw ve 29 tane daha. Tüm ajan filonuz için tek bir pano. ([tam liste](SUPPORTED_RUNTIMES.txt), katalogdan üretilmiştir.)
+**32 AI ajan çalışma zamanıyla** çalışır: Claude Code, OpenAI Codex, Hermes, OpenClaw ve 28 tane daha. Tüm ajan filonuz için tek bir pano. ([tam liste](SUPPORTED_RUNTIMES.txt), katalogdan üretilmiştir.)
 
 > 🌐 **Bunu şu dillerde okuyun:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [daha fazlası →](docs/i18n/)
 
@@ -47,11 +47,11 @@ ajan çalışma zamanlarını bulur, onları salt okunur olarak okur ve nasıl �
 onu engelleyebilmekle aynı şey değildir (çalışma zamanı bazında [hangi kontrollerin gerçek olduğu](docs/APPROVALS.md)).
 
 
-## 33 ajan çalışma zamanıyla çalışır
+## 32 ajan çalışma zamanıyla çalışır
 
 **Açık kaynak uygulamada ücretsiz:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**Ücretli planda:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**Ücretli planda:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 Her çalışma zamanı aynı panoyu alır. Birden fazlasını aynı anda çalıştırın,
 başlıktaki değiştirici her sekmeyi bunlardan birine yeniden kapsar.
@@ -80,7 +80,7 @@ Herhangi bir ajan karşılaştırma aracına güvenmeden önce yanıtlanmaya de�
 Bir kullanım yüzdesi, ancak böldüğü sayı kadar dürüsttür. ClawMetry, pencereyi
 [okuyabileceğiniz ve PR gönderebileceğiniz bir tablodan](clawmetry/context_windows.py)
 sağlayıcı bazında boyutlandırır; bu tablo Anthropic, OpenAI, Google, xAI, DeepSeek,
-Kimi, Qwen, Mistral, Llama ve GLM'yi kapsar. 33 çalışma zamanının tamamını tek bir
+Kimi, Qwen, Mistral, Llama ve GLM'yi kapsar. 32 çalışma zamanının tamamını tek bir
 satıcının cetveliyle ölçmez. Bu önemlidir: Anthropic'in 200K'sına karşı puanlanan
 300K'lık bir GPT-5 turu, GPT-5'in 400K'sının aslında %75'indeyken ">%100, patlamış"
 olarak okunur. Aynı cetvel, gerçekten taşmış 130K'lık bir DeepSeek turunu rahat bir
@@ -100,7 +100,7 @@ Aslında kör anlamına gelen bir `0` bunu söyler.
 
 | Yol | Ajanınıza eklenen | Varsayılan mı? |
 |---|---|---|
-| Oturum dosyası izleme (33 çalışma zamanının tamamı) | **0**. Ayrı bir işlem, ajanınızda ClawMetry kodu yok | açık |
+| Oturum dosyası izleme (32 çalışma zamanının tamamı) | **0**. Ayrı bir işlem, ajanınızda ClawMetry kodu yok | açık |
 | HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | LLM çağrısı başına **+0,44 ms**, yani 5 saniyelik bir çağrının %0,009'u | kapalı |
 | Araç öncesi hook kapısı (ısınmış önbellek) | 36 ms'lik bir yorumlayıcı tabanının üzerinde, kapıdan geçen araç çağrısı başına **+44 ms** | kapalı |
 | Zorunlu kılma proxy'si | LLM çağrısı başına **+9,7 ms** | kapalı |

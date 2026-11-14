@@ -1,0 +1,22 @@
+# Node activity implementation plan
+
+## Summary
+Implement a Node activity tab with bounded host observations. The daemon records periodic resource measurements, stable process identities, network listeners and fingerprints of selected sensitive settings. Observe, Govern and Guard views share change history, evidence and coverage. Observation is read-only by default; reviews and monitoring preferences affect only ClawMetry. Polling is not a complete execution audit.
+
+## Code reuse and package structure
+Reuse the daemon writer, LocalStore mixin pattern, local_query typed method proxy, encrypted system snapshot and existing dashboard navigation. Follow inventory completeness semantics. Use maintained psutil for portable host metrics, with honest unavailable states. New backend modules are node_activity.py, node_activity_store.py, node_activity_service.py and routes/node_activity.py. New frontend assets are static/js/node-activity.js, static/css/node-activity.css and templates/tabs/node-activity.html, using the existing theme and Manrope. Parent owns shared daemon, store, dashboard, package and registry integration. A separate cloud worktree owns the interceptor and route policy. No new kernel driver, arbitrary PID control or plaintext cloud telemetry.
+
+## Components and flow
+The collector emits per-source completeness, scope and timestamps. The service reads preferences and prior source state, compares only complete comparable observations, and persists through the daemon-owned writer. Keyed fingerprints and raw comparison state are internal. GET /api/node-activity returns a bounded stored payload. POST /api/node-activity/preferences accepts a closed boolean schema. POST /api/node-activity/reviews accepts an existing event ID, expected or investigate, and a short reason; it preserves original evidence and does not authorize future actions. Cloud reads the selected node's encrypted nodeActivity slice and uses an existing confirmed encrypted mutation relay, or reports write unavailability honestly. The frontend polls only while active and visible, rejects stale responses after node changes, and stops replay when hidden. A selected event drives map, evidence and replay consistently. Unknown is never rendered as zero or trusted human activity. Node scope remains explicit under runtime filters.
+
+## Steps
+1. Create linked Factory requirement and blueprint records before implementation, and mirror their acceptance criteria.
+2. Backend delegate implements collector, store, service, routes and focused tests. UI delegate implements only feature assets and focused lifecycle tests. These independent files can proceed in parallel after this plan is saved.
+3. Parent integrates LocalStore, local_query, independent local-only daemon cadence, encrypted snapshot, package dependencies, dashboard navigation and test registries.
+4. Cloud delegate integrates the existing shared encrypted snapshot and confirmed mutation path in an isolated cloud worktree.
+5. Run focused tests, syntax and English checks, allowlist checks, generated module map and acceptance manifest checks; resolve review findings.
+6. Exercise a real isolated daemon and dashboard with harmless process, listener and selected-file changes, including disabled, partial, stale and node-switch behavior. Inspect browser at mobile widths and reduced motion.
+7. Submit feature PRs, obtain green CI and merge under repository workflow. Follow with a separate release PR, verify PyPI wheel, cloud deployment and released live data before claiming shipment.
+
+## Testing
+Collector tests cover quiet baseline, PID reuse, partial/denied sources, caps, source identity changes, redaction and platform shapes. Store tests cover persistence, review integrity, retention and no false removals. Route tests prove stored-only reads, typed mutations, validation and absence of arbitrary host control. Wiring tests cover local-only cadence, encrypted snapshot allowlists, node-wide scope and package assets. JS tests cover request lifecycle, generation guards, replay and reduced motion. Run check_ac_coverage, check_english, lint_daemon_allowlist, module map generation/check and relevant registry checks. Cloud tests cover route classification, inline JS validity, shared snapshots and relay authorization. Browser checks use real loopback HTTP data, all three views, 320/360-pixel layouts, replay and request counts. Release evidence must include installed wheel version, decrypted nodeActivity summary and hosted tab behavior.

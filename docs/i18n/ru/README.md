@@ -17,7 +17,7 @@
 которые раскрывает рантайм, чтобы вы могли отличить длительный прогон, который
 работает, от того, что застрял.
 
-Работает с **33 рантаймами ИИ-агентов** — Claude Code, OpenAI Codex, Hermes, OpenClaw и ещё 29. Одна панель для всего вашего парка агентов. ([полный список](SUPPORTED_RUNTIMES.txt), сгенерированный из каталога.)
+Работает с **32 рантаймами ИИ-агентов** — Claude Code, OpenAI Codex, Hermes, OpenClaw и ещё 28. Одна панель для всего вашего парка агентов. ([полный список](SUPPORTED_RUNTIMES.txt), сгенерированный из каталога.)
 
 > 🌐 **Читать на:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [ещё →](docs/i18n/)
 
@@ -49,11 +49,11 @@ pip install clawmetry && clawmetry
 не то же самое, что возможность его заблокировать ([какие элементы управления реальны, по рантаймам](docs/APPROVALS.md)).
 
 
-## Работает с 33 рантаймами агентов
+## Работает с 32 рантаймами агентов
 
 **Бесплатно в open source приложении:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**По платному тарифу:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**По платному тарифу:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 Каждый рантайм получает одну и ту же панель. Запустите несколько одновременно,
 и переключатель в шапке перенастроит каждую вкладку на нужный из них.
@@ -82,7 +82,7 @@ pip install clawmetry && clawmetry
 Процент утилизации честен ровно настолько, насколько честен знаменатель. ClawMetry
 определяет размер окна по провайдеру из [таблицы, которую можно прочитать и
 предложить PR](clawmetry/context_windows.py), охватывающей Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama и GLM. Она не измеряет все 33
+DeepSeek, Kimi, Qwen, Mistral, Llama и GLM. Она не измеряет все 32
 рантайма одной линейкой одного вендора. Это важно: ход на 300K токенов у GPT-5,
 оценённый по линейке Anthropic на 200K, читается как ">100%, переполнено", хотя
 на деле это 75% от 400K у GPT-5. Та же линейка маскирует реально переполненный
@@ -102,7 +102,7 @@ ClawMetry может видеть события компактизации то
 
 | Путь | Добавлено к вашему агенту | По умолчанию? |
 |---|---|---|
-| Чтение файлов сессий «хвостом» (все 33 рантайма) | **0**. Отдельный процесс, кода ClawMetry в вашем агенте нет | включено |
+| Чтение файлов сессий «хвостом» (все 32 рантайма) | **0**. Отдельный процесс, кода ClawMetry в вашем агенте нет | включено |
 | HTTP-перехватчик (`CLAWMETRY_INTERCEPT=1`) | **+0,44 мс** на вызов LLM, или 0,009% от 5-секундного вызова | выключено |
 | Шлюз pre-tool хука (тёплый кэш) | **+44 мс** на вызов инструмента под контролем, сверх базовых 36 мс интерпретатора | выключено |
 | Прокси принудительного применения | **+9,7 мс** на вызов LLM | выключено |

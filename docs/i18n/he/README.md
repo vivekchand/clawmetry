@@ -15,7 +15,7 @@
 קוראת את קבצי הסשן שסוכני הקוד שלך כותבים כבר בעצמם, ומציבה את ציר הזמן,
 קריאות הכלים וכל נתוני הטוקנים והעלות שה-runtime חושף במבט אחד — כך שתוכל להבדיל בין הרצה ארוכה שעובדת לבין הרצה שנתקעה.
 
-עובד עם **33 סוכני ריצה (runtimes) של AI** — Claude Code, OpenAI Codex, Hermes, OpenClaw ו-29 נוספים. דשבורד אחד לכל צי הסוכנים שלך. ([הרשימה המלאה](SUPPORTED_RUNTIMES.txt), שנוצרת מתוך הקטלוג.)
+עובד עם **32 סוכני ריצה (runtimes) של AI** — Claude Code, OpenAI Codex, Hermes, OpenClaw ו-28 נוספים. דשבורד אחד לכל צי הסוכנים שלך. ([הרשימה המלאה](SUPPORTED_RUNTIMES.txt), שנוצרת מתוך הקטלוג.)
 
 > 🌐 **קרא זאת ב:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [עוד →](docs/i18n/)
 
@@ -42,11 +42,11 @@ pip install clawmetry && clawmetry
 שתי מגבלות שכדאי להכיר לפני שמעריכים את הפלט: ל-runtimes שונים יש חשיפת נתונים שונה מאוד (חלקם לא מפרסמים עלות כלל — [המטריצה](docs/compatibility.md) מראה מי), וצפייה בפעולה אינה זהה ליכולת לחסום אותה ([אילו פקדים הם אמיתיים, לפי runtime](docs/APPROVALS.md)).
 
 
-## עובד עם 33 סוכני ריצה
+## עובד עם 32 סוכני ריצה
 
 **חינם באפליקציית הקוד הפתוח:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**בתוכנית בתשלום:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**בתוכנית בתשלום:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 כל runtime מקבל את אותו הדשבורד. הפעל כמה בבת אחת, ומחליף ה-header ממקד מחדש כל טאב לאחד מהם.
 
@@ -73,7 +73,7 @@ pip install clawmetry && clawmetry
 אחוז ניצול הוא ישר כמו המכנה שעליו הוא מחושב. ClawMetry
 קובעת את גודל החלון לפי ספק מתוך [טבלה שאפשר לקרוא ולשלוח
 PR עליה](clawmetry/context_windows.py), המכסה את Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama ו-GLM. היא לא מודדת את כל 33
+DeepSeek, Kimi, Qwen, Mistral, Llama ו-GLM. היא לא מודדת את כל 32
 ה-runtimes בסרגל של ספק אחד. זה משנה: תור של 300K של GPT-5 שנמדד
 מול ה-200K של Anthropic נקרא ">100%, blown" כשבפועל הוא ב-75% מתוך
 ה-400K של GPT-5. אותו סרגל מסתיר תור אמיתי של DeepSeek בגודל 130K שגלש כ-65% נוח.
@@ -92,7 +92,7 @@ ClawMetry יכולה לראות אירועי compaction רק בחלק מה-runti
 
 | נתיב | נוסף לסוכן שלך | ברירת מחדל? |
 |---|---|---|
-| מעקב אחרי קבצי סשן (כל 33 ה-runtimes) | **0**. תהליך נפרד, בלי קוד ClawMetry בסוכן שלך | פעיל |
+| מעקב אחרי קבצי סשן (כל 32 ה-runtimes) | **0**. תהליך נפרד, בלי קוד ClawMetry בסוכן שלך | פעיל |
 | Interceptor ל-HTTP (`CLAWMETRY_INTERCEPT=1`) | **‎+0.44 מילישנייה** לכל קריאת LLM, או 0.009% מקריאה של 5 שניות | כבוי |
 | שער hook טרום-כלי (cache חם) | **‎+44 מילישנייה** לכל קריאת כלי מגודרת, מעל רצפת interpreter של 36 מילישנייה | כבוי |
 | פרוקסי אכיפה | **‎+9.7 מילישנייה** לכל קריאת LLM | כבוי |

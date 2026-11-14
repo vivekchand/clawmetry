@@ -62,7 +62,7 @@ permissions:
 jobs:
   pin-version:
     name: Rebuild cloud with latest OSS
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout OSS repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -211,6 +211,83 @@ jobs:
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi
 
+      # An OSS release that ADDS a route deadlocks the two cloud PRs against
+      # each other, and the failure reads as a catastrophe rather than as the
+      # one-line process problem it is.
+      #
+      # clawmetry-cloud's enforcer refuses to BOOT when an installed OSS route
+      # has no cloud_route_policy entry (fail-closed on purpose: an
+      # unclassified route might serve a tenant data it should not). So the
+      # pin PR below goes red on every check that constructs the app — ~18 of
+      # them, all on the same `enforcer.py: sys.exit(1)`. Meanwhile the PR
+      # carrying the policy entry is red against the OLD pin, because its
+      # entry names a route the installed OSS does not have yet. Neither can
+      # be green alone.
+      #
+      # Burned 2026-10-15 on 0.12.917 (/api/delivery): an hour went into
+      # reading 18 identical stack traces before the shape was recognised.
+      # The previous pin, 0.12.916, had merged clean at 55 pass / 0 fail —
+      # which is the tell, and is why this step prints it.
+      - name: Name the routes this release adds
+        if: env.SKIP != '1'
+        env:
+          OSS_VERSION: ${{ steps.oss_version.outputs.version }}
+        run: |
+          # Compare against the pin cloud main is ON, not against HEAD~1: the
+          # deadlock is about the gap between the installed wheel and this one,
+          # which may span several releases.
+          CURRENT=$(grep -oE 'clawmetry==[0-9.]+' clawmetry-cloud/Dockerfile | head -1 | cut -d= -f3)
+          # Depth 1 by default, so the tag's tree is not here. Fetching the
+          # tags brings the objects the comparison reads; a failure is not
+          # fatal because the guard below refuses to answer rather than
+          # answering wrongly.
+          git fetch --tags --quiet origin || true
+          BASE="v$CURRENT"
+          if ! git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
+            echo "::warning::no tag $BASE to compare against; skipping the new-route check"
+            exit 0
+          fi
+          # Exit 2 means "could not tell", which is NOT the same as "none".
+          # Collapsing the two is how a shallow checkout would report a
+          # route-adding release as route-free and leave the deadlock
+          # unannounced — the exact silence this step exists to prevent.
+          set +e
+          ADDED=$(python3 scripts/list_oss_routes.py --added-since "$BASE")
+          RC=$?
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning::could not compare routes against $BASE (exit $RC); the pin PR will not carry the new-route warning"
+            exit 0
+          fi
+          if [ -z "$ADDED" ]; then
+            echo "No new OSS routes since $BASE — the pin PR can merge on its own."
+            exit 0
+          fi
+          # Unguessable heredoc delimiter, not a fixed "EOF". A multi-line
+          # GITHUB_ENV write ends at the first line that equals the delimiter,
+          # so with a fixed one any value containing a bare `EOF` line closes
+          # the block early and everything after it is parsed as further
+          # NAME=VALUE assignments -- that is, it sets arbitrary environment
+          # variables for every later step in the job, including the two below
+          # that run `gh` with the cloud PAT.
+          #
+          # $ADDED is route text that scripts/list_oss_routes.py derives from
+          # this repository's own source, so nothing reaches it that is not
+          # already committed here and the gap is narrow today. It is narrow,
+          # not closed, and a 128-bit random delimiter closes it outright for
+          # the cost of one line. python3 rather than openssl/uuidgen because
+          # the `list_oss_routes.py` call above already makes python3 a hard
+          # requirement of this step -- this adds no new tool to depend on.
+          # (zizmor github-env, .github/workflows/auto-deploy-cloud.yml)
+          DELIM="NEW_ROUTES_EOF_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+          {
+            printf 'NEW_ROUTES<<%s\n' "$DELIM"
+            printf '%s\n' "$ADDED"
+            printf '%s\n' "$DELIM"
+          } >> "$GITHUB_ENV"
+          echo "::warning::This release adds OSS routes with no cloud_route_policy entry; the pin PR cannot go green alone."
+          echo "$ADDED" | sed 's/^/  added: /'
+
       - name: Pin clawmetry version in cloud Dockerfile
         if: env.SKIP != '1'
         env:
@@ -228,6 +305,18 @@ jobs:
           cd clawmetry-cloud
           git config user.email "diya-bot@clawmetry.com"
           git config user.name "Diya (auto-deploy)"
+          # The body carries the deadlock instruction when there is one, so the
+          # next reader of ~18 identical failures does not have to work it out
+          # from the stack traces.
+          PR_BODY="Automated version pin from OSS release $OSS_VERSION. Merge to deploy."
+          if [ -n "${NEW_ROUTES:-}" ]; then
+            PR_BODY="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n' \
+              "Automated version pin from OSS release $OSS_VERSION." \
+              "⚠️ **This release adds OSS routes. This PR cannot go green on its own — do not try to fix its CI.**" \
+              "$(echo "$NEW_ROUTES" | sed 's/^/- `/; s/$/`/')" \
+              "Each needs a \`cloud_route_policy/policy.py\` entry. The enforcer refuses to boot an app with an unclassified OSS route, so every check that constructs the app fails here on \`enforcer.py: sys.exit(1)\`; and a PR adding the entry on its own is red against the OLD pin, because the entry names a route the installed wheel does not have. Each needs the other." \
+              "**Fold this one-line Dockerfile bump into the PR that adds the policy entries, and close this one as superseded.**")"
+          fi
           BRANCH="auto/pin-clawmetry-$OSS_VERSION"
           git checkout -b "$BRANCH"
           git add Dockerfile
@@ -247,7 +336,7 @@ jobs:
             gh pr create \
               --repo vivekchand/clawmetry-cloud \
               --title "chore: auto-pin clawmetry==$OSS_VERSION" \
-              --body "Automated version pin from OSS release $OSS_VERSION. Merge to deploy." \
+              --body "$PR_BODY" \
               --base main \
               --head "$BRANCH"
             echo "✅ PR opened to pin clawmetry==$OSS_VERSION"
@@ -273,6 +362,13 @@ jobs:
           BRANCH="auto/pin-clawmetry-${VERSION}"
           PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number -q '.[0].number')
           if [ -z "$PR" ]; then echo "No open pin PR for $BRANCH (pin already current) — nothing to merge."; exit 0; fi
+          # A pin that adds OSS routes CANNOT go green by itself (see "Name the
+          # routes this release adds"). Polling it for 45 minutes and then
+          # reporting a timeout buries the one instruction that matters.
+          if [ -n "${NEW_ROUTES:-}" ]; then
+            echo "::warning::PR #$PR pins a release that adds OSS routes; it cannot go green alone. Fold its Dockerfile bump into the route-policy PR. Not polling."
+            exit 0
+          fi
           echo "Pin PR: #$PR"
           # Safety: only auto-merge a pin-only diff. Anything else waits for a human.
           FILES=$(gh pr view "$PR" --repo "$REPO" --json files -q '[.files[].path] | join(",")')

@@ -20,7 +20,7 @@ permissions:
 jobs:
   publish:
     name: Build & Publish to PyPI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     permissions:
       # write (not read) so the step below can attach the wheel, sdist and
@@ -174,7 +174,7 @@ jobs:
       #      delete the PYPI_API_TOKEN secret and this fallback step.
       - name: Publish to PyPI (Trusted Publishing, attested)
         if: vars.PYPI_TRUSTED_PUBLISHING == 'true'
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           attestations: true
 

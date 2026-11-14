@@ -1,0 +1,11 @@
+ClawMetry Asimov observation support
+
+The data-only LiveKit connection method in observer.py is adapted from
+Menlo SDK 0.1.0, Copyright 2026 Menlo Research Pte. Ltd., licensed under
+the Apache License, Version 2.0. The adaptation disables automatic media
+subscription and requires explicit receive-only data authority.
+
+Original source:
+https://github.com/menloresearch/menlo-sdk/blob/568385a5a03212303b876ff7e4d77833ab55c7d8/src/menlo/asimov/transport/_livekit_client.py
+
+The Apache 2.0 license text is included in LICENSE-MENLO.

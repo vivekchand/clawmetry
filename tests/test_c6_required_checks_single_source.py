@@ -83,24 +83,26 @@ def test_status_reporter_derives_rather_than_duplicates():
     }
 
 
-def test_drift_bot_gates_through_the_aggregator():
-    """Regression pin for the rule FLYWHEEL 1f states.
+def test_product_record_gates_through_the_aggregator():
+    """The portable citation prerequisite must gate through the sole context.
 
     #5089 merged with drift-bot red, and clawmetry-cloud #2089 the day after,
-    because the rule lived only in prose. drift-bot is a commit status with no
-    re-run button: red is permanent once merged, so it has to block before.
+    because the rule lived only in prose. Retiring the vendor must retain an
+    enforceable prerequisite, with independent exact-candidate product review
+    documented in docs/PRODUCT_RECORDS.md.
 
     It gates from inside REQUIRED_SPECS rather than as a second
     branch-protection context: ADR-001 says protection names exactly one
     context, and scripts/e2e_gate.py is that context. The first attempt at this
-    added a second name and drift-bot itself flagged the contradiction.
+    added a second name and the historical vendor reviewer flagged the contradiction.
     """
     gate = _load(os.path.join(REPO_ROOT, "scripts", "e2e_gate.py"), "_e2e_gate")
     patterns = [s.pattern for s in gate.REQUIRED_SPECS]
-    assert "drift-bot" in patterns, (
-        "drift-bot must stay in REQUIRED_SPECS; a check not listed there "
+    assert "PR cites the product record that justified it" in patterns, (
+        "the product-record check must stay in REQUIRED_SPECS; a check not listed there "
         "cannot block a merge"
     )
+    assert "drift-bot" not in patterns, 'the retired vendor must not be a required dependency'
 
 
 def test_branch_protection_names_exactly_one_context_per_repo():
@@ -158,30 +160,27 @@ def test_commit_status_states_map_to_check_run_shape(
     ]
 
 
-def test_a_pending_drift_bot_does_not_pass_the_gate():
+def test_a_pending_product_record_does_not_pass_the_gate():
     """The failure that matters: a status not yet posted must not read as green."""
     gate = _gate()
-    spec = next(s for s in gate.REQUIRED_SPECS if s.pattern == "drift-bot")
-    runs = [{"name": "drift-bot", "status": "in_progress", "conclusion": None}]
+    spec = next(s for s in gate.REQUIRED_SPECS if s.label == "Product record")
+    runs = [{"name": spec.pattern, "status": "in_progress", "conclusion": None}]
     (result,) = gate.evaluate([spec], runs)
     assert result.state == "pending"
 
 
-def test_a_failed_drift_bot_fails_the_gate():
+def test_a_failed_product_record_fails_the_gate():
     gate = _gate()
-    spec = next(s for s in gate.REQUIRED_SPECS if s.pattern == "drift-bot")
-    runs = [{"name": "drift-bot", "status": "completed", "conclusion": "failure"}]
+    spec = next(s for s in gate.REQUIRED_SPECS if s.label == "Product record")
+    runs = [{"name": spec.pattern, "status": "completed", "conclusion": "failure"}]
     (result,) = gate.evaluate([spec], runs)
     assert result.state == "failed"
 
 
-def test_a_missing_drift_bot_skips_not_blocks():
-    """When skip_if_unreported=True and no status has been posted, the spec
-    passes as 'skipped' so frontend-only PRs are not held waiting forever.
-    A real failure (status posted + failing) still blocks -- see the test above."""
+def test_a_missing_product_record_blocks_instead_of_skipping():
+    """The citation job runs on every PR; an absent result must keep waiting."""
     gate = _gate()
-    spec = next(s for s in gate.REQUIRED_SPECS if s.pattern == "drift-bot")
-    assert spec.skip_if_unreported, "Drift Bot spec must carry skip_if_unreported=True"
+    spec = next(s for s in gate.REQUIRED_SPECS if s.label == "Product record")
+    assert not spec.skip_if_unreported, 'the mandatory citation must not silently skip'
     (result,) = gate.evaluate([spec], [])
-    assert result.state == "passed"
-    assert "skipped" in result.detail
+    assert result.state == "pending"

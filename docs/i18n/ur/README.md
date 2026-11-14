@@ -16,7 +16,7 @@
 ٹول کالز، اور رن ٹائم کی طرف سے ظاہر کیے گئے ٹوکن اور لاگت کے ڈیٹا کو ایک
 منظر میں رکھتا ہے — تاکہ آپ یہ بتا سکیں کہ کوئی طویل رن کام کر رہا ہے یا پھنس گیا ہے۔
 
-**33 AI ایجنٹ رن ٹائمز** کے ساتھ کام کرتا ہے — Claude Code، OpenAI Codex، Hermes، OpenClaw اور 29 مزید۔ آپ کے پورے ایجنٹ فلیٹ کے لیے ایک ڈیش بورڈ۔ ([مکمل فہرست](SUPPORTED_RUNTIMES.txt)، کیٹلاگ سے تیار کی گئی۔)
+**32 AI ایجنٹ رن ٹائمز** کے ساتھ کام کرتا ہے — Claude Code، OpenAI Codex، Hermes، OpenClaw اور 28 مزید۔ آپ کے پورے ایجنٹ فلیٹ کے لیے ایک ڈیش بورڈ۔ ([مکمل فہرست](SUPPORTED_RUNTIMES.txt)، کیٹلاگ سے تیار کی گئی۔)
 
 > 🌐 **اسے اس زبان میں پڑھیں:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [مزید →](docs/i18n/)
 
@@ -47,11 +47,11 @@ pip install clawmetry && clawmetry
 جیسا نہیں ہے ([کون سے کنٹرولز حقیقی ہیں، ہر رن ٹائم کے لیے](docs/APPROVALS.md))۔
 
 
-## 33 ایجنٹ رن ٹائمز کے ساتھ کام کرتا ہے
+## 32 ایجنٹ رن ٹائمز کے ساتھ کام کرتا ہے
 
 **اوپن سورس ایپ میں مفت:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**ایک پیڈ پلان پر:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**ایک پیڈ پلان پر:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 ہر رن ٹائم کو ایک ہی ڈیش بورڈ ملتا ہے۔ کئی کو ایک ساتھ چلائیں اور ہیڈر
 سوئچر ہر ٹیب کو ان میں سے ایک کے مطابق دوبارہ متعین کر دیتا ہے۔
@@ -80,7 +80,7 @@ pip install clawmetry && clawmetry
 یوٹیلائزیشن فیصد صرف اتنا ہی سچا ہے جتنا وہ چیز جس سے اسے تقسیم کیا جاتا ہے۔ ClawMetry
 ہر فراہم کنندہ کے لیے ونڈو کا سائز [ایک ٹیبل](clawmetry/context_windows.py) سے لیتا ہے جسے آپ پڑھ اور
 PR کر سکتے ہیں، جو Anthropic، OpenAI، Google، xAI،
-DeepSeek، Kimi، Qwen، Mistral، Llama اور GLM کا احاطہ کرتا ہے۔ یہ تمام 33
+DeepSeek، Kimi، Qwen، Mistral، Llama اور GLM کا احاطہ کرتا ہے۔ یہ تمام 32
 رن ٹائمز کو ایک فراہم کنندہ کے پیمانے سے نہیں ناپتا۔ یہ اہم ہے: ایک 300K GPT-5 موڑ
 جب Anthropic کے 200K کے خلاف ناپا جائے تو ">100%، اڑ گیا" پڑھتا ہے جب درحقیقت وہ
 GPT-5 کے 400K کا 75% ہے۔ وہی پیمانہ ایک حقیقتاً اوورفلو ہوئے 130K DeepSeek موڑ کو
@@ -99,7 +99,7 @@ ClawMetry صرف کچھ رن ٹائمز پر کمپیکشن ایونٹس دیک�
 
 | راستہ | آپ کے ایجنٹ میں شامل | ڈیفالٹ؟ |
 |---|---|---|
-| سیشن-فائل ٹیلنگ (تمام 33 رن ٹائمز) | **0**۔ علیحدہ پراسیس، آپ کے ایجنٹ میں کوئی ClawMetry کوڈ نہیں | آن |
+| سیشن-فائل ٹیلنگ (تمام 32 رن ٹائمز) | **0**۔ علیحدہ پراسیس، آپ کے ایجنٹ میں کوئی ClawMetry کوڈ نہیں | آن |
 | HTTP انٹرسیپٹر (`CLAWMETRY_INTERCEPT=1`) | ہر LLM کال پر **+0.44 ms**، یا 5s کال کا 0.009% | آف |
 | پری-ٹول ہک گیٹ (گرم کیش) | ہر گیٹڈ ٹول کال پر **+44 ms**، 36 ms انٹرپریٹر فلور کے اوپر | آف |
 | اینفورسمنٹ پراکسی | ہر LLM کال پر **+9.7 ms** | آف |

@@ -123,26 +123,10 @@ REQUIRED_SPECS = [
     # rest of these guards from decaying into tautologies.
     Spec("Store invariants", "Store invariants (property-based)"),
 
-    # Blueprint/Requirement sync with 8090 Software Factory. FLYWHEEL 1f has
-    # called a red drift-bot non-negotiable for months while nothing enforced
-    # it: #5089 merged with it red, and clawmetry-cloud #2089 the day after.
-    #
-    # It belongs HERE rather than as a second branch-protection context. ADR-001
-    # says protection names exactly one context and this file aggregates behind
-    # it; adding a second name would have been a quieter kind of drift, where
-    # the merge gate and its own architecture disagree.
-    #
-    # Unlike everything above, drift-bot is a COMMIT STATUS from the
-    # 8090-software-factory GitHub App, not an Actions check run. It never
-    # appears in /check-runs, which is why list_commit_statuses exists.
-    #
-    # skip_if_unreported=True: the 8090 App only posts drift-bot on PRs that
-    # touch Python or product-record files. Frontend-only npm bumps (dependabot
-    # i18next / postcss / react-router / etc.) never receive a status -- making
-    # this spec a guaranteed 30-min hang on every such PR. When the App does
-    # post (on any PR touching Python or product files), the gate still enforces
-    # it. Only the "never posted" case is treated as skipped.
-    Spec("Drift Bot", "drift-bot", skip_if_unreported=True),
+    # The retired external reviewer is replaced by a portable record citation.
+    # Human/agent review still checks the actual acceptance criteria against the
+    # exact candidate (docs/PRODUCT_RECORDS.md); this check makes omission fail.
+    Spec("Product record", "PR cites the product record that justified it"),
 
     # The v2 React bundle is rebuilt from source into the published wheel, and
     # until 2026-09-23 that build ran only AFTER merge (publish.yml,

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Asimov 1 | ClawMetry</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/logo.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/asimov.css') }}">
+  <script src="{{ url_for('static', filename='js/asimov.js') }}" defer></script>
+</head>
+<body class="asimov-page">
+  <header class="asimov-nav">
+    <a class="asimov-brand" href="/" aria-label="ClawMetry dashboard"><img src="{{ url_for('static', filename='img/logo.svg') }}" width="26" height="26" alt="">Claw<span>Metry</span></a>
+    <a href="/">Back to dashboard</a>
+  </header>
+  <main id="asimov-app">
+    <header class="asimov-heading"><div><h1>Asimov 1</h1><p>See the robot state and the evidence behind each action.</p></div><span class="asimov-observe">Observation only</span></header>
+    <p class="asimov-qualification">Hardware qualification is pending. SDK evidence does not establish physical robot validation.</p>
+    <p id="asimov-message" class="asimov-message" role="status" aria-live="polite">Reading stored robot evidence.</p>
+    <section id="asimov-empty" class="asimov-empty" hidden>
+      <h2>Bring your first robot run into view</h2>
+      <p>Import a Menlo SDK recording to inspect measured joints, alerts, and recorded commands.</p>
+      <pre><code>clawmetry asimov import-recording /path/to/run.jsonl --robot-id my-asimov</code></pre>
+      <h3>Observe a connected robot</h3>
+      <p>Use a Menlo Observe credential. Run the collector on the computer that can reach the robot.</p>
+      <pre><code>clawmetry asimov observe --robot-id my-asimov --duration 60</code></pre>
+      <p>Live observation requires Python 3.12 and the optional Menlo SDK. <a href="https://github.com/vivekchand/clawmetry/blob/main/docs/ASIMOV.md">Read the connection guide</a>.</p>
+      <p>Start ClawMetry after the import. Open this screen from its dashboard.</p>
+      <p>This screen reads stored evidence. It cannot move or stop a robot.</p>
+    </section>
+    <div id="asimov-workbench" class="asimov-workbench" hidden>
+      <aside class="asimov-rail" aria-label="Robot runs"><h2>Robot runs</h2><p>Choose a source to inspect.</p><div id="asimov-runs"></div><button id="asimov-more-runs" class="asimov-button" hidden>Load older runs</button></aside>
+      <article class="asimov-detail">
+        <header class="asimov-run-heading"><div><h2 id="asimov-robot">Robot</h2><p id="asimov-source"></p></div><span id="asimov-status" class="asimov-status"></span></header>
+        <p id="asimov-freshness" class="asimov-muted"></p>
+        <dl class="asimov-condition"><div><dt>Mode</dt><dd id="asimov-mode">Not reported</dd></div><div><dt>Battery</dt><dd id="asimov-battery">Not reported</dd></div><div><dt>Recorded events</dt><dd id="asimov-event-count">Not reported</dd></div><div><dt>Dropped evidence</dt><dd id="asimov-dropped">Not reported</dd></div></dl>
+        <section class="asimov-measurements"><div class="asimov-section-heading"><h3>Measured joints</h3><p>Latest stored sample. Missing values stay unknown.</p></div><div class="asimov-table-scroll"><table><caption class="asimov-sr-only">Latest measured joint values with explicit units</caption><thead><tr><th scope="col">Joint</th><th scope="col">Position (rad)</th><th scope="col">Velocity (rad/s)</th><th scope="col">Current (A)</th><th scope="col">Temperature (°C)</th></tr></thead><tbody id="asimov-joints"></tbody></table></div></section>
+        <div class="asimov-secondary"><section><h3>Orientation</h3><p>Quaternion, in w, x, y, z order.</p><p id="asimov-orientation" class="asimov-values">Not reported</p><p>Angular velocity (rad/s)</p><p id="asimov-angular" class="asimov-values">Not reported</p><p>Gravity in body coordinates</p><p id="asimov-gravity" class="asimov-values">Not reported</p></section><section><h3>Source alerts</h3><p>Alerts reported by this source.</p><ul id="asimov-alerts"></ul><p id="asimov-health"></p><details><summary>Battery measurements</summary><pre id="asimov-battery-detail"></pre></details></section></div>
+        <section class="asimov-trace"><div class="asimov-section-heading"><h3>Command evidence</h3><p>A returned SDK call does not confirm movement. Command outcomes remain unknown.</p></div><p id="asimov-trace-loaded" class="asimov-muted"></p><p id="asimov-trace-empty">No command evidence is stored in the loaded events.</p><ol id="asimov-events"></ol><button id="asimov-more-events" class="asimov-button" hidden>Load more events</button><details><summary>Source and receipt clocks</summary><p>Source time comes from the robot or recording. Receipt time comes from the collector computer.</p><p>These clocks can differ. The sequence orders stored evidence.</p><p id="asimov-run-id"></p><p id="asimov-clock"></p></details></section>
+      </article>
+    </div>
+    <noscript><p>Enable JavaScript to read robot runs. You can also use <code>clawmetry asimov inspect</code>.</p></noscript>
+  </main>
+</body>
+</html>

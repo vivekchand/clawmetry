@@ -902,11 +902,6 @@ def api_auth_check():
 # is rejected with 403 to keep the GATEWAY_TOKEN from leaking off-box.
 _LOOPBACK_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
 
-# Host header values accepted by the bootstrap endpoint. A browser pointed at a
-# DNS-rebound name (evil.com → 127.0.0.1) will still send Host: evil.com, so we
-# reject anything outside this set even when remote_addr is loopback.
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]", "::1"})
-
 
 def _is_loopback_request(req) -> bool:
     """Return True iff *req* originates from this machine without a proxy.
@@ -928,29 +923,9 @@ def _is_loopback_request(req) -> bool:
        token at all — we cannot tell from a single request whether the
        browser is on this box or on the LAN.
     """
-    raw_addr = (req.environ.get("REMOTE_ADDR") or "").strip().lower()
-    if raw_addr not in _LOOPBACK_ADDRS:
-        return False
-    host = (req.host or "").strip().lower()
-    if host.startswith("["):
-        # Bracketed IPv6: "[::1]" or "[::1]:8900" -> "[::1]"
-        end = host.find("]")
-        if end != -1:
-            host = host[: end + 1]
-    elif ":" in host:
-        # IPv4 / hostname with port -> strip port
-        host = host.rsplit(":", 1)[0]
-    if host not in _LOOPBACK_HOSTS:
-        return False
-    if req.headers.get("X-Forwarded-For", "").strip():
-        return False
-    if req.headers.get("X-Real-IP", "").strip():
-        return False
-    if req.headers.get("Forwarded", "").strip():
-        return False
-    if not _server_bound_loopback():
-        return False
-    return True
+    from clawmetry.request_security import is_direct_loopback_request
+
+    return is_direct_loopback_request(req) and _server_bound_loopback()
 
 
 def _server_bound_loopback() -> bool:

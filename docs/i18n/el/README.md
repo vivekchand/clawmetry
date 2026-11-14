@@ -16,7 +16,7 @@
 τις κλήσεις εργαλείων και όσα δεδομένα token και κόστους εκθέτει το runtime σε μία
 προβολή — ώστε να μπορείς να ξεχωρίσεις ένα μακρό run που δουλεύει από ένα που έχει κολλήσει.
 
-Λειτουργεί με **33 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 29 ακόμα. Ένα dashboard για όλον τον στόλο agents σου. ([η πλήρης λίστα](SUPPORTED_RUNTIMES.txt), που παράγεται από τον κατάλογο.)
+Λειτουργεί με **32 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 ακόμα. Ένα dashboard για όλον τον στόλο agents σου. ([η πλήρης λίστα](SUPPORTED_RUNTIMES.txt), που παράγεται από τον κατάλογο.)
 
 > 🌐 **Διάβασέ το στα:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [περισσότερα →](docs/i18n/)
 
@@ -47,11 +47,11 @@ pip install clawmetry && clawmetry
 να τη μπλοκάρεις ([ποιοι έλεγχοι είναι πραγματικοί, ανά runtime](docs/APPROVALS.md)).
 
 
-## Λειτουργεί με 33 agent runtimes
+## Λειτουργεί με 32 agent runtimes
 
 **Δωρεάν στην εφαρμογή ανοιχτού κώδικα:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**Σε πληρωμένο πλάνο:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**Σε πληρωμένο πλάνο:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 Κάθε runtime παίρνει το ίδιο dashboard. Τρέξε πολλά ταυτόχρονα και ο επιλογέας στην
 κεφαλίδα επανακαθορίζει κάθε tab σε ένα από αυτά.
@@ -80,7 +80,7 @@ pip install clawmetry && clawmetry
 Ένα ποσοστό χρήσης είναι τόσο ειλικρινές όσο ο αριθμητής με τον οποίο διαιρεί. Το ClawMetry
 καθορίζει το μέγεθος του παραθύρου ανά provider από [έναν πίνακα που μπορείς να διαβάσεις και να
 προτείνεις PR](clawmetry/context_windows.py), που καλύπτει Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama και GLM. Δεν μετρά όλα τα 33
+DeepSeek, Kimi, Qwen, Mistral, Llama και GLM. Δεν μετρά όλα τα 32
 runtimes με τον κανόνα ενός προμηθευτή. Αυτό έχει σημασία: ένας γύρος 300K GPT-5 που
 βαθμολογείται με τον κανόνα των 200K της Anthropic διαβάζεται ως ">100%, blown" όταν στην
 πραγματικότητα είναι στο 75% των 400K του GPT-5. Ο ίδιος κανόνας κρύβει έναν γνησίως
@@ -100,7 +100,7 @@ gauge χτισμένο πάνω σε μια υπόθεση δεν αποδίδε
 
 | Διαδρομή | Προστέθηκε στον agent σου | Προεπιλογή; |
 |---|---|---|
-| Session-file tailing (όλα τα 33 runtimes) | **0**. Ξεχωριστή διαδικασία, καθόλου κώδικας ClawMetry στον agent σου | ναι |
+| Session-file tailing (όλα τα 32 runtimes) | **0**. Ξεχωριστή διαδικασία, καθόλου κώδικας ClawMetry στον agent σου | ναι |
 | HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** ανά κλήση LLM, ή 0.009% μιας κλήσης 5s | όχι |
 | Pre-tool hook gate (warm cache) | **+44 ms** ανά gated κλήση εργαλείου, πάνω από ένα όριο διερμηνέα 36 ms | όχι |
 | Enforcement proxy | **+9.7 ms** ανά κλήση LLM | όχι |

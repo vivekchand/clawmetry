@@ -57,6 +57,7 @@ from packaging.version import InvalidVersion, Version
 ROOTS = [
     "flask>=2.0,<4",
     "waitress>=2.0",
+    "psutil>=7.2.2",
     "cryptography>=50.0.0",
     "cffi>=2",
     "duckdb>=0.10,!=1.4.5",

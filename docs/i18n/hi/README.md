@@ -13,7 +13,7 @@
 
 **एक एजेंट बिना किसी प्रगति के सौ टूल कॉल कर सकता है।** ClawMetry उन सेशन फ़ाइलों को पढ़ता है जिन्हें आपके कोडिंग एजेंट पहले से ही लिखते हैं, और टाइमलाइन, टूल कॉल्स, तथा रनटाइम जो भी टोकन और लागत डेटा उजागर करता है, उसे एक ही व्यू में रख देता है, ताकि आप बता सकें कि कोई लंबा रन काम कर रहा है या अटका हुआ है।
 
-**33 AI एजेंट रनटाइम्स** के साथ काम करता है, Claude Code, OpenAI Codex, Hermes, OpenClaw और 29 अन्य। आपके पूरे एजेंट फ़्लीट के लिए एक डैशबोर्ड। ([पूरी सूची](SUPPORTED_RUNTIMES.txt), कैटलॉग से जनरेट की गई।)
+**32 AI एजेंट रनटाइम्स** के साथ काम करता है, Claude Code, OpenAI Codex, Hermes, OpenClaw और 28 अन्य। आपके पूरे एजेंट फ़्लीट के लिए एक डैशबोर्ड। ([पूरी सूची](SUPPORTED_RUNTIMES.txt), कैटलॉग से जनरेट की गई।)
 
 > 🌐 **इसे इसमें पढ़ें:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [और →](docs/i18n/)
 
@@ -40,11 +40,11 @@ pip install clawmetry && clawmetry
 दो सीमाएँ, जिन्हें आउटपुट को परखने से पहले जान लेना उपयोगी है: रनटाइम बहुत अलग-अलग डेटा उजागर करते हैं (कुछ कोई लागत बिल्कुल नहीं दिखाते, [मैट्रिक्स](docs/compatibility.md) बताता है कि कौन-सा, प्रति रनटाइम), और किसी कार्रवाई को देख पाना उसे रोक पाने जैसा नहीं है ([कौन-से नियंत्रण असली हैं, प्रति रनटाइम](docs/APPROVALS.md))।
 
 
-## 33 एजेंट रनटाइम्स के साथ काम करता है
+## 32 एजेंट रनटाइम्स के साथ काम करता है
 
 **ओपन सोर्स ऐप में मुफ़्त:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**किसी पेड प्लान पर:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**किसी पेड प्लान पर:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 हर रनटाइम को एक ही डैशबोर्ड मिलता है। एक साथ कई चलाएँ और हेडर स्विचर हर टैब को उनमें से किसी एक के दायरे में फिर से सेट कर देता है।
 
@@ -68,7 +68,7 @@ pip install clawmetry && clawmetry
 
 **यह रनटाइम्स में कॉन्टेक्स्ट-विंडो ब्लोआउट को कैसे संभालता है?**
 
-यूटिलाइज़ेशन प्रतिशत उतना ही ईमानदार होता है जितनी वह संख्या जिससे उसे विभाजित किया जाता है। ClawMetry प्रति प्रोवाइडर विंडो का आकार एक [ऐसी टेबल](clawmetry/context_windows.py) से तय करता है जिसे आप पढ़ और PR कर सकते हैं, जिसमें Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama और GLM शामिल हैं। यह सभी 33 रनटाइम्स को एक ही वेंडर के पैमाने से नहीं नापता। यह मायने रखता है: Anthropic के 200K के मुकाबले नापा गया एक 300K GPT-5 टर्न ">100%, blown" पढ़ता है जबकि वह वास्तव में GPT-5 के 400K का 75% है। वही पैमाना एक वाकई ओवरफ़्लो हो चुके 130K DeepSeek टर्न को एक आरामदायक 65% के रूप में छुपा देता है।
+यूटिलाइज़ेशन प्रतिशत उतना ही ईमानदार होता है जितनी वह संख्या जिससे उसे विभाजित किया जाता है। ClawMetry प्रति प्रोवाइडर विंडो का आकार एक [ऐसी टेबल](clawmetry/context_windows.py) से तय करता है जिसे आप पढ़ और PR कर सकते हैं, जिसमें Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama और GLM शामिल हैं। यह सभी 32 रनटाइम्स को एक ही वेंडर के पैमाने से नहीं नापता। यह मायने रखता है: Anthropic के 200K के मुकाबले नापा गया एक 300K GPT-5 टर्न ">100%, blown" पढ़ता है जबकि वह वास्तव में GPT-5 के 400K का 75% है। वही पैमाना एक वाकई ओवरफ़्लो हो चुके 130K DeepSeek टर्न को एक आरामदायक 65% के रूप में छुपा देता है।
 
 हर विंडो अपने प्रॉवनेंस के साथ आती है: `model_table`, `explicit_marker`, `observed_floor`, या जब हमें मॉडल का पता न हो तो एक ईमानदार `default`। अनुमान पर बना गेज कभी भी लुकअप पर बने गेज जितना भरोसेमंद नहीं दिखता।
 
@@ -79,7 +79,7 @@ ClawMetry कुछ ही रनटाइम्स पर कॉम्पैक
 
 | पाथ | आपके एजेंट में जोड़ा गया | डिफ़ॉल्ट? |
 |---|---|---|
-| सेशन-फ़ाइल टेलिंग (सभी 33 रनटाइम्स) | **0**। अलग प्रोसेस, आपके एजेंट में कोई ClawMetry कोड नहीं | on |
+| सेशन-फ़ाइल टेलिंग (सभी 32 रनटाइम्स) | **0**। अलग प्रोसेस, आपके एजेंट में कोई ClawMetry कोड नहीं | on |
 | HTTP इंटरसेप्टर (`CLAWMETRY_INTERCEPT=1`) | प्रति LLM कॉल **+0.44 ms**, यानी 5s कॉल का 0.009% | off |
 | प्री-टूल हुक गेट (वॉर्म कैश) | प्रति गेटेड टूल कॉल **+44 ms**, 36 ms इंटरप्रेटर फ़्लोर के ऊपर | off |
 | एन्फ़ोर्समेंट प्रॉक्सी | प्रति LLM कॉल **+9.7 ms** | off |

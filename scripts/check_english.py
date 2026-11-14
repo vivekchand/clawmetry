@@ -119,7 +119,7 @@ def browser_messages(root, catalog, types):
     pending = []
     errors = []
     aliases = {"app.js": {"_sigT": 2, "_cmI18nFig": 1},
-               "trial-pill.js": {"tr": 2}, "trail.js": {"T": 1}}
+               "trial-pill.js": {"tr": 2}, "trial-offer.js": {"tr": 2}, "trail.js": {"T": 1}}
     for path in sorted((root / "clawmetry/static/js").rglob("*.js")):
         source = path.relative_to(root).as_posix()
         try:

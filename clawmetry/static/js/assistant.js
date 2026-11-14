@@ -1321,6 +1321,51 @@
     else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
   }
 
+  // Public entry point for the rest of the dashboard ("Investigate this in
+  // Assistant"). The caller hands us a question; we open the tab, start a
+  // clean conversation and send it through the composer's own submit path so
+  // every guard it applies still applies here. A question we cannot send yet
+  // stays visible in the composer next to the reason, never silently dropped.
+  function assistantAsk(question, options) {
+    options = options || {};
+    var text = String(question == null ? '' : question).trim().slice(0, MAX_MESSAGE);
+    if (!text) return Promise.resolve(false);
+    if (typeof window.switchTab === 'function') window.switchTab('assistant');
+    else loadAssistantPage();
+    if (!page()) return Promise.resolve(false);
+    if (options.fresh !== false) newConversation();
+    var input = el('cm-assistant-input');
+    if (!input) return Promise.resolve(false);
+    input.value = text;
+    resizeInput();
+    input.focus();
+    setStatusMessage('Investigating this from your agent data...', 'success');
+    // waitMs 0 means "send now or tell me why" - the caller wants the
+    // answer in one tick, not a question parked in a composer.
+    var waitMs = Number(options.waitMs);
+    if (!(waitMs >= 0)) waitMs = 12000;
+    var deadline = Date.now() + waitMs;
+    return new Promise(function (resolve) {
+      (function attempt() {
+        if (!state.mounted || !page()) return resolve(false);
+        var box = el('cm-assistant-input');
+        // The reader took it over - edited the question, or sent it already.
+        if (!box || String(box.value || '').trim() !== text) return resolve(false);
+        var settled = state.statusLoadedAt > 0 || !state.statusRequest;
+        if (settled && state.conversationReady && state.dataAvailable !== false && !state.chatRequest) {
+          askQuestion(text);
+          return resolve(true);
+        }
+        if (Date.now() >= deadline) {
+          setStatusMessage(state.dataStatusMessage ||
+            'Your question is ready. Press Send once the assistant is connected.', 'warning');
+          return resolve(false);
+        }
+        setTimeout(attempt, 150);
+      }());
+    });
+  }
+
   function appendFollowUps(messageNode, questions) {
     if (!questions || !questions.length) return;
     var wrap = make('div', 'cm-assistant-followups');
@@ -1769,6 +1814,7 @@
   }
 
   window.loadAssistantPage = loadAssistantPage;
+  window.assistantAsk = assistantAsk;
   window.assistantLeave = assistantLeave;
 
   if (typeof window.addEventListener === 'function') window.addEventListener('cm-assistant-scope-changed', function () {

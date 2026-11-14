@@ -16,7 +16,7 @@
 టూల్ కాల్స్, మరియు runtime బహిర్గతం చేసే టోకెన్ మరియు ఖర్చు డేటాను అన్నిటినీ ఒకే
 వీక్షణలో పెడుతుంది — అంటే పనిచేస్తున్న ఒక దీర్ఘ రన్‌ను, ఎక్కడో ఆగిపోయిన దానితో పోల్చి చూడగలరు.
 
-**33 AI ఏజెంట్ runtime‌లతో** పనిచేస్తుంది — Claude Code, OpenAI Codex, Hermes, OpenClaw & మరో 29. మీ మొత్తం ఏజెంట్ ఫ్లీట్ కోసం ఒకే డాష్‌బోర్డ్. ([పూర్తి జాబితా](SUPPORTED_RUNTIMES.txt), కేటలాగ్ నుండి జనరేట్ చేయబడింది.)
+**32 AI ఏజెంట్ runtime‌లతో** పనిచేస్తుంది — Claude Code, OpenAI Codex, Hermes, OpenClaw & మరో 28. మీ మొత్తం ఏజెంట్ ఫ్లీట్ కోసం ఒకే డాష్‌బోర్డ్. ([పూర్తి జాబితా](SUPPORTED_RUNTIMES.txt), కేటలాగ్ నుండి జనరేట్ చేయబడింది.)
 
 > 🌐 **దీన్ని చదవండి:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [మరిన్ని →](docs/i18n/)
 
@@ -47,11 +47,11 @@ runtime‌లను అది కనుగొంటుంది, వాటిన
 ఆపగలగడం కాదు ([ప్రతి runtime కు ఏ కంట్రోల్స్ నిజమైనవి](docs/APPROVALS.md)).
 
 
-## 33 ఏజెంట్ runtime‌లతో పనిచేస్తుంది
+## 32 ఏజెంట్ runtime‌లతో పనిచేస్తుంది
 
 **ఓపెన్ సోర్స్ యాప్‌లో ఫ్రీ:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**పెయిడ్ ప్లాన్‌లో:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**పెయిడ్ ప్లాన్‌లో:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 ప్రతి runtime కు ఒకే డాష్‌బోర్డ్ లభిస్తుంది. ఒకేసారి అనేకం రన్ చేయండి, మరియు హెడర్
 స్విచ్చర్ ప్రతి ట్యాబ్‌ను వాటిలో ఒకదానికి రీ-స్కోప్ చేస్తుంది.
@@ -80,7 +80,7 @@ runtime‌లను అది కనుగొంటుంది, వాటిన
 ఒక యుటిలైజేషన్ శాతం అది ఏ సంఖ్యతో భాగిస్తుందో అంతే నిజాయితీగా ఉంటుంది. ClawMetry
 విండోను Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama
 మరియు GLM కవర్ చేసే, మీరు చదవగలిగే మరియు PR చేయగలిగే [ఒక టేబుల్](clawmetry/context_windows.py)
-నుండి ప్రతి ప్రొవైడర్‌కు తగినట్లుగా సైజ్ చేస్తుంది. ఇది అన్ని 33 runtime‌లను ఒక
+నుండి ప్రతి ప్రొవైడర్‌కు తగినట్లుగా సైజ్ చేస్తుంది. ఇది అన్ని 32 runtime‌లను ఒక
 వెండర్ స్కేల్‌తో కొలవదు. అది ముఖ్యమైనది: Anthropic యొక్క 200K తో పోల్చి స్కోర్ చేసిన
 300K GPT-5 టర్న్ ">100%, blown" అని చూపిస్తుంది, నిజానికి ఇది GPT-5 యొక్క 400K లో 75%
 మాత్రమే. అదే స్కేల్ నిజంగా overflow అయిన 130K DeepSeek టర్న్‌ను సౌకర్యవంతమైన 65%గా
@@ -99,7 +99,7 @@ ClawMetry కొన్ని runtime‌లలో compaction ఈవెంట్�
 
 | పాత్ | మీ ఏజెంట్‌కు జోడించింది | డిఫాల్ట్? |
 |---|---|---|
-| సెషన్-ఫైల్ టెయిలింగ్ (అన్ని 33 runtime‌లు) | **0**. వేరే ప్రాసెస్, మీ ఏజెంట్‌లో ClawMetry కోడ్ ఉండదు | on |
+| సెషన్-ఫైల్ టెయిలింగ్ (అన్ని 32 runtime‌లు) | **0**. వేరే ప్రాసెస్, మీ ఏజెంట్‌లో ClawMetry కోడ్ ఉండదు | on |
 | HTTP ఇంటర్‌సెప్టర్ (`CLAWMETRY_INTERCEPT=1`) | ప్రతి LLM కాల్‌కు **+0.44 ms**, లేదా 5s కాల్‌లో 0.009% | off |
 | ప్రీ-టూల్ హుక్ గేట్ (వార్మ్ క్యాష్) | 36 ms ఇంటర్‌ప్రెటర్ ఫ్లోర్ పై, గేటెడ్ టూల్ కాల్‌కు **+44 ms** | off |
 | ఎన్‌ఫోర్స్‌మెంట్ ప్రాక్సీ | ప్రతి LLM కాల్‌కు **+9.7 ms** | off |

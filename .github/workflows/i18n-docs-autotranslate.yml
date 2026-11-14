@@ -6,10 +6,6 @@ name: i18n docs autotranslate
 # READMEs whose English source changed are re-translated. Skips if no token.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'README.md'
   workflow_dispatch:
     inputs:
       only:
@@ -22,7 +18,7 @@ permissions:
 
 jobs:
   translate-docs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write

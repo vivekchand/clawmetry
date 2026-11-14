@@ -1,6 +1,6 @@
 """The product-record gate must actually fail.
 
-FLYWHEEL.md section 0c makes "write the PRD in 8090 first" the standard.
+FLYWHEEL.md section 0c makes "write the product record first" the standard.
 scripts/check_product_record.py is what stops it being a rule everyone agrees
 with and nobody follows.
 
@@ -169,3 +169,48 @@ def test_the_script_runs_and_exits_nonzero_for_real(tmp_path):
     # RAN.
     assert r.returncode == 0, r.stderr[:800]
     assert "product-record gate" in (r.stdout + r.stderr)
+
+
+@pytest.mark.parametrize("link", [
+    "https://github.com/vivekchand/clawmetry-cloud/issues/123",
+    "https://github.com/vivekchand/clawmetry/blob/main/docs/product-records/controls.md",
+    "https://github.com/vivekchand/clawmetry-cloud/blob/abc123/docs/product-records/requirements/record-id.md",
+])
+def test_github_product_record_passes_without_a_vendor(link, monkeypatch):
+    assert _verdict(f"Product record: {link}", ["clawmetry/sync.py"], monkeypatch) == 0
+
+
+@pytest.mark.parametrize("link", [
+    "https://github.com/another-owner/clawmetry/issues/123",
+    "https://github.com/vivekchand/clawmetry/pull/123",
+    "https://github.com/vivekchand/clawmetry-cloud/issues/123fake",
+    "https://github.com/vivekchand/clawmetry-cloud/blob/main/README.md",
+    "https://github.com/vivekchand/clawmetry-cloud/blob/main/docs/product-records/../../README.md",
+])
+def test_unrelated_or_misleading_github_links_fail(link, monkeypatch):
+    assert _verdict(f"Product record: {link}", ["clawmetry/sync.py"], monkeypatch) == 1
+
+
+def test_local_record_must_exist_and_stay_in_record_directory(tmp_path):
+    records = tmp_path / 'docs' / 'product-records'
+    records.mkdir(parents=True)
+    body = 'Product record: docs/product-records/controls.md'
+    assert not prg.cites_product_record(body, tmp_path)
+    (records / 'controls.md').write_text('')
+    assert not prg.cites_product_record(body, tmp_path)
+    (records / 'controls.md').write_text('# Controls\nAcceptance criteria: stop only the selected session.')
+    assert prg.cites_product_record(body, tmp_path)
+    assert prg.cites_product_record('**Product record:** `docs/product-records/controls.md`', tmp_path)
+    outside = tmp_path / 'README.md'
+    outside.write_text('not a product record')
+    assert not prg.cites_product_record('Product record: docs/product-records/../../README.md', tmp_path)
+    (records / 'alias.md').symlink_to(outside)
+    assert not prg.cites_product_record('Product record: docs/product-records/alias.md', tmp_path)
+
+
+def test_unreadable_diff_is_not_an_empty_code_change(monkeypatch):
+    def failed(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, args[0])
+    monkeypatch.setattr(prg.subprocess, 'check_output', failed)
+    monkeypatch.setenv('PR_BODY', 'No-PRD: test input')
+    assert prg.main() == 1

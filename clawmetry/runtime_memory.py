@@ -48,6 +48,8 @@ paths and this catalog's memory roots share the same on-disk prefix
 """
 from __future__ import annotations
 
+import base64
+import codecs
 import glob as _glob
 import json
 import os
@@ -1279,10 +1281,6 @@ def _catalog() -> list:
         ),
     ))
 
-    # OpenDots stores dot instructions/memories in SQLite and learning in
-    # CopilotKit Intelligence. No file roots to scan or invent here.
-    catalog.append(RuntimeCatalogEntry(id="opendots", label="OpenDots", roots=()))
-
     # ── Replit Agent (replit.com) ───────────────────────────────────
     # Instructions/memory are replit.md at the workspace root — the agent
     # both reads it as standing guidance and rewrites it as project docs.
@@ -1724,7 +1722,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 33 runtimes would be a wall of
+    because listing every absent root for 32 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
@@ -1747,7 +1745,10 @@ def read_runtime_file(runtime_id: str, root: str, path: str,
                       max_bytes: int = 500_000) -> dict:
     """Read one file under one of ``runtime_id``'s registered roots.
 
-    Returns ``{'ok': True, 'path', 'content', 'size', 'mtime', 'language'}``
+    Returns text in ``content``, complete images in a base64 ``data_url``,
+    and a ``preview_type`` of ``text``, ``image``, or ``binary``. Binary
+    content is never decoded as text; oversized images have no data URL.
+    Also includes ``path``, ``size``, ``mtime``, ``language`` and ``truncated``
     or ``{'ok': False, 'error': str, 'status': int}``. ``path`` is
     interpreted **relative to ``root``**; ``root`` MUST match one of the
     runtime's catalog roots verbatim (post-expansion), so callers can only
@@ -1782,18 +1783,32 @@ def read_runtime_file(runtime_id: str, root: str, path: str,
 
     try:
         with open(full, "rb") as fh:
-            raw = fh.read(max_bytes)
+            raw = fh.read(max_bytes + 1)
     except OSError as e:
         return {"ok": False, "error": str(e), "status": 500}
 
-    try:
-        content = raw.decode("utf-8")
-        binary = False
-    except UnicodeDecodeError:
-        content = raw.decode("utf-8", errors="replace")
-        binary = True
-
+    truncated = len(raw) > max_bytes
+    raw = raw[:max_bytes]
     ext = os.path.splitext(full)[1].lower().lstrip(".")
+    # Preserve image bytes rather than decoding them as replacement characters.
+    # An explicit allowlist keeps HTML and other active documents out of previews.
+    image_mime = {
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
+        "avif": "image/avif", "bmp": "image/bmp", "ico": "image/x-icon",
+    }.get(ext)
+    content = ""
+    binary = bool(image_mime)
+    if not image_mime:
+        try:
+            # Ignore only an incomplete UTF-8 codepoint at the preview boundary.
+            content = codecs.getincrementaldecoder("utf-8")().decode(
+                raw, final=not truncated)
+            binary = any(ord(c) < 32 and c not in "\t\n\r" for c in content)
+        except UnicodeDecodeError:
+            binary = True
+        if binary:
+            content = ""
     lang = {
         "md": "markdown", "mdc": "markdown", "markdown": "markdown",
         "py": "python", "sh": "bash", "js": "javascript", "ts": "typescript",
@@ -1818,6 +1833,11 @@ def read_runtime_file(runtime_id: str, root: str, path: str,
         "language": lang,
         "binary": binary,
         "truncated": size > len(raw),
+        "preview_type": "image" if image_mime else ("binary" if binary else "text"),
+        "mime_type": image_mime or ("application/octet-stream" if binary else "text/plain"),
+        # Never offer a partial image as if it were the original file.
+        "data_url": ("data:" + image_mime + ";base64," + base64.b64encode(raw).decode("ascii"))
+                    if image_mime and size <= len(raw) else None,
     }
 
 

@@ -36,6 +36,8 @@ thinks it is" — the same disagreement this module was written to end, one
 layer down.
 """
 from datetime import date as _date, datetime, timedelta
+import math
+import re
 
 
 def now_local():
@@ -94,6 +96,8 @@ def days_elapsed_in_month(now=None):
 #
 #   carries an offset ("...Z", "...+02:00")  -> convert to node-local, take the date
 #   naive ("2026-08-24 23:30:00")            -> already local, take the date
+#   epoch seconds / milliseconds            -> convert to node-local date
+#   eight-digit YYYYMMDD                    -> preserve the existing date form
 #   unparseable                              -> fall back to the leading 10
 #                                               characters if they are a date,
 #                                               else no bucket
@@ -133,13 +137,37 @@ def local_day(ts):
     must agree, and ``tests/test_day_bucket_local.py`` asserts they do on the
     same inputs.
     """
-    s = str(ts or "").strip()
+    if ts is None or isinstance(ts, bool):
+        return None
+    s = str(ts).strip()
     if not s:
         return None
+    # Date-only basic ISO is ambiguous with early Unix seconds. Preserve this
+    # existing source shape before interpreting numeric timestamp strings.
+    if re.fullmatch(r"[0-9]{8}", s):
+        try:
+            return _date(int(s[:4]), int(s[4:6]), int(s[6:])).isoformat()
+        except ValueError:
+            pass
+    try:
+        epoch = float(s)
+    except ValueError:
+        pass
+    else:
+        if not math.isfinite(epoch):
+            return None
+        if abs(epoch) > 1e11:
+            epoch /= 1000
+        try:
+            return datetime.fromtimestamp(epoch).date().isoformat()
+        except (ValueError, OverflowError, OSError):
+            return None
     try:
         dt = datetime.fromisoformat(_normalize_ts(s))
     except (TypeError, ValueError):
         prefix = s[:10]
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", prefix):
+            return None
         try:
             _date.fromisoformat(prefix)
         except ValueError:
@@ -167,9 +195,33 @@ def day_expr_sql(col: str = "ts") -> str:
     predates this change and is unchanged by it.
     """
     return (
-        f"COALESCE(CAST(CAST(TRY_CAST({col} AS TIMESTAMPTZ) AS DATE) AS VARCHAR),"
-        f" substr({col}, 1, 10))"
+        f"COALESCE(CAST(CAST({timestamp_expr_sql(col)} AS DATE) AS VARCHAR),"
+        f" substr(CAST({col} AS VARCHAR), 1, 10))"
     )
+
+
+def timestamp_expr_sql(col: str = "ts") -> str:
+    """Safe source timestamp as TIMESTAMPTZ, or NULL when unparseable.
+
+    Keep the same basic-date precedence and seconds/milliseconds convention
+    as local_day. Callers supply a trusted SQL expression, never source text.
+    """
+    text = f"trim(CAST({col} AS VARCHAR))"
+    number = f"TRY_CAST({text} AS DOUBLE)"
+    seconds = f"(CASE WHEN abs({number}) > 1e11 THEN {number}/1000 ELSE {number} END)"
+    # Bound the actual argument to to_timestamp, not just the final DATE cast:
+    # nonfinite or enormous source values must not abort the aggregate.
+    epoch = (f"CASE WHEN isfinite({number}) AND {seconds} >= -62135596800 "
+             f"AND {seconds} < 253402300800 THEN {seconds} ELSE NULL END")
+    basic = f"TRY_STRPTIME(CASE WHEN regexp_full_match({text}, '[0-9]{{8}}') THEN {text} END, '%Y%m%d')"
+    candidate = (
+        f"COALESCE(CAST({basic} AS TIMESTAMPTZ),"
+        f" to_timestamp({epoch}), TRY_CAST({col} AS TIMESTAMPTZ))"
+    )
+    # DuckDB accepts literal +/-infinity and years outside datetime's range.
+    # They are not known source instants and cannot become deduplication keys.
+    return (f"CASE WHEN isfinite({candidate}) AND EXTRACT(year FROM {candidate}) "
+            f"BETWEEN 1 AND 9999 THEN {candidate} ELSE NULL END")
 
 
 def local_hour(ts):
