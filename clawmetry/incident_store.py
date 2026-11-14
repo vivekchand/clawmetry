@@ -17,6 +17,12 @@ from datetime import datetime, timezone
 log = logging.getLogger("clawmetry.incidents")
 
 LIFECYCLE_KINDS = frozenset({"stuck_loop", "repeated_tool_failure"})
+# Security findings remain durable without a fabricated recovery contract.
+SECURITY_EPISODE_KINDS = frozenset({
+    "file_blast_radius", "credential_access", "network_egress", "privilege_change",
+    "prompt_injection", "untrusted_package_source", "inspection_incomplete", "security_threat",
+})
+DURABLE_KINDS = LIFECYCLE_KINDS | SECURITY_EPISODE_KINDS
 STALE_AFTER_MS = 30 * 60 * 1000
 MAX_EVIDENCE_REFS = 64
 INCIDENT_DDL = [
@@ -153,12 +159,18 @@ class IncidentStoreMixin:
             "(SELECT incident_id FROM incident_episodes WHERE last_seen < ?)", [cutoff_ms])
         self._conn.execute("DELETE FROM incident_episodes WHERE last_seen < ?", [cutoff_ms])
 
+    def _episode_row_locked(self, incident_id):
+        """Read the fixed episode columns with a bound identity, under its transaction."""
+        return self._conn.execute(
+            f"SELECT {_SELECT} FROM incident_episodes WHERE incident_id=?",
+            [incident_id]).fetchone()
+
     def record_incident_observation(self, *, incident, node_id, observed_at=None):
         """Idempotently observe an episode. Invalid input is logged and dropped."""
         if self._read_only:
             raise RuntimeError("cannot record an incident on a read-only store")
         try:
-            if not isinstance(incident, dict) or incident.get("kind") not in LIFECYCLE_KINDS:
+            if not isinstance(incident, dict) or incident.get("kind") not in DURABLE_KINDS:
                 raise ValueError("unknown lifecycle kind")
             scope = [node_id, incident.get("runtime"), incident.get("session_id"),
                      incident["kind"]]
@@ -176,27 +188,47 @@ class IncidentStoreMixin:
             return None
         from clawmetry.local_store import _txn
         latest = max((r["ts"] for r in refs if r["ts"] is not None), default=None)
+        incoming_active = latest is not None and 0 <= now - latest < STALE_AFTER_MS
+        historical_id = None
+        if incident["kind"] in SECURITY_EPISODE_KINDS and not incoming_active:
+            from hashlib import sha256
+            identity = json.dumps([scope, refs, incident.get("severity")],
+                                  sort_keys=True, separators=(",", ":"))
+            historical_id = "inc_history_" + sha256(identity.encode()).hexdigest()
         with self._write_lock, _txn(self._conn):
             head = self._conn.execute(
                 "SELECT incident_id FROM incident_heads WHERE node_id=? AND runtime=? "
                 "AND session_id=? AND kind=?", scope).fetchone()
-            old_raw = self._conn.execute(
-                f"SELECT {_SELECT} FROM incident_episodes WHERE incident_id=?",
-                [head[0]]).fetchone() if head else None
+            old_raw = self._episode_row_locked(head[0]) if head else None
             old = _row(old_raw)
+            preserve_head = False
+            if old and incident["kind"] in SECURITY_EPISODE_KINDS:
+                previous_at = old.get("last_evidence_at")
+                previous_active = previous_at is not None and 0 <= now - previous_at < STALE_AFTER_MS
+                if incoming_active != previous_active:
+                    if incoming_active:
+                        # A current observation starts its own episode; old
+                        # severity and uncertainty remain in the historical row.
+                        old_raw, old = None, None
+                    else:
+                        # Delayed impact must not borrow the head's freshness.
+                        # A stable identity keeps periodic replay idempotent.
+                        preserve_head = True
+                        old_raw = self._episode_row_locked(historical_id)
+                        old = _row(old_raw)
             if old and old["state"] == "recovered":
                 recovery_at = (old.get("recovery_ref") or {}).get("ts")
                 if latest is None or recovery_at is None or latest <= recovery_at:
                     return old  # replay of the same pre-recovery detector window
                 old = None
-            incident_id = old["incident_id"] if old else "inc_" + uuid.uuid4().hex
+            incident_id = old["incident_id"] if old else historical_id or "inc_" + uuid.uuid4().hex
             if old and "delivered_via" not in incident:
                 saved_details = json.loads(details)
                 saved_details["delivered_via"] = old.get("delivered_via")
                 details = json.dumps(saved_details, separators=(",", ":"))
             refs = clean_refs((old["evidence_refs"] if old else []) + refs)
             latest = max(latest or 0, (old or {}).get("last_evidence_at") or 0) or None
-            state = "active" if latest is not None and now - latest < STALE_AFTER_MS else "stale"
+            state = "active" if latest is not None and 0 <= now - latest < STALE_AFTER_MS else "stale"
             if (old and state == old["state"] and refs == old["evidence_refs"]
                     and json.loads(details) == json.loads(old_raw[-1])):
                 return old  # polling the same evidence is not another observation
@@ -210,13 +242,12 @@ class IncidentStoreMixin:
                 "details=excluded.details",
                 [incident_id, *scope, state, first, last, last, latest,
                  (old or {}).get("acknowledged_at"), json.dumps(refs), details])
-            self._conn.execute(
-                "INSERT INTO incident_heads VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT (node_id,runtime,session_id,kind) DO UPDATE SET "
-                "incident_id=excluded.incident_id", [*scope, incident_id])
-            result = _row(self._conn.execute(
-                f"SELECT {_SELECT} FROM incident_episodes WHERE incident_id=?",
-                [incident_id]).fetchone())
+            if not preserve_head:
+                self._conn.execute(
+                    "INSERT INTO incident_heads VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT (node_id,runtime,session_id,kind) DO UPDATE SET "
+                    "incident_id=excluded.incident_id", [*scope, incident_id])
+            result = _row(self._episode_row_locked(incident_id))
             self._project_incident_locked(result)
             return result
 
@@ -225,6 +256,10 @@ class IncidentStoreMixin:
         from clawmetry import ccr
         sid, kind = incident["session_id"], incident["kind"]
         signature = "daemon_detect_" + kind
+        if kind in SECURITY_EPISODE_KINDS:
+            from hashlib import sha256
+            scope = json.dumps([incident["node_id"], incident["runtime"], sid], separators=(",", ":"))
+            signature += ":" + sha256(scope.encode()).hexdigest()[:24]
         if incident["state"] != "active":
             row = self._conn.execute(
                 "SELECT details FROM loop_signals WHERE session_id=? AND signature=?",
@@ -269,10 +304,8 @@ class IncidentStoreMixin:
             return None
         from clawmetry.local_store import _txn
         with self._write_lock, _txn(self._conn):
-            old = _row(self._conn.execute(
-                f"SELECT {_SELECT} FROM incident_episodes WHERE incident_id=?",
-                [incident_id]).fetchone())
-            if not old or old["state"] == "recovered":
+            old = _row(self._episode_row_locked(incident_id))
+            if not old or old["state"] == "recovered" or old["kind"] not in LIFECYCLE_KINDS:
                 return old
             if (proof["ts"] is None or old["last_evidence_at"] is None
                     or proof["ts"] <= old["last_evidence_at"]):
@@ -319,8 +352,7 @@ class IncidentStoreMixin:
             raise ValueError("invalid acknowledgement time")
         from clawmetry.local_store import _txn
         with self._write_lock, _txn(self._conn):
-            old = _row(self._conn.execute(
-                f"SELECT {_SELECT} FROM incident_episodes WHERE incident_id=?", [incident_id]).fetchone())
+            old = _row(self._episode_row_locked(incident_id))
             if not old:
                 return None
             watermark = self._conn.execute(

@@ -38,12 +38,14 @@ would surface as "no opinion" anyway), an unentitled node gets an explicit
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import sys
 import time
 import uuid
 
 from clawmetry import nonsecret_hash as _nsh
+from clawmetry.approval_binding import action_digest
 
 from flask import Blueprint, jsonify, request
 
@@ -214,6 +216,11 @@ def _decided(decision: str, reason: str, approval_id: "str | None" = None,
     return jsonify(body)
 
 
+def _no_op(reason):
+    """Observation cannot grant permission or suppress the native prompt."""
+    return jsonify({"status": "no_op", "reason": reason})
+
+
 def _audit(result: str, tool_name: str, meta: dict) -> None:
     try:
         from clawmetry import audit as _a
@@ -251,6 +258,39 @@ def _map_on_timeout(on_timeout: str) -> str:
 def _args_meta(row) -> dict:
     args = row.get("args")
     return args if isinstance(args, dict) else {}
+
+
+def _binding_matches(row, runtime, session_id, tool_name, tool_input,
+                     cwd, tool_use_id, *, source="pretooluse-hook", kind="policy", invocation_id=""):
+    """A stored verdict can only answer the invocation the human reviewed."""
+    expected = action_digest(runtime, session_id, tool_name, tool_input, cwd,
+                             tool_use_id, source, kind, invocation_id=invocation_id)
+    meta = _args_meta(row)
+    if expected is None or row.get("requestor_session_id") != (
+            f"{runtime}:{session_id}" if session_id else None):
+        return False
+    recorded = meta.get("action_binding")
+    if not isinstance(recorded, str):
+        # Old complete rows may resume without silently widening their scope.
+        # Incomplete historic rows need a fresh review.
+        required = {"source", "runtime", "tool_name", "tool_input", "cwd", "tool_use_id"}
+        if not required.issubset(meta):
+            return False
+        recorded = action_digest(
+            meta["runtime"], session_id, meta["tool_name"], meta["tool_input"],
+            meta["cwd"], meta["tool_use_id"] or "", meta["source"],
+            meta.get("kind") or "policy", invocation_id=meta.get("invocation_id") or "")
+    return isinstance(recorded, str) and hmac.compare_digest(expected, recorded)
+
+
+def _pending_wait_budget(meta, buffer_s=60):
+    # Copilot timeouts fail open. Emit a decision before the native limit.
+    from clawmetry.hook_ownership import clamp_hook_timeout
+    try:
+        window = max(1, int(meta.get("timeout") or 604800))
+    except (TypeError, ValueError, OverflowError):
+        window = 604800
+    return max(1, clamp_hook_timeout(window + buffer_s) - 5)
 
 
 # ── question-set approvals (WO-52 phase 1) ─────────────────────────────────
@@ -319,36 +359,46 @@ def _pretooluse_impl(runtime: str):
 
     body = request.get_json(silent=True) or {}
     tool_name = str(body.get("tool_name") or "").strip()
-    tool_input = body.get("tool_input")
+    original_input = body.get("tool_input", {})
+    tool_input = original_input
     tool_input = tool_input if isinstance(tool_input, dict) else {}
     session_id = str(body.get("session_id") or "").strip()
-    cwd = str(body.get("cwd") or "")[:300]
+    cwd = str(body.get("cwd") or "")
     tool_use_id = str(body.get("tool_use_id") or "").strip()
     resume_id = str(body.get("approval_id") or "").strip()
+    invocation_id = str(body.get("invocation_id") or "")
 
     # Entitlement: explicit allow (observable fail-open) instead of a 402
     # the fail-open client would render identically as "no opinion".
     try:
         from clawmetry import entitlements as _ent
-        entitled = _ent.get_entitlement().allows_feature("approval_queue")
+        entitlement = _ent.get_entitlement()
+        entitled = (getattr(entitlement, "source", "") != "resolver_error"
+                    and bool(entitlement.allows_feature("approval_queue")))
     except Exception:
-        entitled = True
+        entitled = False
     if not entitled:
-        return _decided("allow", "approval queue not entitled on this node "
-                                 "— pre-tool gate inactive")
+        return _no_op("The approval gate is unavailable. Native permissions still apply.")
 
     # ── resume path: the row exists, just wait on it ─────────────────────
     if resume_id:
         row = _find_approval(resume_id)
+        native_question = tool_name == "AskUserQuestion"
         if row is None:
-            # Row vanished (store reset?) — never block the agent on our
-            # own bookkeeping.
-            return _decided("allow", "approval row not found — proceeding "
-                                     "(fail-open)", resume_id)
+            _audit("unavailable", tool_name, {"approval_id": resume_id})
+            return _decided("ask" if native_question else "deny",
+                            "The approval record is unavailable. Request a new review.", resume_id)
+        if not _binding_matches(row, runtime, session_id, tool_name, original_input,
+                                cwd, tool_use_id,
+                                kind="question_set" if native_question else "policy",
+                                invocation_id=invocation_id):
+            _audit("binding_rejected", tool_name, {"approval_id": resume_id})
+            return _decided("ask" if native_question else "deny",
+                            "This approval belongs to a different action. Request a new review.", resume_id)
         return _wait_on_row(resume_id, row, tool_name)
 
     if not tool_name:
-        return _decided("allow", "no tool_name in hook payload")
+        return _no_op("The hook did not provide a tool name. Native permissions still apply.")
 
     # ── AskUserQuestion: question-set approval (WO-52 phase 1) ───────────
     # Intercepted BEFORE policy matching: the runtime is already asking its
@@ -356,7 +406,7 @@ def _pretooluse_impl(runtime: str):
     # the dashboard to be allowed to answer it.
     if tool_name == "AskUserQuestion" and _question_gate_enabled():
         return _park_question_set(runtime, session_id, cwd, tool_use_id,
-                                  tool_input)
+                                  tool_input, invocation_id=invocation_id)
 
     # Untrusted content earlier in this turn (REQ-GOV-PIJ-002): the hook
     # process derives it from the transcript it runs beside and sends tool
@@ -376,13 +426,15 @@ def _pretooluse_impl(runtime: str):
         # from the same filtered set).
         policies = ap._policies_for_runtime(ap.load_policies(), runtime)
         policy = ap.match_policy(policies, tool_name, tool_input,
-                                 context=turn_ctx) \
+                                 context=turn_ctx, runtime=runtime, cwd=cwd) \
             if policies else None
-    except Exception as e:
-        return _decided("allow", f"policy engine unavailable ({e}) — "
-                                 "fail-open")
+    except Exception:
+        from clawmetry.gate_policy_cache import protects
+        if protects(runtime, body):
+            return _decided("deny", "The policy service is unavailable. This protected action was denied.")
+        return _no_op("The policy service is unavailable. Native permissions still apply.")
     if policy is None:
-        return _decided("allow", "no matching policy")
+        return _no_op("No policy matched this action. Native permissions still apply.")
 
     action = (policy.get("action") or "require_approval").strip()
     if action == "approve":
@@ -403,16 +455,21 @@ def _pretooluse_impl(runtime: str):
                                "would have paused this",
             "created_at": _utcnow(),
         })
-        return _decided("allow", f"monitor-mode policy '{policy['name']}' "
-                                 "matched (dry run — not blocked)")
+        return _no_op("A monitor policy matched this action. Native permissions still apply.")
     if action != "require_approval":
-        return _decided("allow", f"policy action '{action}' does not gate")
+        return _no_op("This policy does not control execution. Native permissions still apply.")
+
+    binding = action_digest(runtime, session_id, tool_name, original_input, cwd, tool_use_id,
+                            invocation_id=invocation_id)
+    if binding is None:
+        _audit("binding_unavailable", tool_name, {"policy": policy.get("name")})
+        return _decided("deny", "ClawMetry cannot verify this protected action. Request a new review.")
 
     # Approve-and-remember: an earlier "approve for this session" decision
     # for this exact (session, tool, command) skips the human round-trip.
     try:
         if session_id and ap.check_session_allow(
-                f"{runtime}:{session_id}", tool_name, tool_input):
+                f"{runtime}:{session_id}", tool_name, tool_input, cwd=cwd):
             _audit("approved", tool_name, {"policy": policy.get("name"),
                                            "session_id": session_id,
                                            "session_allow": True})
@@ -423,7 +480,7 @@ def _pretooluse_impl(runtime: str):
 
     # ── park a pending row in the local queue ────────────────────────────
     dupe = _find_pending_dupe(runtime, session_id, tool_name, tool_input,
-                              tool_use_id)
+                              tool_use_id, cwd=cwd, invocation_id=invocation_id)
     if dupe is not None:
         return _wait_on_row(str(dupe.get("id")), dupe, tool_name)
 
@@ -453,11 +510,14 @@ def _pretooluse_impl(runtime: str):
         # the row itself knows its policy window and timeout action.
         "args": {
             "source": "pretooluse-hook",
+            "kind": "policy",
+            "action_binding": binding,
             "runtime": runtime,
             "tool_name": tool_name,
             "tool_input": tool_input,
             "cwd": cwd,
             "tool_use_id": tool_use_id or None,
+            "invocation_id": invocation_id,
             "input_hash": None if tool_use_id else _input_hash(tool_input),
             "policy": policy.get("name"),
             "timeout": timeout_s,
@@ -469,7 +529,9 @@ def _pretooluse_impl(runtime: str):
         "created_at": _utcnow(),
     })
     if not ok:
-        return _decided("allow", "approval store unavailable — fail-open")
+        _audit("unavailable", tool_name, {"policy": policy.get("name"),
+                                         "approval_id": approval_id})
+        return _decided("deny", "ClawMetry cannot save the approval. This protected action was denied.")
     _audit("pending", tool_name, {"approval_id": approval_id,
                                   "policy": policy.get("name"),
                                   "session_id": session_id,
@@ -488,44 +550,26 @@ def _pretooluse_impl(runtime: str):
 
 
 def _find_pending_dupe(runtime: str, session_id: str, tool_name: str,
-                       tool_input: dict, tool_use_id: str):
+                       tool_input: dict, tool_use_id: str, *, cwd="",
+                       source="pretooluse-hook", kind="policy", invocation_id=""):
     """Existing pending row for this exact call, or None.
 
-    Dedup: a client whose first POST timed out client-side retries without
-    approval_id.  Primary key: tool_use_id.  Fallback (tool_use_id absent):
-    (session_id, tool_name, md5(tool_input)) within a 30 s window.
+    Complete identity is required even when the runtime supplies a call id.
+    Clients generate a per-process nonce when a native call id is absent.
     """
-    if tool_use_id:
-        for r in _rows(_ls_read("query_approvals", status="pending",
-                                limit=100)):
-            if _args_meta(r).get("tool_use_id") == tool_use_id:
-                return r
+    if not tool_use_id and not invocation_id:
         return None
-    if session_id:
-        ih = _input_hash(tool_input)
-        req_sid = f"{runtime}:{session_id}"
-        cutoff_ms = int(time.time() * 1000) - 30_000
-        for r in _rows(_ls_read("query_approvals", status="pending",
-                                limit=100)):
-            m = _args_meta(r)
-            if (m.get("tool_use_id") is None
-                    and m.get("input_hash") == ih
-                    and m.get("tool_name") == tool_name
-                    and r.get("requestor_session_id") == req_sid):
-                try:
-                    import datetime as _dt
-                    row_ms = int(_dt.datetime.fromisoformat(
-                        (r.get("created_at") or "").replace("Z", "+00:00")
-                    ).timestamp() * 1000)
-                except Exception:
-                    row_ms = 0
-                if row_ms >= cutoff_ms:
-                    return r
+    for row in _rows(_ls_read("query_approvals", status="pending", limit=100)):
+        if not _binding_matches(row, runtime, session_id, tool_name, tool_input,
+                                cwd, tool_use_id, source=source, kind=kind,
+                                invocation_id=invocation_id):
+            continue
+        return row
     return None
 
 
 def _park_question_set(runtime: str, session_id: str, cwd: str,
-                       tool_use_id: str, tool_input: dict):
+                       tool_use_id: str, tool_input: dict, *, invocation_id=""):
     """Park an AskUserQuestion call as a question-set approval row and wait.
 
     The row carries the sanitized set in ``args["_cm_questions"]`` and
@@ -539,8 +583,13 @@ def _park_question_set(runtime: str, session_id: str, cwd: str,
         return _decided("ask", "AskUserQuestion payload not understood — "
                                "falling back to the terminal prompt")
 
+    binding = action_digest(runtime, session_id, "AskUserQuestion", tool_input,
+                            cwd, tool_use_id, kind="question_set", invocation_id=invocation_id)
+    if binding is None:
+        return _decided("ask", "ClawMetry cannot verify this question. Answer in the terminal.")
+
     dupe = _find_pending_dupe(runtime, session_id, "AskUserQuestion",
-                              tool_input, tool_use_id)
+                              tool_input, tool_use_id, cwd=cwd, kind="question_set", invocation_id=invocation_id)
     if dupe is not None:
         return _wait_on_row(str(dupe.get("id")), dupe, "AskUserQuestion")
 
@@ -557,10 +606,12 @@ def _park_question_set(runtime: str, session_id: str, cwd: str,
             "source": "pretooluse-hook",
             "runtime": runtime,
             "kind": "question_set",
+            "action_binding": binding,
             "tool_name": "AskUserQuestion",
             "tool_input": tool_input,
             "cwd": cwd,
             "tool_use_id": tool_use_id or None,
+            "invocation_id": invocation_id,
             "input_hash": None if tool_use_id else _input_hash(tool_input),
             "policy": "AskUserQuestion",
             "timeout": window_s,
@@ -697,6 +748,8 @@ def _wait_on_row(approval_id: str, row: dict, tool_name: str):
                 "approval_id": approval_id,
                 "retry_after_ms": 2000,
                 "deadline_ms": deadline_ms,
+                "wait_budget_s": _pending_wait_budget(meta),
+                "approval_kind": "question_set" if is_question else "policy",
             })
 
         time.sleep(min(_POLL_INTERVAL_S, max(0.05, slice_end - time.time())))
@@ -853,12 +906,14 @@ def api_hook_claude_code_permissionrequest():
 
     body = request.get_json(silent=True) or {}
     tool_name = str(body.get("tool_name") or "").strip()
-    tool_input = body.get("tool_input")
+    original_input = body.get("tool_input", {})
+    tool_input = original_input
     tool_input = tool_input if isinstance(tool_input, dict) else {}
     session_id = str(body.get("session_id") or "").strip()
-    cwd = str(body.get("cwd") or "")[:300]
+    cwd = str(body.get("cwd") or "")
     tool_use_id = str(body.get("tool_use_id") or "").strip()
     resume_id = str(body.get("approval_id") or "").strip()
+    invocation_id = str(body.get("invocation_id") or "")
 
     # Stamp the "needs you" badge FIRST, before every gate below.
     #
@@ -881,9 +936,11 @@ def api_hook_claude_code_permissionrequest():
     # never a call left hanging.
     try:
         from clawmetry import entitlements as _ent
-        entitled = _ent.get_entitlement().allows_feature("approval_mirror")
+        entitlement = _ent.get_entitlement()
+        entitled = (getattr(entitlement, "source", "") != "resolver_error"
+                    and bool(entitlement.allows_feature("approval_mirror")))
     except Exception:
-        entitled = True
+        entitled = False
     if not entitled:
         return _mirror_answer("ask", note="phone approvals not entitled")
 
@@ -901,16 +958,27 @@ def api_hook_claude_code_permissionrequest():
         row = _find_approval(resume_id)
         if row is None:
             return _mirror_answer("ask", resume_id, "approval row vanished")
+        if not _binding_matches(row, "claude_code", session_id, tool_name,
+                                original_input, cwd, tool_use_id,
+                                source="permissionrequest-hook", kind="permission_prompt",
+                                invocation_id=invocation_id):
+            _audit("binding_rejected", tool_name, {"approval_id": resume_id})
+            return _mirror_answer("ask", resume_id,
+                                  "This approval belongs to a different action. Review the terminal prompt.")
         return _wait_mirror(resume_id, row, tool_name)
 
     if not tool_name:
         return _mirror_answer("ask", note="no tool_name in hook payload")
 
-    if tool_use_id:
-        for r in _rows(_ls_read("query_approvals", status="pending",
-                                limit=100)):
-            if _args_meta(r).get("tool_use_id") == tool_use_id:
-                return _wait_mirror(str(r.get("id")), r, tool_name)
+    binding = action_digest("claude_code", session_id, tool_name, original_input,
+                            cwd, tool_use_id, "permissionrequest-hook", "permission_prompt", invocation_id=invocation_id)
+    if binding is None:
+        return _mirror_answer("ask", note="ClawMetry cannot verify this action. Review the terminal prompt.")
+    dupe = _find_pending_dupe("claude_code", session_id, tool_name, tool_input,
+                              tool_use_id, cwd=cwd, source="permissionrequest-hook",
+                              kind="permission_prompt", invocation_id=invocation_id)
+    if dupe is not None:
+        return _wait_mirror(str(dupe.get("id")), dupe, tool_name)
 
     # Approve-and-remember: an earlier "approve for this session" decision
     # for this exact (session, tool, command) answers the runtime's own
@@ -918,7 +986,7 @@ def api_hook_claude_code_permissionrequest():
     try:
         from clawmetry import approvals as _ap_sa
         if session_id and _ap_sa.check_session_allow(
-                f"claude_code:{session_id}", tool_name, tool_input):
+                f"claude_code:{session_id}", tool_name, tool_input, cwd=cwd):
             _audit("approved", tool_name, {"kind": "permission_prompt",
                                            "session_id": session_id,
                                            "session_allow": True})
@@ -951,10 +1019,12 @@ def api_hook_claude_code_permissionrequest():
             "source": "permissionrequest-hook",
             "runtime": "claude_code",
             "kind": "permission_prompt",
+            "action_binding": binding,
             "tool_name": tool_name,
             "tool_input": tool_input,
             "cwd": cwd,
             "tool_use_id": tool_use_id or None,
+            "invocation_id": invocation_id,
             "policy": "Claude Code permission prompt",
             "timeout": window_s,
             "on_timeout": "ask",
@@ -1022,7 +1092,9 @@ def _wait_mirror(approval_id: str, row: dict, tool_name: str):
         if time.time() >= slice_end:
             return jsonify({"status": "pending", "approval_id": approval_id,
                             "retry_after_ms": 2000,
-                            "deadline_ms": deadline_ms})
+                            "deadline_ms": deadline_ms,
+                            "wait_budget_s": _pending_wait_budget(meta, buffer_s=15),
+                            "approval_kind": "permission_prompt"})
 
         time.sleep(min(_POLL_INTERVAL_S, max(0.05, slice_end - time.time())))
         fresh = _find_approval(approval_id)

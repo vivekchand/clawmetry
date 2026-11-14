@@ -633,6 +633,7 @@ def test_every_detector_is_reachable_from_run_all():
         # Content: prompt-injection signatures in tool results and messages.
         "prompt_injection",
         "inspection_incomplete",
+        "security_threat",
     }
 
 

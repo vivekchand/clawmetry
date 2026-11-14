@@ -100,6 +100,7 @@ from clawmetry.detector_behaviour import (  # noqa: F401
 # results and user-sourced messages, defined in ``detector_injection`` with its
 # signatures in ``prompt_injection`` (REQ-GOV-PIJ-001).
 from clawmetry.detector_injection import prompt_injection  # noqa: F401
+from clawmetry.detector_security import security_threat  # noqa: F401
 # ``untrusted_package_source``: a tool argument naming a package SOURCE where a
 # version goes (CVE-2026-59176), defined in ``detector_package_source``.
 from clawmetry.detector_package_source import untrusted_package_source  # noqa: F401
@@ -143,6 +144,7 @@ DETECTOR_KINDS = (
     # Content: does text the agent read try to give it instructions?
     "prompt_injection",
     "inspection_incomplete",
+    "security_threat",
 )
 
 # Kinds only the fleet-wide pass can produce (``detector_swarm``): no single
@@ -1374,7 +1376,7 @@ def inspection_incomplete(events: Iterable[dict], session_id: str,
     limited = [s for s in st if s.get("inspection_limits")]
     if not limited:
         return None
-    return _incident(
+    incident = _incident(
         "inspection_incomplete", session_id, rt, "info",
         "Credential inspection reached a limit",
         "Some tool payloads exceeded the bounded credential scan. "
@@ -1382,6 +1384,9 @@ def inspection_incomplete(events: Iterable[dict], session_id: str,
         {"limited_payloads": len(limited),
          "reasons": sorted({reason for s in limited for reason in s["inspection_limits"]}),
          "observed": "tool_arguments_and_results"}, limited[0].get("i"))
+
+    incident["_evidence_step_indices"] = [s["i"] for s in limited]
+    return incident
 
 
 _ALL_DETECTORS = (
@@ -1403,6 +1408,7 @@ _ALL_DETECTORS = (
     # Content: does text the agent read try to give it instructions?
     prompt_injection,
     inspection_incomplete,
+    security_threat,
 )
 
 def run_all(events: Iterable[dict], session_id: str,
@@ -1441,6 +1447,8 @@ def run_all(events: Iterable[dict], session_id: str,
             steps = normalize_events(evlist)
         except Exception:
             steps = []
+            if inspection is not None:
+                inspection["normalization"] = False
     f = facts if isinstance(facts, dict) else {}
 
     out: list[dict] = []

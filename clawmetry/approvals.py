@@ -53,6 +53,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import hmac
 import time
 import uuid
 import logging
@@ -159,8 +160,8 @@ POLICIES_PATH = Path.home() / ".clawmetry" / "policies.yml"
 # "Approve for this session" decisions live in a small JSON file so BOTH
 # the daemon's reactive watcher and the dashboard's pre-tool hook receiver
 # (different processes) honor them. Entries are keyed on
-# sha256(session_id | canonical tool | extracted command) — the SAME
-# normalisation match_policy uses — and expire after a TTL so a leaked
+# a versioned digest of the session, exact tool, complete arguments and cwd.
+# They expire after a TTL so a leaked
 # session id can't become a permanent bypass. "Always allow" decisions do
 # NOT live here: they become an ``action: approve`` policy row (the
 # existing always-allow mechanism), so they are visible and revocable in
@@ -169,11 +170,12 @@ _SESSION_ALLOW_PATH = Path.home() / ".clawmetry" / "approvals_session_allow.json
 _SESSION_ALLOW_TTL_S = 24 * 3600
 
 
-def _session_allow_key(session_id: str, tool_name: str, args) -> str:
-    import hashlib as _hl
-    cmd = _extract_command(tool_name, args if isinstance(args, dict) else {})
-    raw = f"{session_id or ''}|{_canonical_tool(tool_name)}|{cmd}"
-    return _hl.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
+def _session_allow_key(session_id: str, tool_name: str, args, cwd: str = "", runtime: Optional[str] = None) -> Optional[str]:
+    from clawmetry.approval_binding import action_digest
+    if not session_id:
+        return None
+    return action_digest(runtime or _session_runtime(session_id), session_id, tool_name, args, cwd=cwd,
+                         source="session-allow", kind="remembered")
 
 
 def _load_session_allows() -> dict:
@@ -188,12 +190,15 @@ def _load_session_allows() -> dict:
 
 
 def add_session_allow(session_id: str, tool_name: str, args,
-                      ttl_s: int = _SESSION_ALLOW_TTL_S) -> str:
-    """Record "approved for this session" for this exact (session, tool,
-    command). Prunes expired entries on every write. Returns the key.
+                      ttl_s: int = _SESSION_ALLOW_TTL_S, *, cwd: str = "", runtime: Optional[str] = None) -> str:
+    """Record a grant for this exact invocation and working directory.
+
+    Prunes expired entries on every write. Returns the versioned key.
     Never raises — a failed write degrades to re-prompting, never to a
     blocked or auto-approved call."""
-    key = _session_allow_key(session_id, tool_name, args)
+    key = _session_allow_key(session_id, tool_name, args, cwd, runtime)
+    if key is None:
+        return ""
     try:
         now_ms = int(time.time() * 1000)
         data = {k: v for k, v in _load_session_allows().items()
@@ -215,12 +220,11 @@ def add_session_allow(session_id: str, tool_name: str, args,
     return key
 
 
-def check_session_allow(session_id: str, tool_name: str, args) -> bool:
-    """True when this exact (session, tool, command) was approved earlier
-    this session and the entry has not expired. Read-only, never raises."""
+def check_session_allow(session_id: str, tool_name: str, args, *, cwd: str = "", runtime: Optional[str] = None) -> bool:
+    """True when this complete invocation has an unexpired session grant."""
     try:
         entry = _load_session_allows().get(
-            _session_allow_key(session_id, tool_name, args))
+            _session_allow_key(session_id, tool_name, args, cwd, runtime))
         return (isinstance(entry, dict)
                 and int(entry.get("expires_ms") or 0) > time.time() * 1000)
     except Exception:
@@ -343,11 +347,20 @@ _PRESET_MIN_RISK: dict[str, str] = {"risk_high": "high"}
 def _compile_policy(p: dict) -> Optional[dict]:
     """Compile a single raw policy dict into a match-ready dict, or None."""
     match = p.get("match") or {}
+    action_binding = match.get("action_binding") or p.get("action_binding")
+    if action_binding is not None and (not isinstance(action_binding, str)
+            or not re.fullmatch(r"v1:[0-9a-f]{64}", action_binding)):
+        log.warning("Policy action binding is invalid; the policy was not loaded")
+        return None
     # Cloud-stored policies use top-level fields instead of nested `match`
     tool = (match.get("tool") or p.get("tool") or "").strip()
     cmd_re_str = match.get("command_regex") or (
         p.get("pattern") if p.get("pattern_type") == "command_regex" else None
     )
+    # Bound grants serialize a legacy never-match regex for older daemons.
+    # The exact digest is the authority on binding-aware clients.
+    if action_binding:
+        cmd_re_str = None
     cmd_not_re = match.get("command_not_regex")
     args_re = match.get("args_regex")
     # Risk-level gate: policy fires only when the CALL classifies at or
@@ -386,6 +399,7 @@ def _compile_policy(p: dict) -> Optional[dict]:
             "command_not_regex": re.compile(cmd_not_re) if cmd_not_re else None,
             "args_regex": re.compile(args_re) if args_re else None,
             "min_risk": min_risk,
+            "action_binding": action_binding,
             "action": (p.get("action") or "require_approval").strip(),
             "timeout": int(p.get("timeout") or 604800),  # default 7d (#4066)
             "on_timeout": (p.get("on_timeout") or "deny").strip(),
@@ -426,6 +440,7 @@ def _policy_signature(compiled: list[dict]) -> tuple:
             c.get("action"),
             c.get("timeout"),
             c.get("on_timeout"),
+            c.get("action_binding"),
             getattr(c.get("command_regex"), "pattern", None),
             getattr(c.get("command_not_regex"), "pattern", None),
             getattr(c.get("args_regex"), "pattern", None),
@@ -501,7 +516,8 @@ def _fetch_cloud_policies(api_key: str) -> list[dict]:
     from clawmetry.sync import INGEST_URL
     req = urllib.request.Request(
         f"{INGEST_URL.rstrip('/')}/api/cloud/policies",
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers={"Authorization": f"Bearer {api_key}",
+                 "X-ClawMetry-Action-Binding": "v1"},
         method="GET",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -526,7 +542,7 @@ from clawmetry.tool_risk import (  # noqa: E402,F401  (re-export)
 
 
 def match_policy(policies: list[dict], tool_name: str, args: dict,
-                 context: Optional[dict] = None):
+                 context: Optional[dict] = None, *, runtime: str = "", cwd: str = ""):
     """Return the FIRST matching policy or None.
 
     ``context`` is the pre-tool gate's untrusted-content context for the
@@ -557,6 +573,12 @@ def match_policy(policies: list[dict], tool_name: str, args: dict,
     # actually gates on it (zero cost for min_risk-free policy sets).
     call_risk_rank: Optional[int] = None
     for p in ordered:
+        if p.get("action_binding"):
+            from clawmetry.approval_binding import action_digest
+            actual = action_digest(runtime, "", tool_name, args, cwd,
+                                   source="persistent-allow", kind="always")
+            if actual is None or not hmac.compare_digest(actual, p["action_binding"]):
+                continue
         # Harness-agnostic tool match: a policy authored for ``exec`` matches a
         # ``Bash`` / ``shell`` toolCall (see _canonical_tool). Falls back to a
         # plain case-insensitive compare when neither side maps to a category.
@@ -1025,7 +1047,8 @@ def _kill_session(session_id: Optional[str]) -> bool:
 def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
                        tool_call_id: str, tool_name: str, args: dict,
                        policies: Optional[list[dict]] = None,
-                       kill_on_deny: bool = True) -> dict:
+                       kill_on_deny: bool = True, cwd: Optional[str] = None,
+                       runtime: Optional[str] = None) -> dict:
     """Check a fresh toolCall against active policies and (if matched) request
     a cloud-mediated approval.
 
@@ -1044,14 +1067,37 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         policies = load_policies()
     if not policies:
         return {"decision": "no_policy", "policy": None, "killed": False}
-    policy = match_policy(policies, tool_name, args)
+    invocation_cwd = cwd if isinstance(cwd, str) else _session_cwd(session_id or "")
+    invocation_runtime = runtime or _session_runtime(session_id or "")
+    policy = match_policy(policies, tool_name, args,
+                          runtime=invocation_runtime, cwd=invocation_cwd)
     if not policy:
         return {"decision": "no_policy", "policy": None, "killed": False}
-    # Dedup
-    key = tool_call_id or f"{session_id}:{int(time.time()*1000)}"
+    protected_hook = False
+    if not kill_on_deny and policy.get("action") == "require_approval":
+        try:
+            from clawmetry import entitlements as _ent
+            entitlement = _ent.get_entitlement()
+            protected_hook = (getattr(entitlement, "source", "") != "resolver_error"
+                              and bool(entitlement.allows_feature("approval_queue")))
+        except Exception:
+            pass  # A license error creates no new blocking authority.
+    from clawmetry.approval_binding import action_digest
+    key = action_digest(invocation_runtime, session_id or "",
+                        tool_name, args, invocation_cwd,
+                        tool_call_id or uuid.uuid4().hex,
+                        "legacy-hook" if not kill_on_deny else "approval-watcher",
+                        str(policy.get("name") or "policy"))
+    if key is None:
+        return {"decision": "denied" if protected_hook else "error",
+                "policy": policy["name"], "killed": False}
     with _in_flight_lock:
         if key in _in_flight:
-            return _in_flight[key]
+            existing = _in_flight[key]
+            if protected_hook and existing.get("decision") == "pending":
+                return {"decision": "denied", "policy": policy["name"], "killed": False,
+                        "reason": "approval_service_unavailable"}
+            return existing
         _in_flight[key] = {"decision": "pending", "policy": policy["name"], "killed": False}
 
     cmd_preview = _extract_command(tool_name, args)[:140]
@@ -1071,15 +1117,40 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     # costs a second lookup except cwd, which is memoised per session.
     args_with_risk["_cm_ctx"] = {
         "tool": tool_name,
-        "runtime": _session_runtime(session_id or ""),
+        "runtime": invocation_runtime,
         "session_id": session_id or "",
         "policy": policy.get("name"),
-        "cwd": _session_cwd(session_id or ""),
+        "cwd": invocation_cwd,
+        "tool_input": args,  # preserve reserved argument keys before metadata stamping
     }
     log.info(f"[approval] policy='{policy['name']}' tool={tool_name} "
              f"risk={risk['level']} cmd={cmd_preview!r} session={session_id}")
 
     approval_id = uuid.uuid4().hex
+
+    def unavailable():
+        result = {"decision": "denied" if protected_hook else "error",
+                  "policy": policy["name"], "killed": False,
+                  "approval_id": approval_id, "reason": "approval_service_unavailable"}
+        if protected_hook:
+            try:
+                from clawmetry import local_store as _store
+                _store.get_store().update_approval_decision(
+                    approval_id, "deny", "policy", "approval_service_unavailable")
+            except Exception:
+                pass  # The audit attempt below remains independent of this write.
+            try:
+                from clawmetry import audit as _audit
+                _audit.audit_event("approval.decision", actor="policy", target=tool_name,
+                                   result="denied", source="approvals",
+                                   metadata={"approval_id": approval_id,
+                                             "policy": policy["name"],
+                                             "reason": "approval_service_unavailable"})
+            except Exception:
+                log.warning("Protected approval was denied; its audit record could not be saved")
+        with _in_flight_lock:
+            _in_flight[key] = result
+        return result
 
     if (policy.get("action") or "") == "approve":
         # Always-allow rule (Pushary-style remember-my-choice, created by
@@ -1168,7 +1239,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     # for this exact (session, tool, command) sails through with an audit
     # row — same contract as an always-allow rule, but session-scoped and
     # TTL-bound (see add_session_allow).
-    if session_id and check_session_allow(session_id, tool_name, args):
+    if session_id and check_session_allow(session_id, tool_name, args, cwd=invocation_cwd, runtime=invocation_runtime):
         try:
             import hashlib as _hl
             from clawmetry import local_store as _lsm
@@ -1210,6 +1281,13 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         "policy_name": policy["name"],
         "timeout": policy["timeout"],
     }
+    from clawmetry.approval_binding import action_digest
+    persistent_binding = action_digest(runtime or _session_runtime(session_id), "",
+                                       tool_name, args, invocation_cwd,
+                                       source="persistent-allow", kind="always")
+    if persistent_binding:
+        req.update(runtime=runtime or _session_runtime(session_id),
+                   action_binding=persistent_binding)
     # Persist to local DuckDB so:
     #   * the cloud path's next heartbeat cache_push surfaces this in the
     #     cloud Approvals inbox (which reads the approvals:{owner_hash}:queue
@@ -1231,6 +1309,8 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         })
     except Exception as _ae:
         log.debug("approval DuckDB persist failed: %s", _ae)
+        if protected_hook:
+            return unavailable()
 
     # Page the human on the channels configured for THIS runtime. Runtime is
     # derived from the session prefix (the same _session_runtime the scoped
@@ -1241,7 +1321,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
         from clawmetry import approval_events as _aev
         _aev.notify_pending({
             "id": approval_id,
-            "runtime": _session_runtime(session_id or ""),
+            "runtime": invocation_runtime,
             "kind": "policy",
             "tool_name": tool_name,
             "command": cmd_preview,
@@ -1264,7 +1344,12 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     # blocked. Cloud-configured (``cm_``) nodes are unchanged — they still
     # POST + poll the cloud below.
     if _local_blocking_enabled(api_key):
-        decision = _poll_decision_local(approval_id, policy["timeout"])
+        try:
+            decision = _poll_decision_local(approval_id, policy["timeout"])
+        except Exception:
+            decision = "error"
+        if decision == "error" and protected_hook:
+            return unavailable()
         if decision in ("timeout", "expired"):
             decision = policy["on_timeout"]
         killed = False
@@ -1308,13 +1393,14 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
 
     resp = _post_approval_request(api_key, req)
     if not resp:
-        # Cloud unreachable — fail-open by default (don't block the agent)
-        result = {"decision": "error", "policy": policy["name"], "killed": False}
-        with _in_flight_lock:
-            _in_flight[key] = result
-        return result
+        return unavailable()
 
-    decision = _poll_decision(api_key, approval_id, policy["timeout"])
+    try:
+        decision = _poll_decision(api_key, approval_id, policy["timeout"])
+    except Exception:
+        decision = "error"
+    if decision == "error" and protected_hook:
+        return unavailable()
     if decision == "timeout" or decision == "expired":
         # Apply on_timeout
         decision = policy["on_timeout"]
@@ -2511,6 +2597,10 @@ def sync_runtime_gates(policies) -> None:
             continue
         try:
             fn(want, scoped)
+            # A fresh scoped snapshot can preserve a declared protection if
+            # the local hook receiver disappears before the first response.
+            from clawmetry.gate_policy_cache import capture
+            capture(runtime, scoped if want else [])
         except Exception as e:
             log.warning("gate handler for runtime=%r raised: %s", runtime, e)
 

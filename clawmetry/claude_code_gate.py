@@ -49,6 +49,7 @@ import json
 import os
 import sys
 import time
+import uuid
 
 from clawmetry import hook_ownership
 
@@ -334,7 +335,8 @@ def _windowless_python(py: str, is_windows: bool, exists=os.path.exists) -> str:
     hook_main tolerates absent std streams (fail-open). Pure function so the
     swap is testable on any OS."""
     if is_windows and py.lower().endswith("python.exe"):
-        pyw = os.path.join(os.path.dirname(py), "pythonw.exe")
+        import ntpath
+        pyw = ntpath.join(ntpath.dirname(py), "pythonw.exe")
         if exists(pyw):
             return pyw
     return py
@@ -738,24 +740,75 @@ _MAX_TRANSIENT_FAILURES = 3     # consecutive network errors before fail-open
 
 
 def _post_json(url: str, payload: dict, timeout: float) -> "dict | None":
-    """POST JSON, return parsed dict or None on any failure. stdlib-only."""
-    import urllib.request
+    """Use a short connect timeout and a separate bounded long-poll timeout."""
+    import http.client
+    import socket
+    import threading
+    from urllib.parse import urlsplit
+    connection = None
+    timer = None
+    deadline = time.monotonic() + timeout
     try:
-        req = urllib.request.Request(
-            url, data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
+        target = urlsplit(url)
+        if target.scheme not in ("http", "https") or not target.hostname:
+            return None
+        connection_type = http.client.HTTPSConnection if target.scheme == "https" else http.client.HTTPConnection
+        connection = connection_type(target.hostname, target.port,
+                                     timeout=min(_CONNECT_TIMEOUT_S, timeout))
+        connection.connect()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        if connection.sock is not None:
+            sock = connection.sock
+            sock.settimeout(remaining)
+
+            def expire():
+                # A per-read socket timeout resets when bytes arrive. Shut
+                # down at the absolute deadline too, including slow bodies.
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+            timer = threading.Timer(remaining, expire)
+            timer.daemon = True
+            timer.start()
+        path = target.path or "/"
+        if target.query:
+            path += "?" + target.query
+        connection.request("POST", path, body=json.dumps(payload).encode(),
+                           headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        if response.status != 200:
+            return None
+        raw = response.read(1024 * 1024 + 1)
+        return json.loads(raw) if len(raw) <= 1024 * 1024 else None
     except Exception:
         return None
+    finally:
+        if timer is not None:
+            timer.cancel()
+        if connection is not None:
+            connection.close()
+
+
+def _client_wait_budget(stored_timeout=None):
+    """Leave time to emit a decision before the installed runtime timeout."""
+    try:
+        timeout = int(stored_timeout or 604860)
+        return max(0, hook_ownership.clamp_hook_timeout(timeout) - 5)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def hook_main(argv: "list | None" = None) -> int:
     """Entry point for the `clawmetry hook claude-code` fast path.
 
-    ALWAYS returns 0. Output contract: on a decision, print the receiver's
-    ``hookSpecificOutput`` envelope to stdout; on ANY failure print nothing
-    (no opinion → Claude Code's normal permission flow)."""
+    Always returns 0. Initial service failure preserves native permissions.
+    Once a policy call is pending, failure emits deny; native questions and
+    permission prompts fall back to ask. A known protection never disappears
+    merely because its approval service stopped responding."""
     argv = list(argv or [])
     if not argv or argv[0] not in ("claude-code", "claude-code-permission"):
         return 0  # unknown subtarget → no opinion, never break the agent
@@ -781,13 +834,14 @@ def hook_main(argv: "list | None" = None) -> int:
 
     payload = {
         "tool_name": event.get("tool_name") or "",
-        "tool_input": event.get("tool_input") or {},
+        "tool_input": event.get("tool_input", {}),
         "session_id": event.get("session_id") or "",
         "cwd": event.get("cwd") or "",
         "hook_event_name": event.get("hook_event_name")
                            or ("PermissionRequest" if mirror else "PreToolUse"),
         "permission_mode": event.get("permission_mode") or "",
         "tool_use_id": event.get("tool_use_id") or "",
+        "invocation_id": uuid.uuid4().hex,
     }
     if not mirror:
         # Untrusted content earlier in this turn (REQ-GOV-PIJ-002). Read here,
@@ -804,33 +858,88 @@ def hook_main(argv: "list | None" = None) -> int:
 
     # First POST gets a short connect budget: a dashboard that isn't
     # running must cost ~nothing per tool call.
-    resp = _post_json(url, payload, _CONNECT_TIMEOUT_S)
+    from clawmetry.approval_binding import pending_deadline
+    started = time.monotonic()
+    pending = False
+    wait_deadline = None
+    state = _read_json(_MIRROR_STATE_PATH) if mirror else _read_state()
+    wait_budget = _client_wait_budget(state.get("timeout")) if isinstance(state, dict) else 0
+
+    def interrupted():
+        nonlocal pending
+        if not pending and cached_protection():
+            pending = True
+        if pending:
+            decision = "ask" if mirror or payload["tool_name"] == "AskUserQuestion" else "deny"
+            out = {"hookEventName": "PermissionRequest" if mirror else "PreToolUse"}
+            out["decision" if mirror else "permissionDecision"] = decision
+            if not mirror:
+                out["permissionDecisionReason"] = (
+                    "ClawMetry cannot verify the pending approval. Request a new review.")
+            sys.stdout.write(json.dumps({"hookSpecificOutput": out}))
+        return 0
+
+    def cached_protection():
+        if mirror or payload["tool_name"] == "AskUserQuestion":
+            return False
+        try:
+            from clawmetry.gate_policy_cache import protects
+            return protects("claude_code", payload)
+        except Exception:
+            return False
+
+    def post(timeout):
+        if wait_deadline is not None:
+            timeout = min(timeout, max(0.01, wait_deadline - time.monotonic()))
+        try:
+            return _post_json(url, payload, timeout)
+        except Exception:
+            return None
+
+    resp = post(min(_REQUEST_TIMEOUT_S, max(0.01, wait_budget)))
     failures = 0
     while True:
+        if pending and wait_deadline is not None and time.monotonic() >= wait_deadline:
+            return interrupted()
         if resp is None:
+            if pending:
+                return interrupted()
+            if cached_protection():
+                pending = True
+                return interrupted()
             failures += 1
             if failures >= _MAX_TRANSIENT_FAILURES:
                 return 0  # fail-open
             time.sleep(1.0)
-            resp = _post_json(url, payload, _REQUEST_TIMEOUT_S)
+            resp = post(_REQUEST_TIMEOUT_S)
             continue
         failures = 0
         if not isinstance(resp, dict):
+            return interrupted()
+        if resp.get("status") == "no_op":
             return 0
-        if resp.get("status") == "pending" and resp.get("approval_id"):
+        if resp.get("status") == "pending":
+            pending = True
+            if not resp.get("approval_id"):
+                return interrupted()
+            wait_deadline = pending_deadline(resp, started, wait_deadline, wait_budget)
             # Parked in the local queue — poll without duplicating the row.
             payload["approval_id"] = resp["approval_id"]
             try:
-                wait_s = max(0.2, float(resp.get("retry_after_ms") or 2000)
-                             / 1000.0)
+                wait_s = min(2.0, max(0.2, float(resp.get("retry_after_ms") or 2000)
+                                     / 1000.0))
             except (TypeError, ValueError):
                 wait_s = 2.0
+            if wait_deadline is not None:
+                wait_s = min(wait_s, max(0, wait_deadline - time.monotonic()))
             time.sleep(wait_s)
-            resp = _post_json(url, payload, _REQUEST_TIMEOUT_S)
+            if wait_deadline is not None and time.monotonic() >= wait_deadline:
+                return interrupted()
+            resp = post(_REQUEST_TIMEOUT_S)
             continue
         hso = resp.get("hookSpecificOutput")
-        if isinstance(hso, dict) and (hso.get("permissionDecision")
-                                      or hso.get("decision")):
+        if isinstance(hso, dict) and hso.get("decision" if mirror else "permissionDecision") in (
+                "allow", "deny", "ask"):
             # PermissionRequest speaks `decision`, PreToolUse speaks
             # `permissionDecision`. The receiver already emits the right
             # shape for its own event; print it verbatim. "ask" from the
@@ -841,4 +950,4 @@ def hook_main(argv: "list | None" = None) -> int:
             except Exception:
                 pass
             return 0
-        return 0  # no decision in the response → no opinion
+        return interrupted()

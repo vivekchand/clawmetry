@@ -402,25 +402,9 @@ except Exception:  # noqa: BLE001
 
 
 def _incident_rank(inc) -> tuple:
-    """Sort key for one incident: money, then severity, then size.
-
-    Kept in sync with ``detectors.incident_rank``. It is duplicated rather
-    than imported because this route must render on a cloud instance where
-    ``clawmetry.detectors`` may be absent, and a missing import must not take
-    the Guard tab down with it.
-    """
-    if not isinstance(inc, dict):
-        return (0.0, 0, 0)
-    try:
-        spend = float(inc.get("spend_at_risk_usd") or 0)
-    except (TypeError, ValueError):
-        spend = 0.0
-    sev = _SEVERITY_RANK.get(str(inc.get("severity") or "").lower(), 0)
-    try:
-        count = int(inc.get("count") or 0)
-    except (TypeError, ValueError):
-        count = 0
-    return (spend, sev, count)
+    """Shared security-impact ordering without importing the detector stack."""
+    from clawmetry.detector_money import incident_rank
+    return incident_rank(inc)
 
 
 def _observe_only_runtime(session_row):
@@ -448,6 +432,28 @@ def _share_verdict(meta):
     from clawmetry.adapters.openclaw_share import share_extra
 
     return share_extra(meta).get("isShared")
+
+
+def _finding_scope_keys(sessions, signal, details):
+    """Resolve a compatibility finding without treating missing scope as all nodes."""
+    sid = str(signal.get("session_id") or "")
+    signal_runtime = str(signal.get("agent_type") or details.get("runtime") or "").lower()
+    if not signal_runtime or signal_runtime in ("openclaw", "main", "subagent", "cron"):
+        signal_runtime = _session_runtime(sid, signal_runtime)
+    node = details.get("node_id")
+    if node is not None and (not isinstance(node, str) or not node):
+        return []
+    matches = set()
+    for session in sessions:
+        if not isinstance(session, dict) or str(session.get("session_id") or "") != sid:
+            continue
+        runtime = _observe_only_runtime(session) or _session_runtime(sid, session.get("agent_type") or "")
+        key = (str(session.get("node_id") or ""), runtime, sid)
+        if (not signal_runtime or runtime == signal_runtime) and (node is None or key[0] == node):
+            matches.add(key)
+    # Older projections have no node. Preserve a unique match but do not
+    # choose among collisions, or display one finding on several nodes.
+    return list(matches) if node is not None or len(matches) == 1 else []
 
 
 @bp_guard.route("/api/guard/sessions")
@@ -509,7 +515,9 @@ def build_guard_sessions_body(limit: int = 50, call=None,
             except Exception:
                 details = {}
         details = details if isinstance(details, dict) else {}
-        prev = incident_by_session.get(sid)
+        scope_keys = _finding_scope_keys(sessions, sig, details)
+        if not scope_keys:
+            continue
         count = int(sig.get("repeat_count") or 0)
         try:
             at_risk = round(float(details.get("spend_at_risk_usd") or 0), 4)
@@ -545,13 +553,15 @@ def build_guard_sessions_body(limit: int = 50, call=None,
         # severity and then to count when no cost is known — the same order
         # ``detectors.incident_rank`` uses, so the tab and the daemon agree on
         # which finding is the loudest.
-        if candidate["kind"] in _WORKSPACE_KINDS:
-            prev_ws = workspace_by_session.get(sid)
-            if prev_ws is None or _incident_rank(candidate) > _incident_rank(prev_ws):
-                workspace_by_session[sid] = candidate
-            continue
-        if prev is None or _incident_rank(candidate) > _incident_rank(prev):
-            incident_by_session[sid] = candidate
+        for scope_key in scope_keys:
+            if candidate["kind"] in _WORKSPACE_KINDS:
+                prev_ws = workspace_by_session.get(scope_key)
+                if prev_ws is None or _incident_rank(candidate) > _incident_rank(prev_ws):
+                    workspace_by_session[scope_key] = candidate
+                continue
+            prev = incident_by_session.get(scope_key)
+            if prev is None or _incident_rank(candidate) > _incident_rank(prev):
+                incident_by_session[scope_key] = candidate
 
     out = []
     for s in sessions:
@@ -577,6 +587,7 @@ def build_guard_sessions_body(limit: int = 50, call=None,
         # which hid it from a runtime filter and lit OpenClaw's buttons.
         observed_runtime = _observe_only_runtime(s)
         runtime = observed_runtime or _session_runtime(sid, s.get("agent_type") or "")
+        scope_key = (str(s.get("node_id") or ""), runtime, sid)
         meta = s.get("metadata")
         meta = meta if isinstance(meta, dict) else {}
         # ``sessions.cwd`` is the COLUMN the rest of the product keys on, and
@@ -604,6 +615,7 @@ def build_guard_sessions_body(limit: int = 50, call=None,
             support = _runtime_supports_signals(runtime, sid, cwd)
         out.append({
             "session_id": sid,
+            "node_id": s.get("node_id"),
             "runtime": runtime,
             "agent_id": str(s.get("agent_id") or ""),
             "title": str(s.get("title") or "")[:160],
@@ -621,11 +633,11 @@ def build_guard_sessions_body(limit: int = 50, call=None,
             # not shared when we never asked is the failure mode this signal
             # exists to prevent.
             "public_share": _share_verdict(meta),
-            "incident": incident_by_session.get(sid),
+            "incident": incident_by_session.get(scope_key),
             # What is in the folder this agent was pointed at, when anything is.
             # Separate from ``incident`` on purpose: it is not ranked against
             # money, because it is not a cost.
-            "workspace": workspace_by_session.get(sid),
+            "workspace": workspace_by_session.get(scope_key),
             "controllable": support["controllable"],
             "control_reason": support.get("reason", ""),
             # Why it is not controllable, in one machine-readable word (see
@@ -634,6 +646,8 @@ def build_guard_sessions_body(limit: int = 50, call=None,
             "control_state": support.get("state", "unknown"),
             # How a human restarts it by hand once nothing here can.
             "resume": _resume_for(runtime, sid, meta),
+            "observation": ({"source": "exported_telemetry", "prevented": False}
+                            if observed_runtime else None),
             "no_pause": support.get("no_pause", False),
             # Which buttons may be enabled for THIS session. Empty means none.
             "control_actions": support.get("actions", []),
@@ -657,6 +671,14 @@ def build_guard_sessions_body(limit: int = 50, call=None,
     if runtime_filter and runtime_filter != "all":
         out = [r for r in out
                if str(r.get("runtime") or "").lower() == runtime_filter]
+
+    # Evidence comes from the node's stored records, never runtime files in
+    # this request handler. The same builder supplies encrypted snapshots.
+    if out:
+        from clawmetry.protection_evidence import build, load_context
+        protection_context = load_context(call)
+        for row in out:
+            row["protection"] = build(row, **protection_context)
 
     # Flagged sessions first, most expensive to ignore at the top; unflagged
     # sessions ordered newest-active first below. Sorting by severity alone put

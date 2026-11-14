@@ -100,6 +100,16 @@ def test_warning_incident_lands_in_banner_history(sinks):
     assert store.recorded == [("codex:abc", "rate_limited", ["banner"], "warning")]
 
 
+def test_security_cooldown_does_not_mute_a_different_node_or_runtime(sinks):
+    store = LatchStore()
+    incident = dict(_incident(kind="credential_access"), node_id="node-a")
+    assert ia.deliver_incident(store, incident)["delivered"] is True
+    assert ia.deliver_incident(store, incident)["delivered"] is False
+    assert ia.deliver_incident(store, dict(incident, node_id="node-b"))["delivered"] is True
+    assert ia.deliver_incident(store, dict(incident, runtime="claude_code"))["delivered"] is True
+    assert len(_banner_rows(sinks["fleet_db"])) == 3
+
+
 def test_telegram_is_free_when_creds_exist(sinks, monkeypatch):
     monkeypatch.setattr(ia, "telegram_creds", lambda: ("tok", "123"))
     # Not entitled to webhooks: irrelevant for telegram, must not block it.
@@ -231,6 +241,10 @@ class PolicyStore(LatchStore):
 
     def record_policy_action(self, session_id, policy_id, **kw):
         self.fired.add((session_id, policy_id, kw.get("step_index", 0)))
+        # Mirror the real store's per-rung UPSERT, including post-delivery result updates.
+        key = (session_id, policy_id, kw.get("step_index", 0))
+        self.decisions = [row for row in self.decisions if
+                          (row["session_id"], row["policy_id"], row.get("step_index", 0)) != key]
         self.decisions.append({"session_id": session_id, "policy_id": policy_id, **kw})
 
 
