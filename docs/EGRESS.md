@@ -34,7 +34,7 @@ python3 -m pytest tests/test_egress_suppression.py tests/test_e2e_invariants.py 
 |---|---|---|
 | **Self-hosted** (`SELF_HOSTED=true`) | No | No |
 | **Air-gapped** (`CLAWMETRY_OFFLINE=1`) | No | No |
-| **Local only / cloud sync off** (no `clawmetry connect`, `clawmetry onboard --local`, or `CLAWMETRY_NO_CLOUD=1`) | One install ping, plus a field-failure report if the daemon stops working | PyPI version check |
+| **Local only / cloud sync off** (no `clawmetry connect`, `clawmetry onboard --local`, or `CLAWMETRY_NO_CLOUD=1`) | One install ping, plus a field-failure report if the daemon stops working | PyPI version check and one public-IP lookup for the startup banner |
 | **Managed cloud** (`clawmetry connect`) | Yes: sealed content plus plaintext metadata (table below) | PyPI version check |
 | **Hosted ingest push** (a ClawMetry Cloud ingest key, OTLP/JSON) | Yes: the pushed telemetry, which is **not sealed** and is readable by ClawMetry, because the sender holds no encryption key | None added |
 
@@ -171,8 +171,9 @@ it together with `SELF_HOSTED=true` on a network with no route out.
 ### Local only (default `pip install clawmetry`)
 
 Runs entirely on `127.0.0.1` against your own filesystem. Nothing is uploaded.
-Two outbound calls remain: the one-time install ping (`DO_NOT_TRACK=1` stops
-it) and the PyPI version check described below.
+Three outbound calls remain: the one-time install ping (`DO_NOT_TRACK=1` stops
+it), the PyPI version check described below, and a one-off public-IP lookup for
+the startup banner (`api.ipify.org`; suppressed by any suppression condition).
 
 ### Managed cloud (after `clawmetry connect`)
 
@@ -259,7 +260,7 @@ opted in with `CLAWMETRY_ALLOW_REMOTE_PROMPTS=1` or
 | `api.anthropic.com` / `api.openai.com` | transcript quality scoring with your own key: a redacted 8 KB head-and-tail excerpt per session | after a session ends | **off**; `CLAWMETRY_EVALS_ENABLED=1` or `"evals": true` in config |
 | `api.anthropic.com` | alert narration: the alert message and rule id | when an alert fires and `ANTHROPIC_API_KEY` is set. Not contacted by self-hosted, air-gapped or repointed installs | on; `CLAWMETRY_NARRATOR_ENABLED=0` |
 | `api.anthropic.com` with the Claude Code OAuth token | a one-token request to read rate-limit headers | every 5 min | **off**; `CLAWMETRY_CLAUDE_LIMIT_PROBE=1` |
-| `api.ipify.org` | public IP for one cosmetic startup banner line | dashboard start, managed cloud only | on; any suppression condition |
+| `api.ipify.org` | public IP for one cosmetic startup banner line | dashboard start (all modes except self-hosted, air-gapped, repointed endpoint) | on; any suppression condition |
 
 Third-party telemetry inside optional integrations is forced off rather than
 merely left unconfigured. The DeepEval evaluation bridge, for example, phones
