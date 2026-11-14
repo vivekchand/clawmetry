@@ -237,6 +237,30 @@ def test_an_unreadable_command_line_does_not_condemn_the_holder(home,
     assert sync._acquire_pid_lock() is False
 
 
+def test_reclaims_recycled_pid_matching_start_token_but_foreign_cmdline(
+        home, foreign_process, monkeypatch):
+    """Field-failure #6553: daemon_lock_refused on Linux py3.12.
+
+    A recycled PID whose start time falls within verify_pid's 3-second
+    tolerance window must still be reclaimed when its command line is
+    positively not ours.  Without the secondary cmdline check, a busy
+    system recycling PIDs within 3s could lock the daemon out permanently.
+    """
+    _write_lock(home, {"pid": foreign_process.pid,
+                       "start": "epoch:1.0",
+                       "owner": "clawmetry-sync"})
+    # Simulate the tolerance race: start tokens appear to match even though
+    # foreign_process is not the daemon.
+    monkeypatch.setattr(
+        "clawmetry.process_control.verify_pid",
+        lambda pid, start: (True, "verified_epoch"),
+    )
+    assert sync._acquire_pid_lock() is True, (
+        "daemon was permanently locked out by a recycled pid whose start "
+        "token matched by chance but whose cmdline was foreign (#6553)"
+    )
+
+
 # ── Stalled-ingest recovery (#6565) ─────────────────────────────────────────
 def test_reclaims_a_holder_with_active_heartbeat_but_stalled_ingest(
         home, lookalike_daemon, monkeypatch):
