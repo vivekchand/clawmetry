@@ -1337,7 +1337,7 @@ def _cmd_connect(args) -> None:
         from clawmetry.license import auto_provision_pro
         _pro_installed, _pro_msg = auto_provision_pro(api_key, node_id)
         if _pro_installed:
-            print("  Pro adapters installed - all 33 runtimes available.")
+            print("  Pro adapters installed - all 32 runtimes available.")
         elif _pro_msg:
             # Entitled but the wheel could not be installed right now; surface a
             # quiet hint without alarming the user (connect still succeeded).
@@ -1618,19 +1618,11 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
 </plist>"""
             plist_path.parent.mkdir(parents=True, exist_ok=True)
             plist_path.write_text(plist)
-            uid = os.getuid()
-            r = _sp.run(
-                ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-                capture_output=True, check=False,
-            )
-            if r.returncode != 0:
-                # Already bootstrapped (e.g. re-onboard) — restart it; legacy
-                # load for pre-10.11 launchctl.
-                _sp.run(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
-                        capture_output=True, check=False)
-                _sp.run(["launchctl", "load", "-w", str(plist_path)],
-                        capture_output=True, check=False)
-            started = True
+            # bootout → bootstrap, so a re-onboard that changed the pinned
+            # interpreter is actually re-read. `kickstart -k` restarts the
+            # job launchd already holds in memory and would silently keep
+            # the stale ProgramArguments.
+            started = _launchd_reload(plist_path, label)
         except Exception:
             started = False
 
@@ -1719,8 +1711,12 @@ def _activate_signup_trial(deployment: str = "") -> bool:
         return False
 
 
-def _start_daemon(config: dict, args) -> None:
-    """Start the sync daemon (as background process or system service)."""
+def _start_daemon(config: dict, args) -> bool:
+    """Start the sync daemon (as background process or system service).
+
+    Returns False when the supervisor refused the job, so callers do not
+    print a success line over a daemon that never came up.
+    """
 
     system = __import__("platform").system()
 
@@ -1729,10 +1725,10 @@ def _start_daemon(config: dict, args) -> None:
         from clawmetry.sync import run_daemon
 
         run_daemon()
-        return
+        return True
 
     if system == "Darwin":
-        _register_launchd(config)
+        return _register_launchd(config)
     elif system == "Linux":
         _register_systemd(config)
     elif os.name == "nt":
@@ -1749,6 +1745,7 @@ def _start_daemon(config: dict, args) -> None:
             _start_subprocess()
     else:
         _start_subprocess()
+    return True
 
 
 def _cmd_sync(args) -> None:
@@ -1774,7 +1771,9 @@ def _cmd_sync(args) -> None:
     print(f"  {_verb} sync daemon for {config.get('node_id', '<unknown>')}…")
     # _start_daemon already bootout+bootstraps (launchd) / restarts (systemd),
     # so it is itself a safe restart — `--restart` just makes the intent explicit.
-    _start_daemon(config, args)
+    ok = _start_daemon(config, args)
+    if not ok:
+        sys.exit(1)
     if getattr(args, "restart", False):
         print("  ✅  Daemon restarted — re-checking entitlement & provisioning runtimes.")
     if not getattr(args, "foreground", False):
@@ -1891,7 +1890,70 @@ def _register_nemoclaw_sandbox_daemons() -> None:
         print(f"  ✅  Sandbox daemon registered (launchd: {label})")
 
 
-def _register_launchd(config: dict) -> None:
+def _launchd_reload(plist_path, label: str) -> bool:
+    """Load a (re)written LaunchAgent plist and report whether it took.
+
+    ``launchctl bootstrap`` FAILS when the label is already registered, and
+    the legacy ``load -w`` fallback fails too — while still exiting 0, so a
+    returncode check cannot see it. The practical effect is that a rewritten
+    plist is never re-read: launchd keeps the job definition it already has
+    in memory. ``kickstart -k`` does not help either; it restarts the OLD
+    definition. Only bootout → bootstrap makes launchd re-read the file.
+
+    That is why a daemon whose pinned interpreter lost the ``clawmetry``
+    package could not be repaired by `clawmetry sync --restart`: the fixed
+    plist landed on disk, launchd kept crash-looping the stale one, and we
+    printed a success line over it (founder live-hit 2026-10-14 — the node
+    sat dead for ~5h while the dashboard showed "Step: starting").
+
+    Returns True only when the job is actually registered afterwards.
+    """
+    import os as _os
+    import subprocess as _sp
+    import time as _time
+
+    uid = _os.getuid()
+    target = f"gui/{uid}"
+
+    # Unload first in case it was already registered, so bootstrap re-reads
+    # the plist (this is what re-pins a stale interpreter path).
+    _sp.run(
+        ["launchctl", "bootout", target, str(plist_path)],
+        capture_output=True,
+        check=False,
+    )
+
+    # bootout is asynchronous; bootstrapping too eagerly loses a race with
+    # the teardown ("Operation already in progress"). Retry briefly.
+    for attempt in range(5):
+        r = _sp.run(
+            ["launchctl", "bootstrap", target, str(plist_path)],
+            capture_output=True,
+            check=False,
+        )
+        if r.returncode == 0:
+            return True
+        _time.sleep(0.3 * (attempt + 1))
+
+    # Legacy launchctl (pre-10.11) has no bootstrap/bootout.
+    _sp.run(
+        ["launchctl", "load", "-w", str(plist_path)],
+        capture_output=True,
+        check=False,
+    )
+
+    # `load -w` exits 0 even when it failed, so trust only a real lookup.
+    return (
+        _sp.run(
+            ["launchctl", "print", f"{target}/{label}"],
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def _register_launchd(config: dict) -> bool:
     from clawmetry.sync import LOG_FILE
 
     label = "com.clawmetry.sync"
@@ -1934,24 +1996,27 @@ def _register_launchd(config: dict) -> None:
 
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_text(plist)
-    import subprocess as _sp
-    import os as _os
 
-    uid = _os.getuid()
-    # Use modern bootstrap (macOS 10.11+), fall back silently to legacy
-    r = _sp.run(
-        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-        capture_output=True,
-        check=False,
-    )
-    if r.returncode != 0:
-        _sp.run(
-            ["launchctl", "load", "-w", str(plist_path)],
-            capture_output=True,
-            check=False,
-        )
-    print(f"  Running in the background. {_daemon_mode_line(config)}")
-    print("  To stop: clawmetry disconnect")
+    if _launchd_reload(plist_path, label):
+        print(f"  Running in the background. {_daemon_mode_line(config)}")
+        print("  To stop: clawmetry disconnect")
+        return True
+    else:
+        # Never claim it is syncing when launchd did not take the job —
+        # a false "Running in the background" is how a dead daemon stays
+        # invisible for hours (founder live-hit 2026-10-14).
+        #
+        # Say that nothing is registered RIGHT NOW, because the reload
+        # unloaded the old job before trying to load the new one. The
+        # previous code could not make things worse (it never unloaded);
+        # this one can, for as long as it takes to try again, so the
+        # operator is told rather than left to infer it.
+        print("  ⚠️   Could not start the background helper.")
+        print("      No sync daemon is registered right now, so nothing")
+        print("      is being collected until this succeeds.")
+        print(f"      Check the log: {LOG_FILE}")
+        print("      Then try again: clawmetry sync --restart")
+        return False
 
 
 def _daemon_mode_line(config: dict) -> str:
@@ -4363,7 +4428,7 @@ def _cmd_onboard(args) -> None:
     print()
     print(f"  {BOLD('Plans')} {DIM('(same either way; each tier includes the one before):')}")
     print(f"    {DIM('Free    $0          watch OpenClaw + NVIDIA NemoClaw, forever')}")
-    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 33 runtimes')}")
+    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 32 runtimes')}")
     print(f"    {DIM('Pro    $19/node/mo  everything in Starter + governance (alerts, approvals, evals)')}")
     print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
@@ -8309,6 +8374,15 @@ def _cmd_export(args) -> None:
 
 def main() -> None:
     import argparse
+    if len(sys.argv) > 1 and sys.argv[1] == "jumper":
+        from clawmetry.physical_ai.cli import main as _jumper_cli
+        raise SystemExit(_jumper_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "asimov":
+        from clawmetry.asimov.cli import main as _asimov_cli
+        raise SystemExit(_asimov_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "robot":
+        from clawmetry.robotics import cli_main as _robot_cli
+        raise SystemExit(_robot_cli(sys.argv[2:]))
     # FAST PATH — `clawmetry hooks …` must dispatch before the dashboard
     # import below (~300ms): `hooks run pretooluse` executes on EVERY Claude
     # Code tool call, and a policy-miss must cost ~40ms, not a third of a

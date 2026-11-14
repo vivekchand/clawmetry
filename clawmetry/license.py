@@ -38,6 +38,10 @@ import base64
 import json
 import logging
 import os
+import errno
+import tempfile
+import time
+from contextlib import contextmanager
 
 logger = logging.getLogger("clawmetry.license")
 
@@ -119,6 +123,97 @@ def _file_permissions_safe(path: str) -> bool:
         mode = os.stat(path).st_mode & 0o777
         return (mode & _POSIX_GROUP_OTHER_BITS) == 0
     except Exception:
+        return True
+
+
+@contextmanager
+def _license_write_lock(path):
+    """Serialize activation and heartbeat writers on Windows/macOS/Linux.
+
+    Python documents fcntl.flock on POSIX and msvcrt.locking on Windows.
+    Use a separate stable inode because the key itself is atomically replaced.
+    A failed lock never falls through to an unprotected entitlement write.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path + '.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Another license update is in progress. Try again.') from exc
+                time.sleep(.025)
+        yield
+    finally:
+        try:
+            if acquired:
+                if os.name == 'nt':
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _store_license_key(key, *, path=None, payload=None):
+    """Atomically store a verified key; a trial cannot replace a paid key.
+
+    Returns False when a current paid license wins. Both activation and the
+    daemon heartbeat use this function, so the decision is atomic across their
+    separate processes rather than a check in the HTTP handler alone.
+    """
+    path = path or LICENSE_PATH
+    payload = payload or verify_token(key)
+    if not payload:
+        raise ValueError('Unrecognized license key.')
+    incoming_expiry = payload.get('exp')
+    if isinstance(incoming_expiry, (int, float)) and incoming_expiry < time.time():
+        raise ValueError('This license key has expired.')
+    with _license_write_lock(path):
+        try:
+            with open(path, encoding='utf-8') as fh:
+                existing = fh.read(8192).strip()
+        except (FileNotFoundError, UnicodeError):
+            existing = ''
+        current = verify_token(existing) if existing else None
+        expiry = current.get('exp') if current else None
+        incoming_trial = str(payload.get('tier', '')).strip().lower() == 'trial'
+        current_trial = current and str(current.get('tier', '')).strip().lower() == 'trial'
+        # parse_license treats every signed non-trial tier as paid (including
+        # forward-compatible aliases), so the writer must use that same rule.
+        if (incoming_trial and current and not current_trial
+                and (expiry is None or (isinstance(expiry, (int, float)) and expiry > time.time()))):
+            return False
+        if (incoming_trial and current_trial
+                and isinstance(expiry, (int, float)) and isinstance(incoming_expiry, (int, float))
+                and expiry > incoming_expiry and expiry > time.time()):
+            return False
+        if existing == key.strip():
+            return True
+        fd, temporary = tempfile.mkstemp(prefix='.license-', dir=os.path.dirname(path))
+        os.close(fd)
+        try:
+            _secure_write(temporary, key.strip() + '\n')
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         return True
 
 
@@ -371,7 +466,14 @@ def _purge_pro_from_memory() -> None:
         pass
 
 
-def deprovision_pro(reason: str = "") -> tuple[bool, str]:
+def _background_pro_changes_allowed() -> bool:
+    """An explicit update opt-out also protects the installed private package."""
+    return os.environ.get("CLAWMETRY_AUTO_UPDATE", "").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def deprovision_pro(reason: str = "", *, background: bool = False) -> tuple[bool, str]:
     """Remove the clawmetry-pro package from this machine.
 
     Called when an account's trial has demonstrably lapsed. Gating the paid
@@ -385,7 +487,13 @@ def deprovision_pro(reason: str = "") -> tuple[bool, str]:
     hole. Re-provisioning is automatic (``auto_provision_pro`` on the next
     entitled heartbeat, or ``activate``), so this is reversible by paying.
 
+    Background removal honors the package-update opt-out. Entitlement gates
+    still deny expired paid features when an operator retains package files.
+    Explicit removal keeps its existing behavior.
+
     Never raises. Returns (removed_something, status_message)."""
+    if background and not _background_pro_changes_allowed():
+        return False, "Automatic Pro package changes are disabled; entitlement limits still apply."
     import shutil
 
     removed = []
@@ -910,7 +1018,7 @@ def _download_and_install_pro(payload: dict) -> str:
         return f"clawmetry-pro install deferred ({exc})"
 
 
-def refresh_pro_from_license(node_id: str | None = None) -> tuple[bool, str]:
+def refresh_pro_from_license(node_id: str | None = None, *, background: bool = False) -> tuple[bool, str]:
     """SELF-HOSTED refresh: keep an activated node's clawmetry-pro current.
 
     ``_download_and_install_pro`` is reached only from :func:`activate_license`
@@ -937,6 +1045,8 @@ def refresh_pro_from_license(node_id: str | None = None) -> tuple[bool, str]:
             return False, ""            # no signed license — not this path
         if _offline_mode():
             return False, "offline mode: skipping clawmetry-pro refresh"
+        if background and not _background_pro_changes_allowed():
+            return False, "Automatic Pro package changes are disabled."
         before = _pro_installed_version()
         if not before:
             # Nothing installed: activation's own install path handles the
@@ -961,10 +1071,10 @@ def refresh_pro_from_license(node_id: str | None = None) -> tuple[bool, str]:
         return False, ""
 
 
-def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, str]:
+def auto_provision_pro(api_key: str, node_id: str | None = None, *, background: bool = False) -> tuple[bool, str]:
     """CLOUD ACCOUNT path, called by ``clawmetry connect`` after the cm_ key is
     saved. Ask the cloud whether this account is ENTITLED to clawmetry-pro and,
-    if so, download+install the wheel so the node gets all 33 runtimes.
+    if so, download+install the wheel so the node gets all 32 runtimes.
 
     HARD RULES enforced here:
       * Pro is installed ONLY for an entitled plan (Starter/Pro/Trial/
@@ -972,6 +1082,8 @@ def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, 
       * NEVER raises / NEVER blocks connect — any failure returns (False, msg)
         and the node continues on the free runtimes.
       * Idempotent — skips the download when clawmetry-pro is already current.
+      * Background calls honor CLAWMETRY_AUTO_UPDATE after checking entitlement;
+        explicit connect and update calls may still install the package.
       * The wheel is fetched only from our own HTTPS /api/license/download.
       * ``CLAWMETRY_OFFLINE=1`` skips the entitlement probe AND the wheel
         download — no outbound network is touched. Symmetric with
@@ -1012,6 +1124,8 @@ def auto_provision_pro(api_key: str, node_id: str | None = None) -> tuple[bool, 
             return False, ""
         if not ent.get("pro_available", True):
             return False, "Pro entitled, but the clawmetry-pro wheel is not yet published."
+        if background and not _background_pro_changes_allowed():
+            return bool(_pro_installed_version()), "Automatic Pro package changes are disabled."
         # 2) Entitled: download + install (idempotent, never-raise).
         url = base + "/api/license/download"
         msg = _provision_pro_wheel(url, headers=headers, node_id=node_id)
@@ -1148,7 +1262,8 @@ def activate(key: str, node_id: str | None = None, actor: str = "") -> tuple[boo
                 os.chmod(lic_dir, _LICENSE_DIR_MODE)
         except OSError:
             pass
-        _secure_write(LICENSE_PATH, key.strip() + "\n")
+        if not _store_license_key(key, payload=payload):
+            return True, "Your existing license remains active."
     except Exception as exc:
         _audit_license_event(
             "license.activate", result="write_error", actor=actor, payload=payload,

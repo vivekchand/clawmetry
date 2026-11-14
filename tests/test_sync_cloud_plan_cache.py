@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -33,9 +34,14 @@ def sync(monkeypatch, tmp_path):
 
     cache_path = str(tmp_path / ".clawmetry" / "cloud_plan.json")
     monkeypatch.setattr(s, "_CLOUD_PLAN_CACHE_PATH", cache_path)
+    monkeypatch.setattr(s, "_TRIAL_STATE_FILE_PATH", str(tmp_path / "trial_state.json"))
+    # Cache tests must not change the installed updater or provision a Pro wheel.
+    monkeypatch.setattr(s, "_sync_auto_update_with_plan", lambda *args, **kwargs: None)
     s._TRIAL_STATE["sync_allowed"] = True
     s._TRIAL_STATE["plan"] = None
     s._TRIAL_STATE["trial_days_left"] = None
+    s._TRIAL_STATE["trial_end"] = None
+    s._TRIAL_STATE["trial_used"] = None
     s._TRIAL_STATE["last_log_day"] = ""
 
     import clawmetry.entitlements as e
@@ -132,6 +138,78 @@ def test_persist_pro_has_no_expiry(sync):
     payload = json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())
     # Only trials get a derived expiry from trial_days_left.
     assert payload["expiry"] is None
+
+
+@pytest.mark.parametrize("as_iso", [False, True])
+@pytest.mark.parametrize("seconds_left,days_left", [(60 * 86400 - 60, 59), (3600, 0)])
+def test_trial_uses_exact_cloud_deadline(sync, as_iso, seconds_left, days_left):
+    deadline = round(time.time() + seconds_left, 6)
+    raw = datetime.fromtimestamp(deadline, timezone.utc).isoformat() if as_iso else deadline
+    sync._persist_cloud_plan_to_disk(
+        "trial", trial_days_left=days_left, trial_end=raw, trial_used=True,
+    )
+    payload = json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())
+    assert payload["expiry"] == deadline
+    assert payload["trial_end"] == deadline
+
+
+@pytest.mark.parametrize("previous_expiry", [None, "rounded"])
+def test_existing_trial_cache_repairs_rounded_or_missing_expiry(sync, previous_expiry):
+    deadline = time.time() + 3600
+    os.makedirs(os.path.dirname(sync._CLOUD_PLAN_CACHE_PATH), exist_ok=True)
+    with open(sync._CLOUD_PLAN_CACHE_PATH, "w") as fh:
+        json.dump({
+            "plan": "trial", "node_limit": 1, "trial_used": True,
+            "trial_end": deadline,
+            "expiry": deadline - 86400 if previous_expiry == "rounded" else None,
+        }, fh)
+    sync._persist_cloud_plan_to_disk(
+        "trial", trial_days_left=0, trial_end=deadline, trial_used=True,
+    )
+    assert json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())["expiry"] == deadline
+
+
+def test_exact_trial_deadline_does_not_rewrite_each_heartbeat(sync, monkeypatch):
+    deadline = time.time() + 3600
+    sync._persist_cloud_plan_to_disk("trial", 0, deadline, True)
+    replacements = []
+    monkeypatch.setattr(sync.os, "replace", lambda *args: replacements.append(args))
+    sync._persist_cloud_plan_to_disk("trial", 0, deadline, True)
+    assert replacements == []
+    assert not os.path.exists(sync._CLOUD_PLAN_CACHE_PATH + ".tmp")
+
+
+@pytest.mark.parametrize("plan", ["pro", "starter", "enterprise"])
+def test_old_trial_deadline_never_expires_a_purchased_subscription(sync, plan):
+    sync._persist_cloud_plan_to_disk(plan, 0, time.time() - 86400, True)
+    assert json.loads(open(sync._CLOUD_PLAN_CACHE_PATH).read())["expiry"] is None
+
+
+def test_extended_trial_survives_expired_signup_license_then_expires_offline(sync, monkeypatch):
+    import clawmetry.entitlements as e
+    import clawmetry.trial_enforcement as te
+
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+    monkeypatch.setenv("CLAWMETRY_HARD_BLOCK", "1")
+    signup_license = e._build(e.TIER_TRIAL, "license", node_limit=1, expiry=time.time() - 1)
+    monkeypatch.setattr(e, "_read_local_license", lambda: signup_license)
+    deadline = time.time() + 60 * 86400
+    sync._persist_cloud_plan_to_disk("trial", 59, deadline, True)
+    ent = e.get_entitlement(force=True)
+    assert ent.source == "cloud"
+    assert ent.expiry == deadline
+    assert ent.allows_feature("robotics")
+    assert not te.is_hard_blocked(ent)
+
+    # The persisted deadline alone enforces expiry without another heartbeat.
+    monkeypatch.setattr(e.time, "time", lambda: deadline + 1)
+    ent = e.get_entitlement(force=True)
+    assert ent.expired
+    assert not ent.allows_feature("robotics")
+    assert ent.allows_runtime("openclaw")
+    assert te.is_hard_blocked(ent)
+    cloud = e._read_cloud_plan()
+    assert cloud.expired and not cloud.allows_feature("robotics")
 
 
 def test_persist_is_atomic_no_partial_file(sync):

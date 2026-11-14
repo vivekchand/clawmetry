@@ -98,6 +98,10 @@ def test_snapshot_happy_path_no_dlq(tmp_path, monkeypatch):
         assert posted[0][0] == "/ingest/system-snapshot"
         assert posted[0][1]["encrypted"] is True
         assert isinstance(posted[0][1]["blob"], str)
+        payload = sync.decrypt_payload(posted[0][1]["blob"], _minimal_config()["encryption_key"])
+        assert "ui" not in posted[0][1], "UI capabilities must stay inside encryption"
+        assert payload["ui"]["navigation"][0]["view_group"] == "physical_ai"
+        assert {item["id"] for item in payload["ui"]["physical_ai_hardware"]} == {"jumper", "asimov_1"}
     finally:
         try:
             store.stop(flush=False)
