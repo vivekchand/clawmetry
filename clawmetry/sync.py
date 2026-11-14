@@ -26969,6 +26969,14 @@ def run_daemon() -> None:
                 log.debug("talk-lifecycle tick error (non-fatal): %s", _e_tk)
 
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
+            # field-failure daemon_ingest_stalled (#6513 and siblings): mirror
+            # the cycle completion directly into the in-process watchdog so
+            # that a persistent save_state() failure (disk full, permission
+            # error) cannot make _report_if_ingest_stalled() believe the
+            # daemon has gone quiet. Dict-item assignment is GIL-atomic, so no
+            # extra lock is needed for the cross-thread write.
+            _STALL_WATCH["last_sync"] = state["last_sync"]
+            _STALL_WATCH["since_mono"] = time.monotonic()
             # Audit fix (2026-05-17): force a synchronous local-store flush
             # BEFORE persisting the cursor state. Belt-and-suspenders to
             # ``_flush_session_batch``'s own per-batch flush — covers any
