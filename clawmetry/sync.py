@@ -23403,8 +23403,8 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         observed_at=int(now * 1000))
         except Exception as exc:
             log.warning("Incident reconciliation unavailable for %s: %s", sid, exc, exc_info=True)
+        from clawmetry.incident_store import DURABLE_KINDS, SECURITY_EPISODE_KINDS as _SEC_KINDS
         if hasattr(store, "record_incident_observation"):
-            from clawmetry.incident_store import DURABLE_KINDS, SECURITY_EPISODE_KINDS as _SEC_KINDS
             # Both producers share one durable graph. The filter depends on
             # whether the scan completed. A complete scan that returned no
             # episode for a DURABLE_KIND means the write failed — that kind
@@ -23567,6 +23567,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         # loop_signals and joins on incident_id when present.
                         "incident_id": inc.get("incident_id"),
                         "state": inc.get("incident_state"),
+                        "node_id": inc.get("node_id"),
                     },
                 )
                 memo[memo_key] = now
