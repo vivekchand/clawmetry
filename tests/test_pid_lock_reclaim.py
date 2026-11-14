@@ -37,6 +37,10 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "_lock_identity_file",
                         lambda: tmp_path / ".clawmetry" / "sync.lock.json",
                         raising=False)
+    # STATE_FILE is a module-level Path constant computed from Path.home() at
+    # import time; redirect it so tests never read/write the real sync state.
+    monkeypatch.setattr(sync, "STATE_FILE",
+                        tmp_path / ".clawmetry" / "sync-state.json")
     yield tmp_path
     sync._release_pid_lock()
 
@@ -231,6 +235,75 @@ def test_an_unreadable_command_line_does_not_condemn_the_holder(home,
     # Lock file written now, so the started-after-lock proof does not apply.
     os.utime(path, None)
     assert sync._acquire_pid_lock() is False
+
+
+# ── Stalled-ingest recovery (#6565) ─────────────────────────────────────────
+def test_reclaims_a_holder_with_active_heartbeat_but_stalled_ingest(
+        home, lookalike_daemon, monkeypatch):
+    """Field-failure #6565 / #6553: daemon_lock_refused / daemon_ingest_stalled.
+
+    A daemon whose heartbeat thread keeps ticking (so the lock appears held and
+    healthy) but whose ingest loop has been stuck for the full stall window must
+    be treated as wedged.  Without this, supervisor restarts loop forever: the
+    heartbeat is fresh, _lock_holder_verdict returns "held", and the stall never
+    self-heals until the 15-minute heartbeat timeout fires — but the heartbeat
+    thread is STILL running, so the timeout never fires either.
+    """
+    import datetime
+    import json as _json
+
+    monkeypatch.setattr(sync, "_STALLED_INGEST_SECS", 60.0)
+    _write_lock(home, {"pid": lookalike_daemon.pid,
+                       "start": sync._proc_start_token_safe(lookalike_daemon.pid),
+                       "owner": "clawmetry-sync"})
+    # Fresh heartbeat — daemon is alive and scheduling.
+    hb = home / ".clawmetry" / "sync.heartbeat"
+    hb.write_text("1")
+
+    # Lock file appears old (> stall window) so the age guard doesn't mask it.
+    pid_path = home / ".clawmetry" / "sync.pid"
+    old = time.time() - 7200
+    os.utime(pid_path, (old, old))
+
+    # State file has a last_sync from 2 hours ago — ingest is stalled.
+    stale_ts = (datetime.datetime.now(datetime.timezone.utc)
+                - datetime.timedelta(hours=2)).isoformat()
+    state_path = home / ".clawmetry" / "sync-state.json"
+    state_path.write_text(_json.dumps({"last_sync": stale_ts}))
+
+    assert sync._acquire_pid_lock() is True, (
+        "daemon was permanently locked out by a running-but-stuck holder (#6565)"
+    )
+    assert lookalike_daemon.poll() is not None, (
+        "stall-wedged holder was not stopped before the lock was reclaimed"
+    )
+
+
+def test_a_fresh_daemon_with_stale_last_sync_is_not_wedged(
+        home, lookalike_daemon, monkeypatch):
+    """A daemon that just started (lock age < stall window) must not be killed
+    even when last_sync is old: it has not had time to stall yet."""
+    import datetime
+    import json as _json
+
+    monkeypatch.setattr(sync, "_STALLED_INGEST_SECS", 60.0)
+    _write_lock(home, {"pid": lookalike_daemon.pid,
+                       "start": sync._proc_start_token_safe(lookalike_daemon.pid),
+                       "owner": "clawmetry-sync"})
+    hb = home / ".clawmetry" / "sync.heartbeat"
+    hb.write_text("1")
+    # Lock file is FRESH (just claimed) — daemon just started.
+    # pid_path mtime is already "now" because _write_lock just wrote it.
+
+    stale_ts = (datetime.datetime.now(datetime.timezone.utc)
+                - datetime.timedelta(hours=2)).isoformat()
+    state_path = home / ".clawmetry" / "sync-state.json"
+    state_path.write_text(_json.dumps({"last_sync": stale_ts}))
+
+    assert sync._acquire_pid_lock() is False, (
+        "a freshly started daemon was wrongly killed because its last_sync was old"
+    )
+    assert lookalike_daemon.poll() is None
 
 
 # ── Linux zombie regression (#6271) ─────────────────────────────────────────

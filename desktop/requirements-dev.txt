@@ -2,7 +2,24 @@
 # clawmetry itself; only needed when running `python -m desktop.tray`
 # or building the .app / .exe bundles.
 pystray>=0.19.5
-Pillow>=12.3.0
+# Floors track the hash-pinned set the bundles are actually built from
+# (.github/requirements/desktop-bundle.txt: pillow==13.0.0,
+# certifi==2026.10.19). They were last written on 2026-10-25 as whatever
+# was current that day, and drifted: Pillow 12.3.0 is named by 62 published
+# advisories and certifi 2026.7.22 by two.
+#
+# This file gets NO advisory verdict in CI. It is declared UNAUDITABLE in
+# .github/requirements/audit-acceptance.json, because PyGObject's sdist
+# metadata needs girepository-2.0 and pip cannot resolve the set on a bare
+# runner -- so nothing catches a floor that has gone bad here. The bundle
+# jobs install the pinned set instead, which is why no build ever saw this.
+# The exposure is the documented local path in README.md:
+# `pip install -r desktop/requirements-dev.txt`.
+#
+# Pillow 13.0.0 is Python >=3.11, which is the floor the desktop shell
+# already states (README.md: "install python.org 3.11+ then relaunch") and
+# the version all three bundle jobs build on.
+Pillow>=13.0.0
 # Native window (WKWebView on macOS, EdgeWebView2 on Windows, GTK
 # webkit2 on Linux). Uses the OS's own webview engine, so the bundle
 # stays small — no Chromium ships inside the .app.
@@ -44,5 +61,5 @@ pyinstaller>=6.22.3
 # Python 3.10+ only. Without either, the bundled Python's OpenSSL
 # has NO configured CA bundle and every HTTPS POST from the shell
 # fails CERTIFICATE_VERIFY_FAILED (support 2026-08-12 "Send code").
-certifi>=2026.7.22
+certifi>=2026.10.19
 truststore>=0.10; python_version >= "3.10"
