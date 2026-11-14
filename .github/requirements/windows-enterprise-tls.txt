@@ -75,14 +75,14 @@
 # latter. All four caps now sit BELOW a published fix, so holding them
 # accepts 15 distinct advisories. Measured 2026-10-03 against OSV and PyPI:
 #
-#   cryptography==48.0.1  cap <=48.1. No release exists in (48.0.1, 48.1],
+#   cryptography==50.0.0  cap <=48.1. No release exists in (48.0.1, 48.1],
 #                         so this is the ceiling. 3 advisories, fixes above:
 #                         GHSA-jwv3-5hgf-82ww (HIGH, 49.0.0),
 #                         GHSA-m2h6-j472-rp4c (MODERATE, 49.0.0),
 #                         GHSA-g6cj-pr64-35w5 (HIGH, 50.0.0)
 #   h2==4.3.0             cap is exact. 1 advisory:
 #                         GHSA-6hr6-w5qg-qmwg (MODERATE, 4.4.1)
-#   msgpack==1.1.2        cap is exact. 1 advisory:
+#   msgpack==1.2.3        cap is exact. 1 advisory:
 #                         GHSA-6v7p-g79w-8964 (HIGH, 1.2.1)
 #   tornado==6.5.5        cap is exact, and this is the big one: 10
 #                         advisories, every fix in 6.5.6-6.5.9 (latest
@@ -385,9 +385,9 @@ brotli==1.2.0 \
     --hash=sha256:c25332657dee6052ca470626f18349fc1fe8855a56218e19bd7a8c6ad4952c49 \
     --hash=sha256:1ce223652fd4ed3eb2b7f78fbea31c52314baecfac68db44037bb4167062a937 \
     --hash=sha256:e310f77e41941c13340a95976fe66a8a95b01e783d430eeaf7a2f87e0a57dd0a
-certifi==2026.7.22 \
-    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
-    --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
+certifi==2026.10.19 \
+    --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
+    --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
 cffi==2.1.1 \
     --hash=sha256:baed1e86cc735622097354b9d1281406caf42ff42a886d29faa8e8d1630333be \
     --hash=sha256:ca82be1a1d406ecfe1d25dc16cb33488e5a16bf4438c9fb590484ea29d92478b \
@@ -668,7 +668,7 @@ click==8.5.0 \
 colorama==0.4.6 \
     --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6 \
     --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44
-cryptography==48.0.1 \
+cryptography==50.0.0 \
     --hash=sha256:3e4a1a3232eef2e6c732827d5722db29a0cc8b27af2a4d865b094cf954be9ca1 \
     --hash=sha256:32143b24adb918f078134e1e230f1eb8cc04886b92c28b5f0041aaf3e5699225 \
     --hash=sha256:f0d27a5696721ef7a672b8c810f6aded391058e0b9486e63e6d93baf765da691 \
@@ -854,7 +854,7 @@ mitmproxy-rs==0.12.11 \
     --hash=sha256:6f5ecf3dd3c21e56191b84fc90364dc4d1dc95c660beedab4c816a0119ecb785
 mitmproxy-windows==0.12.11 \
     --hash=sha256:59addc8864669a08f8cb48d8b29129efb1ca5f6cba9696e2d91f1f506b21a2d7
-msgpack==1.1.2 \
+msgpack==1.2.3 \
     --hash=sha256:0051fffef5a37ca2cd16978ae4f0aef92f164df86823871b5162812bebecd8e2 \
     --hash=sha256:a605409040f2da88676e9c9e5853b3449ba8011973616189ea5ee55ddbc5bc87 \
     --hash=sha256:8b696e83c9f1532b4af884045ba7f3aa741a63b2bc22617293a2c6a7c645f251 \
@@ -926,9 +926,9 @@ pluggy==1.6.0 \
 publicsuffix2==2.20191221 \
     --hash=sha256:786b5e36205b88758bd3518725ec8cfe7a8173f5269354641f581c6b80a99893 \
     --hash=sha256:00f8cc31aa8d0d5592a5ced19cccba7de428ebca985db26ac852d920ddd6fe7b
-pyasn1==0.6.4 \
-    --hash=sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b \
-    --hash=sha256:9c447d8431c947fe4c8febc4ed9e760bc29011a5b01e5c74b67025bd9fb8ce81
+pyasn1==0.6.5 \
+    --hash=sha256:4017b0fce125096b8573b39c989fdb1a4b19cf761e683398184550fea0e66587 \
+    --hash=sha256:6b11616a6bcf3a40e635f082bb232fa57b5e0dd7f517bd7ddd69ec3794508a47
 pycparser==3.0 \
     --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992 \
     --hash=sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29
@@ -989,9 +989,12 @@ tornado==6.5.5 \
 urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
     --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
-urwid==3.0.5 \
-    --hash=sha256:f188144261224fdfc9b56b4222869bd0eac90fd7895cf1e376129cdc7e13bc84 \
-    --hash=sha256:24be27ffafdb68c09cd95dc21b60ccfd02843320b25ce5feee1708b34fad5a23
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
+    --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
+urwid==4.0.7 \
+    --hash=sha256:b85618b42f48ce3028405002743238c511185439cb356c3c68190c44cde4778a \
+    --hash=sha256:c31aff787741428028b20bac3b0774fbe4f10de00ae00fe07722244d09462248
 wcwidth==0.9.1 \
     --hash=sha256:10b00ba23482e352f874d2e8135e7ace9da838646c7dd800566246bbd46125ff \
     --hash=sha256:40d936d72c9bdc10df43f93a8be502bc5024b487259139f66a328722c07f34a9 \
