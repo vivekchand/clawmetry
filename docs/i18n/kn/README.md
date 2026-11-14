@@ -16,7 +16,7 @@
 ಟೂಲ್ ಕರೆಗಳು, ಹಾಗೂ ರನ್‌ಟೈಮ್ ಬಹಿರಂಗಪಡಿಸುವ ಯಾವುದೇ ಟೋಕನ್ ಮತ್ತು ವೆಚ್ಚದ ಡೇಟಾವನ್ನು ಒಂದೇ
 ವೀಕ್ಷಣೆಯಲ್ಲಿ ಇಡುತ್ತದೆ — ಇದರಿಂದ ಕೆಲಸ ಮಾಡುತ್ತಿರುವ ದೀರ್ಘ ರನ್ ಮತ್ತು ಸಿಕ್ಕಿಹಾಕಿಕೊಂಡಿರುವ ರನ್ ನಡುವೆ ವ್ಯತ್ಯಾಸ ಗುರುತಿಸಬಹುದು.
 
-**33 AI ಏಜೆಂಟ್ ರನ್‌ಟೈಮ್‌ಗಳ** ಜೊತೆ ಕಾರ್ಯನಿರ್ವಹಿಸುತ್ತದೆ — Claude Code, OpenAI Codex, Hermes, OpenClaw ಮತ್ತು ಇನ್ನೂ 29. ನಿಮ್ಮ ಸಂಪೂರ್ಣ ಏಜೆಂಟ್ ಫ್ಲೀಟ್‌ಗೆ ಒಂದೇ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್. ([ಪೂರ್ಣ ಪಟ್ಟಿ](SUPPORTED_RUNTIMES.txt), ಕ್ಯಾಟಲಾಗ್‌ನಿಂದ ಜನರೇಟ್ ಮಾಡಲಾಗಿದೆ.)
+**32 AI ಏಜೆಂಟ್ ರನ್‌ಟೈಮ್‌ಗಳ** ಜೊತೆ ಕಾರ್ಯನಿರ್ವಹಿಸುತ್ತದೆ — Claude Code, OpenAI Codex, Hermes, OpenClaw ಮತ್ತು ಇನ್ನೂ 28. ನಿಮ್ಮ ಸಂಪೂರ್ಣ ಏಜೆಂಟ್ ಫ್ಲೀಟ್‌ಗೆ ಒಂದೇ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್. ([ಪೂರ್ಣ ಪಟ್ಟಿ](SUPPORTED_RUNTIMES.txt), ಕ್ಯಾಟಲಾಗ್‌ನಿಂದ ಜನರೇಟ್ ಮಾಡಲಾಗಿದೆ.)
 
 > 🌐 **ಇದನ್ನು ಓದಿ:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [ಇನ್ನೂ ಹೆಚ್ಚು →](docs/i18n/)
 
@@ -47,11 +47,11 @@ pip install clawmetry && clawmetry
 ತಡೆಯಲು ಸಾಧ್ಯವಾಗುವುದಕ್ಕೆ ಸಮಾನವಲ್ಲ ([ಯಾವ ನಿಯಂತ್ರಣಗಳು ನಿಜ, ಪ್ರತಿ ರನ್‌ಟೈಮ್‌ಗೆ](docs/APPROVALS.md)).
 
 
-## 33 ಏಜೆಂಟ್ ರನ್‌ಟೈಮ್‌ಗಳ ಜೊತೆ ಕಾರ್ಯನಿರ್ವಹಿಸುತ್ತದೆ
+## 32 ಏಜೆಂಟ್ ರನ್‌ಟೈಮ್‌ಗಳ ಜೊತೆ ಕಾರ್ಯನಿರ್ವಹಿಸುತ್ತದೆ
 
 **ಓಪನ್ ಸೋರ್ಸ್ ಆಪ್‌ನಲ್ಲಿ ಉಚಿತ:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
-**ಪೇಯ್ಡ್ ಪ್ಲಾನ್‌ನಲ್ಲಿ:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · ⠿ **[OpenDots](https://clawmetry.com/runtimes/opendots)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**ಪೇಯ್ಡ್ ಪ್ಲಾನ್‌ನಲ್ಲಿ:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 ಪ್ರತಿ ರನ್‌ಟೈಮ್‌ಗೆ ಅದೇ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್ ಸಿಗುತ್ತದೆ. ಹಲವಾರನ್ನು ಒಂದೇ ಬಾರಿಗೆ ರನ್ ಮಾಡಿ ಮತ್ತು ಹೆಡರ್
 ಸ್ವಿಚರ್ ಪ್ರತಿ ಟ್ಯಾಬ್ ಅನ್ನು ಅವುಗಳಲ್ಲಿ ಒಂದಕ್ಕೆ ಮರು-ಸ್ಕೋಪ್ ಮಾಡುತ್ತದೆ.
@@ -80,7 +80,7 @@ SDK ಬಳಸಿ ನಿಮ್ಮದೇ ಏಜೆಂಟ್ ನಿರ್ಮಿಸ�
 ಬಳಕೆಯ ಶೇಕಡಾವಾರು ಪ್ರಮಾಣವು ಅದು ಯಾವುದರಿಂದ ಭಾಗಿಸುತ್ತದೆ ಎಂಬುದಕ್ಕೆ ಮಾತ್ರ ಪ್ರಾಮಾಣಿಕವಾಗಿರುತ್ತದೆ. ClawMetry
 [ಓದಬಹುದಾದ ಮತ್ತು PR ಮಾಡಬಹುದಾದ ಟೇಬಲ್‌ನಿಂದ](clawmetry/context_windows.py)
 ಪ್ರತಿ ಪ್ರೊವೈಡರ್‌ಗೆ ವಿಂಡೋ ಗಾತ್ರ ನಿಗದಿ ಮಾಡುತ್ತದೆ, ಇದು Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama ಮತ್ತು GLM ಅನ್ನು ಒಳಗೊಂಡಿದೆ. ಇದು ಎಲ್ಲಾ 33
+DeepSeek, Kimi, Qwen, Mistral, Llama ಮತ್ತು GLM ಅನ್ನು ಒಳಗೊಂಡಿದೆ. ಇದು ಎಲ್ಲಾ 32
 ರನ್‌ಟೈಮ್‌ಗಳನ್ನು ಒಂದೇ ವೆಂಡರ್‌ನ ಸ್ಕೇಲ್‌ನಲ್ಲಿ ಅಳೆಯುವುದಿಲ್ಲ. ಇದು ಮುಖ್ಯ: Anthropic ನ 200K ಗೆ ಹೋಲಿಸಿ ಲೆಕ್ಕ ಹಾಕಿದ
 300K GPT-5 ಟರ್ನ್ ">100%, ಬ್ಲೋನ್" ಎಂದು ಓದುತ್ತದೆ, ಆದರೆ ಅದು ನಿಜವಾಗಿಯೂ GPT-5 ನ 400K ನ 75% ನಲ್ಲಿದೆ.
 ಅದೇ ಸ್ಕೇಲ್ ನಿಜವಾಗಿ ಓವರ್‌ಫ್ಲೋ ಆಗಿರುವ 130K DeepSeek ಟರ್ನ್ ಅನ್ನು ಅನುಕೂಲಕರ 65% ಎಂದು ಮರೆಮಾಡುತ್ತದೆ.
@@ -99,7 +99,7 @@ ClawMetry ಕೆಲವು ರನ್‌ಟೈಮ್‌ಗಳಲ್ಲಿ ಮಾ�
 
 | ಪಾತ್ | ನಿಮ್ಮ ಏಜೆಂಟ್‌ಗೆ ಸೇರಿಸಲಾಗಿದೆ | ಡಿಫಾಲ್ಟ್? |
 |---|---|---|
-| ಸೆಷನ್-ಫೈಲ್ ಟೈಲಿಂಗ್ (ಎಲ್ಲಾ 33 ರನ್‌ಟೈಮ್‌ಗಳು) | **0**. ಪ್ರತ್ಯೇಕ ಪ್ರಕ್ರಿಯೆ, ನಿಮ್ಮ ಏಜೆಂಟ್‌ನಲ್ಲಿ ಯಾವುದೇ ClawMetry ಕೋಡ್ ಇಲ್ಲ | ಆನ್ |
+| ಸೆಷನ್-ಫೈಲ್ ಟೈಲಿಂಗ್ (ಎಲ್ಲಾ 32 ರನ್‌ಟೈಮ್‌ಗಳು) | **0**. ಪ್ರತ್ಯೇಕ ಪ್ರಕ್ರಿಯೆ, ನಿಮ್ಮ ಏಜೆಂಟ್‌ನಲ್ಲಿ ಯಾವುದೇ ClawMetry ಕೋಡ್ ಇಲ್ಲ | ಆನ್ |
 | HTTP ಇಂಟರ್‌ಸೆಪ್ಟರ್ (`CLAWMETRY_INTERCEPT=1`) | ಪ್ರತಿ LLM ಕರೆಗೆ **+0.44 ms**, ಅಥವಾ 5s ಕರೆಯ 0.009% | ಆಫ್ |
 | ಪ್ರೀ-ಟೂಲ್ ಹುಕ್ ಗೇಟ್ (ವಾರ್ಮ್ ಕ್ಯಾಶ್) | 36 ms ಇಂಟರ್‌ಪ್ರೆಟರ್ ಫ್ಲೋರ್‌ಗಿಂತ ಹೆಚ್ಚು, ಪ್ರತಿ ಗೇಟೆಡ್ ಟೂಲ್ ಕರೆಗೆ **+44 ms** | ಆಫ್ |
 | ಜಾರಿ ಪ್ರಾಕ್ಸಿ | ಪ್ರತಿ LLM ಕರೆಗೆ **+9.7 ms** | ಆಫ್ |
