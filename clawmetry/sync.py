@@ -23405,13 +23405,15 @@ def _emit_detector_incidents(store, state: dict) -> int:
             log.warning("Incident reconciliation unavailable for %s: %s", sid, exc, exc_info=True)
         if hasattr(store, "record_incident_observation"):
             from clawmetry.incident_store import DURABLE_KINDS
-            # Both producers share one durable graph. A failed or uncertain
-            # observation cannot fall back to an unscoped live signal or act
-            # through the periodic path after the incremental path withheld it.
+            # Both producers share one durable graph. Only suppress the legacy
+            # live-signal path when the incremental path has ALREADY seen the
+            # kind AND explicitly withheld it (episode exists but is not active).
+            # With no episode at all the incremental path has not spoken, so the
+            # periodic path must still write the legacy signal.
             incidents = [inc for inc in incidents
                          if inc.get("kind") not in DURABLE_KINDS
-                         or (inc.get("kind") in episodes
-                             and episodes[inc["kind"]].get("state") == "active")]
+                         or inc.get("kind") not in episodes
+                         or episodes[inc["kind"]].get("state") == "active"]
         if incidents:
             all_incidents.extend(incidents)
             # Remember when this session FIRST looked wrong, so the next tick
