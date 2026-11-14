@@ -23405,15 +23405,23 @@ def _emit_detector_incidents(store, state: dict) -> int:
             log.warning("Incident reconciliation unavailable for %s: %s", sid, exc, exc_info=True)
         if hasattr(store, "record_incident_observation"):
             from clawmetry.incident_store import DURABLE_KINDS
-            # Both producers share one durable graph. Only suppress the legacy
-            # live-signal path when the incremental path has ALREADY seen the
-            # kind AND explicitly withheld it (episode exists but is not active).
-            # With no episode at all the incremental path has not spoken, so the
-            # periodic path must still write the legacy signal.
-            incidents = [inc for inc in incidents
-                         if inc.get("kind") not in DURABLE_KINDS
-                         or inc.get("kind") not in episodes
-                         or episodes[inc["kind"]].get("state") == "active"]
+            # Both producers share one durable graph. The filter depends on
+            # whether the scan completed. A complete scan that returned no
+            # episode for a DURABLE_KIND means the write failed — that kind
+            # must be suppressed so a notification cannot precede durable
+            # evidence (AC-GOV-SBG-002.2). An incomplete scan cannot speak
+            # for the durable path, so the legacy live-signal path is kept
+            # for all kinds not yet written to the episode table.
+            if inspection_complete:
+                incidents = [inc for inc in incidents
+                             if inc.get("kind") not in DURABLE_KINDS
+                             or (inc.get("kind") in episodes
+                                 and episodes[inc["kind"]].get("state") == "active")]
+            else:
+                incidents = [inc for inc in incidents
+                             if inc.get("kind") not in DURABLE_KINDS
+                             or inc.get("kind") not in episodes
+                             or episodes[inc["kind"]].get("state") == "active"]
         if incidents:
             all_incidents.extend(incidents)
             # Remember when this session FIRST looked wrong, so the next tick
@@ -23503,17 +23511,19 @@ def _emit_detector_incidents(store, state: dict) -> int:
             except Exception as _ie:  # noqa: BLE001
                 log.debug("detectors: alert delivery skipped: %s", _ie)
             try:
-                # A persisted episode owns its compatibility projection. The
-                # legacy write below is only for unmigrated/older producers.
-                if kind in episodes:
-                    if delivered_via:
-                        inc["delivered_via"] = delivered_via
-                        store.record_incident_observation(
-                            incident=inc, node_id=episodes[kind]["node_id"],
-                            observed_at=int(now * 1000))
-                    memo[memo_key] = now
-                    emitted += 1
-                    continue
+                # When a durable episode exists and delivery went somewhere,
+                # stamp the channel onto the episode so the audit row is
+                # complete. This does NOT own the loop_signals projection —
+                # _project_incident_locked handles that inside
+                # record_incident_observation, but loop_signals is also the
+                # real-time index for the guard/sessions tab, and it needs an
+                # explicit write here so the tab sees the row on this tick
+                # regardless of whether a durable episode exists yet.
+                if kind in episodes and delivered_via:
+                    inc["delivered_via"] = delivered_via
+                    store.record_incident_observation(
+                        incident=inc, node_id=episodes[kind]["node_id"],
+                        observed_at=int(now * 1000))
                 store.ingest_loop_signal(
                     session_id=sid,
                     # Stable per-kind signature so a re-emit UPSERTs the same row
@@ -23545,6 +23555,11 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         "observation": inc.get("observation"),
                         # Framework references, as stamped when it was found.
                         "frameworks": inc.get("frameworks"),
+                        # Durable episode identity, when this kind was
+                        # successfully persisted. Guard/sessions reads
+                        # loop_signals and joins on incident_id when present.
+                        "incident_id": inc.get("incident_id"),
+                        "state": inc.get("incident_state"),
                     },
                 )
                 memo[memo_key] = now
