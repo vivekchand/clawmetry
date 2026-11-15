@@ -356,3 +356,49 @@ def test_linux_zombie_pid_does_not_block_lock(home, foreign_process, monkeypatch
     assert sync._acquire_pid_lock() is True, (
         "daemon was permanently locked out by a zombie holding its PID (#6271)"
     )
+
+
+# ── Darwin start-unverifiable regression (#6548) ────────────────────────────
+def test_unverifiable_start_falls_back_to_cmdline_not_stale(
+        home, lookalike_daemon, monkeypatch):
+    """Field-failure #6548: daemon_lock_refused on Darwin (py3.13).
+
+    When verify_pid cannot read the live process's start time (ps -o lstart=
+    fails under resource pressure), it returns start_unverifiable.  The lock
+    must NOT be declared stale: unlinking a live daemon's lock causes a
+    reclaim loop that ends with daemon_lock_refused after 8 retries.
+
+    Instead, fall through to the cmdline defence-in-depth check.  Here the
+    lookalike daemon's argv contains "clawmetry" + "sync", so the check
+    returns "ours" and the lock stays held.
+    """
+    _write_lock(home, {"pid": lookalike_daemon.pid,
+                       "start": "epoch:1",
+                       "owner": "clawmetry-sync"})
+    monkeypatch.setattr(
+        "clawmetry.process_control.verify_pid",
+        lambda pid, start: (False, "start_unverifiable"),
+    )
+    assert sync._acquire_pid_lock() is False, (
+        "daemon incorrectly reclaimed a live daemon's lock when start token "
+        "was unreadable (#6548)"
+    )
+    assert lookalike_daemon.poll() is None
+
+
+def test_unverifiable_start_with_foreign_cmdline_is_still_stale(
+        home, foreign_process, monkeypatch):
+    """Companion to #6548: when start is unverifiable but the cmdline is
+    positively not ours, the lock is a recycled pid and should be reclaimed.
+    The fall-through to cmdline check must not protect foreign processes."""
+    _write_lock(home, {"pid": foreign_process.pid,
+                       "start": "epoch:1",
+                       "owner": "clawmetry-sync"})
+    monkeypatch.setattr(
+        "clawmetry.process_control.verify_pid",
+        lambda pid, start: (False, "start_unverifiable"),
+    )
+    assert sync._acquire_pid_lock() is True, (
+        "daemon kept a stale foreign-process lock held when start was "
+        "unverifiable and cmdline was clearly not ours (#6548)"
+    )
