@@ -105,7 +105,7 @@
     head.append(el('p', [data.scope.runtime, data.scope.session_id, 'Node ' + data.scope.node_id].join(' · '), 'investigation-scope'));
     var states = el('div', undefined, 'investigation-states');
     var findingState = el('span', 'Finding: ' + incidentState(incident), 'investigation-state'); findingState.id = 'investigation-finding-state';
-    var executionState = el('span', 'Execution: ' + ((data.execution || {}).status || 'unknown')); executionState.id = 'investigation-execution-state';
+    var executionState = el('span', 'Last recorded session state: ' + ((data.execution || {}).status || 'unknown')); executionState.id = 'investigation-execution-state';
     if (incident || state.scope.incident_id) states.append(findingState);
     states.append(executionState);
     var acknowledged = el('span'); acknowledged.id = 'investigation-acknowledged'; states.append(acknowledged);
@@ -153,7 +153,7 @@
       var next = incidentState(incident) === 'Recovered' ? 'Review the successful result to see what changed.' :
         incidentState(incident) === 'Stale' ? 'Reconnect the node or resume observing before deciding whether this is still happening.' :
         incident.kind === 'repeated_tool_failure' ? 'Review the first failed result, then check the tool inputs and permissions.' :
-        'Review the repeated calls and their inputs before deciding how to respond.';
+        'Review the highlighted evidence and its tool inputs before deciding how to respond.';
       section.append(el('p', next, 'investigation-next'));
       section.append(button(incident.acknowledged_at ? 'Undo acknowledgement' : 'Acknowledge finding', acknowledge));
     }
@@ -243,7 +243,7 @@
       if (page.execution) state.data.execution = page.execution;
       var findingState = byId('investigation-finding-state'), executionState = byId('investigation-execution-state');
       if (findingState) findingState.textContent = 'Finding: ' + incidentState(state.data.incident);
-      if (executionState) executionState.textContent = 'Execution: ' + ((state.data.execution || {}).status || 'unknown');
+      if (executionState) executionState.textContent = 'Last recorded session state: ' + ((state.data.execution || {}).status || 'unknown');
       (page.removed_ids || []).forEach(function (id) { state.rows.delete(id); });
       (page.rows || []).forEach(function (row) { state.rows.set(row.id, row); });
       trimRows(); renderEvents();
