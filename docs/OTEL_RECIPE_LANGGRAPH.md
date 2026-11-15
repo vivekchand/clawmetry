@@ -8,11 +8,11 @@ Companion pages: [OPENTELEMETRY.md](OPENTELEMETRY.md) for the receiver, [BRING_Y
 
 | Package | Version |
 |---|---|
-| `langgraph` | 1.2.11 |
+| `langgraph` | 1.2.14 |
 | `langchain-core` | 1.6.3 |
 | `opentelemetry-instrumentation-langchain` | 0.62.3 |
-| `opentelemetry-sdk` | 1.44.0 |
-| `opentelemetry-exporter-otlp-proto-http` | 1.44.0 |
+| `opentelemetry-sdk` | 1.45.2 |
+| `opentelemetry-exporter-otlp-proto-http` | 1.45.2 |
 
 Python 3.11. The CI job installs the full dependency closure hash-pinned from `.github/requirements/otel-recipe-langgraph.txt`, in a virtualenv of its own, separate from ClawMetry's. Newer versions will usually work; these are the ones that were proven.
 

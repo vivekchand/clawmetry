@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Security: publish GHSA-6r57-3vhv-2wpf and close the stale self-hosted pin
+
+- The file-boundary and loopback-authentication fixes released in 0.12.933 (#6511) now carry a published advisory, [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf), CVSS 3.1 `AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H` (7.5). Everything before 0.12.933 is affected. Reported by Wu Jiaxuan (吴嘉炫); a CVE has been requested through GitHub.
+- The advisory records that the **write** endpoint was reachable over DNS rebinding too, which the report had scored as out of reach. Under rebinding the attacker's domain is both `Origin` and `Host`, so the same-origin write guard matches and permits the request. Confirmed by replaying both vectors through the real application from the published 0.12.932 and 0.12.937 wheels.
+- The documented self-hosted Compose deployment was pinned to `0.12.908`, 25 releases behind and short of the fix. Its auto-pin pull requests are opened with the workflow token, so their checks never start on their own and five of them had been parked since 2026-10-24; #6534 carries the verified `0.12.937` digest and was restarted rather than bypassed.
+- `SECURITY.md` no longer sends reporters to GitHub's private advisory form. It is not enabled on this repository, so that link answered 404 for the reporter who followed it; email is named as the private channel and the published-advisory list is linked.
+
 ### Improved: Sessions beside Agents (#6598)
 
 - Sessions now sits directly below Agents in the shared dashboard navigation, including local, hosted and mobile views.
@@ -69,6 +76,8 @@
 
 ### Fixed: enforce local file and request boundaries (#6511)
 
+- Reported by Wu Jiaxuan (吴嘉炫). Tracked as [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf); affects every release before 0.12.933.
+
 - Workspace memory, skill-file and transcript filesystem endpoints compare resolved path components before file access. Workspace checks also run before cached memory reads. Symlinked roots remain supported, and links outside the selected root are refused.
 - Password-free local API access requires a direct loopback peer, a loopback Host and no forwarding headers. Authenticated reverse proxies retain access. Token bootstrap keeps its stricter local-only refusal contract.
 - Regression checks cover file reads and writes, cached reads, symlink boundaries, normal local clients, authenticated proxies and real HTTP Host and Origin requests. The acceptance criteria and architecture records describe the same boundaries.
@@ -125,6 +134,13 @@
 - **What:** every candidate card, and the review dialog's primary action, now offers Investigate. It opens the Assistant on a new conversation with a question built from that candidate's own evidence: what was said, how often and across how many conversations and projects, when it was last seen, scope and pain, the runtimes and projects, and up to five supporting excerpts. The question asks for the cause, whether it is still happening, and the one instruction, skill, agent or hook to change, named as a file. The Assistant gains one entry point, `assistantAsk`, which any screen can call; it submits through the composer's own path, so every guard a typed question meets still applies. Browsing to Setup stays, as a secondary action. The hero and the dialog now say in plain words what a card is and what pressing the action does.
 - **Verified:** on the live local dashboard against this machine's own 28 candidates, pressed from both a card and the review dialog. The Assistant answered from the two real Codex sessions behind the signal, naming the recorded commands, the exit paths and the session IDs. 8 tests, of which 3 are red when the handoff is broken or when an unsendable question is dropped.
 - **Limits:** investigating sends the candidate's excerpts to the engine the Assistant is already configured with, on an explicit press; the Improve screen itself stays read-only and starts no inference on its own. A question that cannot be sent yet, because the computer is unreachable or no engine is connected, stays in the composer with the reason rather than disappearing. The answer is only as good as the recorded evidence, and says so when the evidence is thin.
+
+### Fixed: a repository row read as a pull request on the Delivered tab (#6459)
+
+- **Why:** found by looking at the rendered tab in a browser rather than at the rows behind it. The Repositories view showed `vivekchand/clawmetry #vivekchand/clawmetry` on every line, and the summary above it read "100 pull requests" over a table of repositories. Both come from one cause: `query_delivery` carries `kind` on the envelope rather than on each row, so the renderer's `!r.kind` test was true for every row and every row was drawn in pull-request form, where the label is the repository followed by `#` and the reference. A repository row's reference IS its name, so the name was printed twice with a `#` wedged between. Six rounds of fixes to this tab were measured against the data; this one was invisible there, because the rows were right and only their rendering was wrong.
+- **What:** the row label follows the kind of the view when the row does not carry one of its own. A pull request still reads `owner/name #number`. A repository reads its name. A branch, commit or path reads its reference, under its repository when the row knows one and it is not the same string. The count chip names what the table actually lists, so a Repositories view says repositories, and a branch view says branches.
+- **Verified:** 3 browser tests against the shipped template and `app.js` with synthetic fixtures, no live store. Two are red against the released 0.12.927, where the repository label renders `vivekchand/clawmetry #vivekchand/clawmetry` and the branch view says "pull requests"; the third pins that a pull-request row still reads `vivekchand/clawmetry #6450`, which is the half a kind-aware label could quietly break. Confirmed in a real browser against the live node: 100 rows, 0 console errors, 0 page errors, and no `undefined`, `NaN` or unescaped markup in any rendered cell.
+- **Limits:** the renderer still has no per-row kind to trust, so a response that mixes kinds in one list would label them all by the view. Nothing produces such a response today, because the store is asked for one kind at a time.
 
 ### Fixed: keep Asimov source alerts visible on small screens (#6452)
 

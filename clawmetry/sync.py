@@ -266,6 +266,15 @@ def _lock_holder_verdict(rec, pid_path: Path = None) -> tuple:
         if not ok:
             # Alive, but not the process that took the lock: recycled number.
             return "stale", f"pid_recycled({why})"
+        # Defence-in-depth against PID reuse within the tolerance window
+        # (field-failure #6553, daemon_lock_refused on Linux py3.12). A
+        # recycled PID can share the daemon's start epoch by chance (the
+        # tolerance is 3s to cover lstart's 1s resolution). A positively-
+        # foreign cmdline is proof of recycling even after the token matched.
+        # "unknown" (psutil absent, CIM timeout) is left unchanged so a
+        # healthy daemon is never shot when the cmdline cannot be read.
+        if _holder_cmdline_verdict(int(pid)) == "foreign":
+            return "stale", f"pid_recycled(cmdline_mismatch_despite_start:{why})"
     elif pid_path is not None and _started_after_the_lock(int(pid), pid_path):
         # It cannot have written a file that predates it.
         return "stale", "pid_recycled(started_after_lock)"
@@ -280,9 +289,39 @@ def _lock_holder_verdict(rec, pid_path: Path = None) -> tuple:
     try:
         hb = _lock_heartbeat_file()
         if hb.exists():
-            age = time.time() - hb.stat().st_mtime
-            if age > _lock_stale_secs():
-                return "wedged", f"no_heartbeat_for_{int(age)}s"
+            hb_age = time.time() - hb.stat().st_mtime
+            if hb_age > _lock_stale_secs():
+                return "wedged", f"no_heartbeat_for_{int(hb_age)}s"
+            # Heartbeat is fresh: the daemon is alive and scheduling.
+            # But if its ingest loop has been stuck for the full stall
+            # window, treat it as wedged so the supervisor can recover.
+            # Three guards prevent false positives:
+            # 1. hb_age < 60 — within two heartbeat ticks; a machine
+            #    waking from long sleep would have a stale heartbeat too,
+            #    so "fresh heartbeat + stale sync" means the daemon is
+            #    genuinely running but stuck, not just waking up.
+            # 2. pid_path mtime > _STALLED_INGEST_SECS old — the daemon
+            #    wrote the lock file long enough ago for a stall to be
+            #    real; a daemon that just started hasn't had time yet.
+            # 3. last_sync is not None — None means no cycle has ever
+            #    completed (first-run backfill in progress), not a stall.
+            if hb_age < 60 and pid_path is not None:
+                try:
+                    lock_age = time.time() - pid_path.stat().st_mtime
+                    if lock_age > _STALLED_INGEST_SECS:
+                        raw = json.loads(STATE_FILE.read_text()).get("last_sync")
+                        if raw:
+                            ts = datetime.fromisoformat(
+                                str(raw).strip().replace("Z", "+00:00"))
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
+                            sync_age = (datetime.now(timezone.utc).timestamp()
+                                        - ts.timestamp())
+                            if sync_age >= 0 and sync_age > _STALLED_INGEST_SECS:
+                                return ("wedged",
+                                        f"ingest_stalled_for_{int(sync_age)}s")
+                except Exception:
+                    pass
     except OSError:
         pass
     return "held", "daemon_running"
@@ -27170,6 +27209,14 @@ def run_daemon() -> None:
                 log.debug("talk-lifecycle tick error (non-fatal): %s", _e_tk)
 
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
+            # field-failure daemon_ingest_stalled (#6513 and siblings): mirror
+            # the cycle completion directly into the in-process watchdog so
+            # that a persistent save_state() failure (disk full, permission
+            # error) cannot make _report_if_ingest_stalled() believe the
+            # daemon has gone quiet. Dict-item assignment is GIL-atomic, so no
+            # extra lock is needed for the cross-thread write.
+            _STALL_WATCH["last_sync"] = state["last_sync"]
+            _STALL_WATCH["since_mono"] = time.monotonic()
             # Audit fix (2026-05-17): force a synchronous local-store flush
             # BEFORE persisting the cursor state. Belt-and-suspenders to
             # ``_flush_session_batch``'s own per-batch flush — covers any
