@@ -387,6 +387,21 @@ def test_network_hint_on_windows_mentions_ipv6(monkeypatch):
     assert "ipv6" in hint, "Windows network hint must mention IPv6 as a likely cause"
 
 
+def test_tls_intercepted_hint_on_windows_mentions_cert_export(monkeypatch):
+    """Windows users need to know how to extract the corporate CA so they can
+    actually follow the REQUESTS_CA_BUNDLE advice (field failure #6551)."""
+    import platform as _plat
+    monkeypatch.setattr(_plat, "system", lambda: "Windows")
+    hint = dapp.RuntimeSupervisor._explain_pip_failure(
+        "SSLError: HTTPSConnectionPool(host='pypi.org'): "
+        "Max retries exceeded with url: ... SSL: CERTIFICATE_VERIFY_FAILED"
+    ).lower()
+    assert "certmgr" in hint, (
+        "Windows tls_intercepted hint must direct users to certmgr.msc "
+        "to export the corporate root CA"
+    )
+
+
 def test_tls_intercepted_hint_is_actionable():
     """The hint must name a concrete remediation so the user knows what to do
     without a support ticket (#6095: 'check proxy/antivirus settings' gave
