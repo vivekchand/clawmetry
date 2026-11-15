@@ -691,6 +691,10 @@ email-validator==2.3.0 \
     --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4 \
     --hash=sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426
     # via pydantic
+expression==5.8.0 \
+    --hash=sha256:3420f0ed06e2282f1f030ab8eefb70f06ed62365cd1988ad3b7c6525db9df179 \
+    --hash=sha256:2286e4ff71802420a69b235fa78fffdd21f404958524c1cb95133419f7f64e5f
+    # via litellm
 fastapi==0.141.1 \
     --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3 \
     --hash=sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1
@@ -1139,7 +1143,7 @@ jsonschema-specifications==2025.9.1 \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
     # via jsonschema
 litellm==1.100.4 \
-    --hash=sha256:8c01f7e9aebded5b3509128be648518a2ec4f1feb8dfb87a539895091651898b
+    --hash=sha256:ded14b15466163c76c9a7da0cd091663b4bebbff9aa56724a5905386a9d12532
     # via -r ll.in
 litellm-enterprise==0.1.40 \
     --hash=sha256:bf0eada2309053556aef09d9071297f3c5952e787df9c283de13a393b6b85251 \
@@ -1245,8 +1249,8 @@ markupsafe==3.0.3 \
     --hash=sha256:fed51ac40f757d41b7c48425901843666a6677e3e8eb0abcff09e4ba6e664f50
     # via jinja2
 mcp==1.30.0 \
-    --hash=sha256:2726bca5e7193f61c5dde8b12500a6de2d9acf6d1a1c0be9e8c2e706437991df \
-    --hash=sha256:d51e36a5f5644faea4f85ea649bfffa6bc6c26770d42798ad6a3de3d2ba69683
+    --hash=sha256:666edb5009503e1047c9d60346a756f94b261f05cc2625f23d41c728ffc484d0 \
+    --hash=sha256:445414625fce5c295faa505bb11bacece661ab6f4028d57c935db57820b7a3e4
     # via litellm
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
