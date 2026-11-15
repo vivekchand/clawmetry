@@ -1269,6 +1269,13 @@ class RuntimeSupervisor:
             hint += (" On Windows, broken IPv6 is the most common cause —"
                      " try disabling IPv6 on the active network adapter"
                      " and relaunching.")
+        # Corporate Windows machines have the intercepting CA in the Windows
+        # Certificate Store, but pip won't use it — the user needs to export it
+        # (field-failure #6551, tls_intercepted on Windows py3.11).
+        if cls == "tls_intercepted" and platform.system() == "Windows":
+            hint += (" On Windows, open certmgr.msc, export your corporate"
+                     " root CA as Base-64 X.509 (.cer), then set"
+                     " PIP_CERT=<path> and relaunch.")
         return hint
 
     @staticmethod
