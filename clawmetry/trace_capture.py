@@ -5,8 +5,8 @@ ran on**, because that is the only place the data exists (§4j): resolve a commi
 range to the sessions that produced it, pull those sessions out of the local
 store, redact them for publication, and emit a self-contained bundle.
 
-Everything server-side — the ``trace.clawmetry.com`` resolver, the hosted
-viewer, the directory and the GitHub App — lives in **clawmetry-cloud**. This
+Everything server-side -- the ``trace.clawmetry.com`` resolver, the hosted
+viewer, the directory and the GitHub App -- lives in **clawmetry-cloud**. This
 module's output is the contract between the two: a JSON bundle the cloud stores
 and renders, and which ``render_html`` can also render locally with no server
 at all.
@@ -20,7 +20,7 @@ Attribution honesty (§2b, §3c) is not optional here. Every bundle carries an
                this commit range, so the cost is an upper bound.
 ``heuristic``  no trailer; sessions were guessed from ``Co-Authored-By`` plus
                time overlap. Measured at 5-8 candidate sessions per PR on a
-               real repo — never render this as a headline number.
+               real repo -- never render this as a headline number.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import os
 import re
 import subprocess
 
@@ -212,7 +213,7 @@ def build_bundle(
     pr: str | None = None,
     project: str | None = None,
 ) -> dict:
-    """Assemble the publishable bundle. Pure — no I/O, so it is easy to test."""
+    """Assemble the publishable bundle. Pure -- no I/O, so it is easy to test."""
     last_commit_ts = max((c["ts"] for c in commits if c["ts"]), default=0)
 
     prompts: list[dict] = []
