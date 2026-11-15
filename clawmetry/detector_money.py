@@ -15,6 +15,7 @@ than sorting by severity, which is the thing it replaces.
 """
 from __future__ import annotations
 
+import math
 import os
 
 
@@ -22,6 +23,25 @@ import os
 # protection" and "an agent continued after a failed grep" both landing on
 # `warning` made the top of the list meaningless.
 _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
+
+# Import-light policy shared by detector, API and hosted consumers. Security
+# impact is not a function of the model's price. Informational observations
+# retain ordinary ordering; warning/critical security findings precede spend.
+SECURITY_KINDS = frozenset({
+    "file_blast_radius", "credential_access", "network_egress",
+    "privilege_change", "prompt_injection", "untrusted_package_source",
+    "repo_config_exec", "agent_config_tamper", "package_manifest_exec",
+    "agent_component_change", "coordinated_action", "security_threat",
+    "inspection_incomplete",
+})
+
+
+def _finite_nonnegative(value) -> float:
+    try:
+        number = float(value) if not isinstance(value, bool) else 0.0
+        return number if math.isfinite(number) and number >= 0 else 0.0
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
 
 
 # Spend at risk (USD) at which a warning is promoted to critical.
@@ -71,18 +91,10 @@ def annotate_spend(incidents: list, *, cost_usd: float = 0.0,
     """Attach ``spend_at_risk_usd`` / ``burn_rate_usd_per_min`` / ``basis`` to
     each incident, promote severity on cost, and return the list sorted by what
     it costs to ignore. Never raises; a bad number degrades to 0.0."""
-    try:
-        cost = max(0.0, float(cost_usd or 0))
-    except (TypeError, ValueError):
-        cost = 0.0
-    try:
-        bad_s = max(0.0, float(bad_for_seconds or 0))
-    except (TypeError, ValueError):
-        bad_s = 0.0
-    try:
-        sess_s = max(0.0, float(session_seconds or 0))
-    except (TypeError, ValueError):
-        sess_s = 0.0
+    cost = _finite_nonnegative(cost_usd)
+    bad_s = _finite_nonnegative(bad_for_seconds)
+    sess_s = _finite_nonnegative(session_seconds)
+    window_steps = _finite_nonnegative(window_steps)
 
     burn = (cost / (sess_s / 60.0)) if (cost > 0 and sess_s >= 60) else 0.0
     for inc in incidents or []:
@@ -101,36 +113,40 @@ def annotate_spend(incidents: list, *, cost_usd: float = 0.0,
         inc["spend_basis"] = basis
         inc["burn_rate_usd_per_min"] = round(burn, 4)
         inc["session_cost_usd"] = round(cost, 4)
-        inc["severity"] = _severity_promote(
-            str(inc.get("severity") or "warning"), risk, basis)
+        # A model's price cannot establish credential theft or privilege
+        # impact. Security severity stays tied to its evidence; spend remains
+        # visible and can still promote operational incidents.
+        severity = str(inc.get("severity") or "warning")
+        inc["severity"] = (severity if inc.get("kind") in SECURITY_KINDS else
+                           _severity_promote(severity, risk, basis))
     return sort_incidents(incidents or [])
 
 
 def incident_rank(incident: dict) -> tuple:
-    """Sort key: money first, then severity, then how much of it there is.
+    """Security impact first; ordinary operational findings keep cost order.
 
     Ties are everywhere in practice (a free-tier local model session costs
     nothing), so severity remains the second key and the old warning-before-
     info ordering still holds when no cost is known.
     """
     if not isinstance(incident, dict):
-        return (0.0, 0, 0, "")
-    try:
-        spend = float(incident.get("spend_at_risk_usd") or 0)
-    except (TypeError, ValueError):
-        spend = 0.0
-    sev = _SEVERITY_RANK.get(str(incident.get("severity") or ""), 0)
+        return (0, 0.0, 0, 0, "")
+    spend = _finite_nonnegative(incident.get("spend_at_risk_usd"))
+    kind = str(incident.get("kind") or "")
+    sev = _SEVERITY_RANK.get(str(incident.get("severity") or "").lower(), 0)
+    security_priority = sev + 1 if kind in SECURITY_KINDS and sev >= 1 else 0
     ev = incident.get("evidence") if isinstance(incident.get("evidence"), dict) else {}
     try:
-        size = int(ev.get("repeats") or ev.get("tool_calls") or ev.get("failures")
-                   or ev.get("distinct_files") or ev.get("accesses") or 0)
-    except (TypeError, ValueError):
+        size = int(_finite_nonnegative(incident.get("count") or ev.get("repeats")
+                   or ev.get("tool_calls") or ev.get("failures")
+                   or ev.get("distinct_files") or ev.get("accesses") or 0))
+    except (TypeError, ValueError, OverflowError):
         size = 0
-    return (spend, sev, size, str(incident.get("kind") or ""))
+    return (security_priority, spend, sev, size, kind)
 
 
 def sort_incidents(incidents: list) -> list:
-    """Most expensive to ignore first."""
+    """Security impact first, then operational cost."""
     try:
         return sorted([i for i in incidents if isinstance(i, dict)],
                       key=lambda i: incident_rank(i), reverse=True)
