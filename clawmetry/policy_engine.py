@@ -312,6 +312,10 @@ def _match(policy: Dict[str, Any], incident: Dict[str, Any],
         return None  # unknown action: refuse rather than guess
 
     kind = str(incident.get("kind") or "").strip()
+    evidence = incident.get("evidence") if isinstance(incident.get("evidence"), dict) else {}
+    if is_actuating(action) and (kind == "inspection_incomplete"
+                                 or evidence.get("policy_eligible") is False):
+        return None
     want_kind = str(policy.get("trigger_kind") or "").strip()
     if want_kind:
         if want_kind != kind:
@@ -481,6 +485,10 @@ def evaluate(incidents: Iterable[Dict[str, Any]],
                 continue
             step = steps[step_index]
             action = step["action"]
+            incident_evidence = incident.get("evidence") if isinstance(incident.get("evidence"), dict) else {}
+            if is_actuating(action) and (incident.get("kind") == "inspection_incomplete"
+                                         or incident_evidence.get("policy_eligible") is False):
+                continue
             is_final = step_index >= len(steps) - 1
             nxt = None if is_final else steps[step_index + 1]
 

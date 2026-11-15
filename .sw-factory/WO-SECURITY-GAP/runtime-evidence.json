@@ -1,0 +1,139 @@
+{
+  "gate_source_sha256": "b4be72da5a348a539282467b0068ab7ac3a8e9120f3a918492ae72f3679c0a2f",
+  "runs": [
+    {
+      "runtime": "claude-code",
+      "exit_code": 0,
+      "duration_s": 13.19,
+      "denied_target_absent": true,
+      "allowed_target_present": true,
+      "hook_invoked": true,
+      "approval_statuses": [
+        "denied"
+      ],
+      "approval_ids": [
+        "8ec6bfa09636475391d7285c69407eee"
+      ],
+      "passed": true,
+      "version": "2.1.303 (Claude Code)"
+    },
+    {
+      "runtime": "copilot",
+      "exit_code": 0,
+      "duration_s": 17.5,
+      "denied_target_absent": true,
+      "allowed_target_present": true,
+      "hook_invoked": true,
+      "approval_statuses": [
+        "denied"
+      ],
+      "approval_ids": [
+        "d997bca07ed34c10a206fe3ec4f0f860"
+      ],
+      "passed": true,
+      "version": "GitHub Copilot CLI 1.0.83.\nRun 'copilot update' to check for updates."
+    }
+  ],
+  "cursor": {
+    "verified": false,
+    "reason": "native CLI authentication unavailable",
+    "last_attempt": "Authentication still required; native hook not invoked; ordinary target absent"
+  },
+  "limits": [
+    "Real native hook turns with isolated receiver and temporary store.",
+    "The drill suppresses notifications and does not prove notification delivery or production daemon ingestion.",
+    "No native sandbox or arbitrary process egress containment was exercised."
+  ],
+  "real_transcript_ingest": {
+    "native_events_ingested": 8,
+    "security_pass": {
+      "processed": 0,
+      "findings": 0,
+      "status": "idle"
+    },
+    "session_runtime": "claude_code",
+    "last_decision": {
+      "record_id": "09bafd3c2ac74985979d9085a8d5ecc5",
+      "source": "local_pre_tool_approval",
+      "result": "denied",
+      "observed_at": 1792972656362,
+      "recent": true
+    },
+    "isolation": {
+      "state": "unknown",
+      "source": null,
+      "observed_at": null,
+      "execution_verified": false,
+      "detail": "Subprocess file and network isolation has not been verified."
+    },
+    "code_validation": {
+      "state": "unknown",
+      "source": null,
+      "execution_verified": false,
+      "detail": "This view has no independent code scan evidence. Check code results before release."
+    }
+  },
+  "browser_observation": {
+    "url": "http://127.0.0.1:18973/#guard",
+    "source": "isolated real Claude transcript and approval store",
+    "visible": [
+      "Recorded activity",
+      "Denial recorded",
+      "Controls unavailable",
+      "Isolation unknown",
+      "Evidence unavailable in this view"
+    ],
+    "screenshot_observed": true,
+    "request_timing": "Raw browser diagnostics permission declined; not verified",
+    "screenshot": "evidence/guard-native-denial.jpg"
+  },
+  "real_boundary_turn": {
+    "runtime": "claude-code",
+    "boundary_drill": true,
+    "exit_code": 0,
+    "duration_s": 14.53,
+    "denied_target_absent": true,
+    "allowed_target_present": true,
+    "hook_invoked": true,
+    "approval_statuses": [
+      "denied"
+    ],
+    "approval_ids": [
+      "4f1dca6b6f6c45cca90615adf4465dd7"
+    ],
+    "passed": true
+  },
+  "real_boundary_ingest": {
+    "native_events_ingested": 8,
+    "security_pass": {
+      "processed": 8,
+      "findings": 1,
+      "status": "inspected"
+    },
+    "session_runtime": "claude_code",
+    "last_decision": {
+      "record_id": "4f1dca6b6f6c45cca90615adf4465dd7",
+      "source": "local_pre_tool_approval",
+      "result": "denied",
+      "observed_at": 1792973190968,
+      "recent": true
+    },
+    "isolation": {
+      "state": "unknown",
+      "source": null,
+      "observed_at": null,
+      "execution_verified": false,
+      "detail": "Subprocess file and network isolation has not been verified."
+    },
+    "code_validation": {
+      "state": "unknown",
+      "source": null,
+      "execution_verified": false,
+      "detail": "This view has no independent code scan evidence. Check code results before release."
+    },
+    "finding_kind": "file_blast_radius",
+    "declared_outside_paths": 1,
+    "browser_history": "evidence/guard-native-boundary.jpg",
+    "browser_investigation": "evidence/guard-native-investigation.jpg"
+  }
+}
