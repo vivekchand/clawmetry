@@ -70,9 +70,8 @@
     <div id="approvals-presets-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:12px;">
     </div>
 
-    <!-- Custom (non-preset) rules — OSS-local mode lists them here so a
-         rule saved via "+ New Rule" is visible and removable, not a
-         write-only YAML entry. -->
+    <!-- Custom and remembered exact rules stay visible and removable
+         in both the local and hosted dashboard. -->
     <div id="approvals-custom-rules" style="margin-bottom:12px;"></div>
 
     <!-- Create custom rule form (hidden by default) -->
@@ -674,6 +673,23 @@
   };
 
   /* ── Main loader ── */
+  async function _loadApprovalPolicies(ossMode) {
+    if (ossMode) return fetchJsonWithTimeout('/api/approvals/policies', 6000);
+    // Management understands exact grants. Older daemon fetches must keep
+    // their filtered response so ignoring a binding cannot broaden a grant.
+    var headers = _authHeaders();
+    headers['X-ClawMetry-Action-Binding'] = 'v1';
+    var controller = new AbortController();
+    var timeout = setTimeout(function(){ controller.abort(); }, 6000);
+    try {
+      var response = await fetch('/api/cloud/policies?' + _q().replace(/^&/,''), {
+        headers: headers, signal: controller.signal
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return await response.json();
+    } finally { clearTimeout(timeout); }
+  }
+
   window.loadApprovalsTab = async function() {
     try {
       var ossMode = _isOssMode();
@@ -687,10 +703,7 @@
           6000),
         ossMode ? fetchJsonWithTimeout('/api/approvals-audit?limit=50', 6000).catch(function(){return {decisions:[]};})
                 : fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
-        fetchJsonWithTimeout(
-          ossMode ? '/api/approvals/policies'
-                  : '/api/cloud/policies?' + _q().replace(/^&/,''),
-          6000).catch(function(){return {policies:[]};}),
+        _loadApprovalPolicies(ossMode).catch(function(){return {policies:[],unavailable:true};}),
         ossMode ? Promise.resolve({integrations:[]})
                 : fetchJsonWithTimeout('/api/cloud/integrations?' + _q().replace(/^&/,''), 6000).catch(function(){return {integrations:[]};})
       ]);
@@ -763,7 +776,11 @@
 
       // Policies
       renderPresets(policies.policies || []);
-      if (ossMode) renderCustomRules(policies.policies || []);
+      renderCustomRules(policies.policies || []);
+      if (policies.unavailable) {
+        var rules = document.getElementById('approvals-custom-rules');
+        if (rules) rules.textContent = 'Rules unavailable. Refresh to manage saved approvals.';
+      }
 
       // Integrations
       renderIntegrations(integrations.integrations || []);
@@ -1037,19 +1054,24 @@
     return PRESETS.some(function(x){return x.name === p.name;});
   }
 
-  /* ── Render custom (non-preset) rules — OSS mode only ── */
+  /* ── Render and revoke custom (non-preset) rules ── */
+  var _customPolicies = [];
   function renderCustomRules(savedPolicies) {
     var el = document.getElementById('approvals-custom-rules');
     if (!el) return;
     var custom = (savedPolicies || []).filter(function(p){return !_isPresetRow(p);});
+    _customPolicies = custom;
     if (!custom.length) { el.innerHTML = ''; return; }
     var html = '<div style="font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin:2px 0 6px 2px;">Custom rules</div>';
     html += custom.map(function(p, idx) {
-      var scope = (p.tool ? p.tool : 'any tool') + (p.runtime ? ' · ' + p.runtime : '');
-      return '<div style="display:flex;align-items:center;gap:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:6px;">'
+      var match = p.match || {};
+      var scope = (p.tool || match.tool || 'any tool') + (p.runtime ? ' · ' + p.runtime : '');
+      var exact = /^v1:[0-9a-f]{64}$/.test(p.action_binding || match.action_binding || '');
+      var pattern = exact ? 'Exact action' : (p.pattern || match.command_regex || '');
+      return '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:6px;">'
         + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + escHtml(p.name || '(unnamed)') + '</span>'
         + '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(scope) + '</span>'
-        + (p.pattern ? '<code style="font-size:10px;color:var(--text-secondary);background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:4px;padding:1px 6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(p.pattern) + '</code>' : '')
+        + (pattern ? '<code style="font-size:10px;color:var(--text-secondary);background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:4px;padding:1px 6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(pattern) + '</code>' : '')
         + '<button onclick="removeCustomRule(' + idx + ')" style="margin-left:auto;background:transparent;color:#ef4444;border:1px solid #ef444444;padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Remove</button>'
         + '</div>';
     }).join('');
@@ -1057,13 +1079,23 @@
   }
 
   window.removeCustomRule = async function(customIdx) {
-    var custom = (_ossPolicies || []).filter(function(p){return !_isPresetRow(p);});
-    var target = custom[customIdx];
+    var target = _customPolicies[customIdx];
     if (!target) return;
-    if (!confirm('Remove rule "' + (target.name || '(unnamed)') + '"? The daemon stops enforcing it within seconds.')) return;
+    if (!confirm('Remove rule "' + (target.name || '(unnamed)') + '"?')) return;
     try {
-      await _putOssPolicies(_ossPolicies.filter(function(p){return p !== target;}));
-      loadApprovalsTab();
+      if (_isOssMode()) {
+        await _putOssPolicies(_ossPolicies.filter(function(p){return p !== target;}));
+      } else {
+        if (!target.id) throw new Error('This rule has no identifier. Refresh and try again.');
+        var response = await fetch('/api/cloud/policies/' + encodeURIComponent(target.id), {
+          method: 'DELETE', headers: _authHeaders()
+        });
+        if (!response.ok) {
+          var data = await response.json().catch(function(){return {};});
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+      }
+      await loadApprovalsTab();
     } catch(e) { alert('Failed to remove rule: ' + e); }
   };
 
