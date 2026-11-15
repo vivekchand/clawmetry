@@ -66,6 +66,28 @@
 # so that particular silence is over. Keep the block's `Name==Version` spelling;
 # that guard reads it.
 #
+# TWO SIBLINGS MUST MOVE WITH litellm, AND `--no-deps` MEANS NOTHING CHECKS THEM.
+# litellm pins litellm-proxy-extras and litellm-enterprise with an exact `==`
+# under the [proxy] extra, and litellm-proxy-extras is not an ordinary library:
+# it ships the Prisma MIGRATIONS that build the proxy's database, while
+# `prisma generate` in the job builds the client from litellm's OWN
+# proxy/schema.prisma. Those two have to describe the same database. They do:
+# litellm 1.100.4's proxy/schema.prisma is byte-identical to the schema.prisma
+# in litellm-proxy-extras 0.4.91, the version it pins.
+#
+# A single-package bump of litellm therefore silently splits the pair, and
+# --no-deps is what makes it silent: pip never reads the `==` and the install
+# step stays green. #6550 bumped litellm 1.88.6 -> 1.100.4 alone and left
+# litellm-proxy-extras at 0.4.72, whose 122 migrations build a database missing
+# 13 of the schema's 77 tables and 56 of its columns. The job got through
+# startup and `/team/new` and died on the first query to touch one:
+# `DataError: The column key_type does not exist in the current database`.
+# That is what took this job red on main from 2026-11-13 until it was realigned.
+#
+# So when litellm moves here, check what the new version pins for both siblings
+# and move them in the same commit. The install step cannot tell you; the
+# end-to-end job is the only thing that will, and it will tell you late.
+#
 # starlette and fastapi are NOT layered floors. They are the opposite: the
 # resolution catching up with the litellm pin. This block used to read that
 # starlette was "deliberately NOT layered", pinned to 0.50.0 by fastapi
@@ -1187,13 +1209,13 @@ jsonschema-specifications==2025.9.1 \
 litellm==1.100.4 \
     --hash=sha256:ded14b15466163c76c9a7da0cd091663b4bebbff9aa56724a5905386a9d12532
     # via -r ll.in
-litellm-enterprise==0.1.40 \
-    --hash=sha256:bf0eada2309053556aef09d9071297f3c5952e787df9c283de13a393b6b85251 \
-    --hash=sha256:f2bc6d8ed3863f51d2aaafa99f2a5cda6ccf9fc64a9c646825ab8051a789bc62
+litellm-enterprise==0.1.62 \
+    --hash=sha256:2ce78366557335de557ee72ad86c92b2b062b0e07e31dff2139576feda849489 \
+    --hash=sha256:337697160896d52079290ffe8051c3dee450653d271cb29723af6db8546eb7d9
     # via litellm
-litellm-proxy-extras==0.4.72 \
-    --hash=sha256:869c40cb459e0c40c93d29eb4d4d8b3a197050c0673d7eca1765a034a690fb93 \
-    --hash=sha256:a9543165eb5e8b440a2a92963a67fcf143a15457bfdcb8fc05e68325aee75c0e
+litellm-proxy-extras==0.4.91 \
+    --hash=sha256:5cac5f06f9addd023b5c99a05c2c4c5147eaf799d8f00567e3ee8f04e4595c0b \
+    --hash=sha256:d19fe53591b0bbd48aff24cb1a166b0c68ff2491469ceec88eaa83c6a364562d
     # via litellm
 markdown-it-py==4.2.0 \
     --hash=sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49 \
