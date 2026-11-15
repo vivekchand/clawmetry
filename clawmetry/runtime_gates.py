@@ -45,10 +45,12 @@ import os
 import shlex
 import sys
 import time
+import uuid
 
 from clawmetry import hook_ownership
 
 from clawmetry.claude_code_gate import (
+    _client_wait_budget,
     _post_json,
     _read_json,
     _windowless_python,
@@ -490,7 +492,14 @@ def _cursor_payload(event: dict) -> dict:
     hook_event = str(event.get("hook_event_name") or "")
     tool_name = str(event.get("tool_name") or "").strip()
     tool_input = event.get("tool_input")
-    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    # Cursor's beforeMCPExecution contract uses JSON-encoded parameters.
+    # Keeping an empty object here would discard the action being reviewed.
+    if isinstance(tool_input, str):
+        try:
+            parsed = json.loads(tool_input)
+            tool_input = parsed
+        except (ValueError, TypeError):
+            pass  # Preserve the unsupported type; strict binding cannot grant it.
     if not tool_name and event.get("command") is not None:
         tool_name = "Bash"
         tool_input = {"command": str(event.get("command") or "")}
@@ -506,7 +515,8 @@ def _cursor_payload(event: dict) -> dict:
                           or event.get("session_id") or ""),
         "cwd": str(event.get("cwd") or _first_workspace_root(event) or ""),
         "hook_event_name": hook_event or "beforeShellExecution",
-        "tool_use_id": str(event.get("generation_id") or ""),
+        "tool_use_id": str(event.get("tool_use_id") or event.get("tool_call_id") or ""),
+        "generation_id": str(event.get("generation_id") or ""),
     }
 
 
@@ -517,11 +527,9 @@ def _copilot_payload(event: dict) -> dict:
     if isinstance(args, str):
         try:
             parsed = json.loads(args)
-            args = parsed if isinstance(parsed, dict) else {"raw": args}
+            args = parsed
         except Exception:
-            args = {"raw": args}
-    if not isinstance(args, dict):
-        args = {}
+            pass
     return {
         "tool_name": str(event.get("toolName") or event.get("tool_name") or ""),
         "tool_input": args,
@@ -588,39 +596,87 @@ def _hook_main_inner(argv: "list | None" = None) -> int:
     url = f"{base}/api/hooks/{runtime_slug}/pretooluse"
 
     payload = to_payload(_read_stdin_event())
+    payload["invocation_id"] = uuid.uuid4().hex
+    from clawmetry.approval_binding import pending_deadline
+    started = time.monotonic()
+    pending = False
+    wait_deadline = None
+    state = _read_json(_CURSOR_STATE_PATH if runtime_slug == "cursor" else _COPILOT_STATE_PATH)
+    wait_budget = _client_wait_budget(state.get("timeout")) if isinstance(state, dict) else 0
 
-    resp = _post_json(url, payload, _CONNECT_TIMEOUT_S)
+    def interrupted():
+        nonlocal pending
+        if not pending:
+            try:
+                from clawmetry.gate_policy_cache import protects
+                pending = protects(runtime_slug, payload)
+            except Exception:
+                pass
+        if pending:
+            emit("deny", "ClawMetry cannot verify the pending approval. Request a new review.")
+        return 0
+
+    def post(timeout):
+        if wait_deadline is not None:
+            timeout = min(timeout, max(0.01, wait_deadline - time.monotonic()))
+        try:
+            return _post_json(url, payload, timeout)
+        except Exception:
+            return None
+
+    resp = post(min(_REQUEST_TIMEOUT_S, max(0.01, wait_budget)))
     failures = 0
     while True:
+        if pending and wait_deadline is not None and time.monotonic() >= wait_deadline:
+            return interrupted()
         if resp is None:
+            if pending:
+                return interrupted()
+            try:
+                from clawmetry.gate_policy_cache import protects
+                if protects(runtime_slug, payload):
+                    pending = True
+                    return interrupted()
+            except Exception:
+                pass
             failures += 1
             if failures >= _MAX_TRANSIENT_FAILURES:
                 return 0  # fail-open
             time.sleep(1.0)
-            resp = _post_json(url, payload, _REQUEST_TIMEOUT_S)
+            resp = post(_REQUEST_TIMEOUT_S)
             continue
         failures = 0
         if not isinstance(resp, dict):
+            return interrupted()
+        if resp.get("status") == "no_op":
             return 0
-        if resp.get("status") == "pending" and resp.get("approval_id"):
+        if resp.get("status") == "pending":
+            pending = True
+            if not resp.get("approval_id"):
+                return interrupted()
+            wait_deadline = pending_deadline(resp, started, wait_deadline, wait_budget)
             payload["approval_id"] = resp["approval_id"]
             try:
-                wait_s = max(0.2, float(resp.get("retry_after_ms") or 2000)
-                             / 1000.0)
+                wait_s = min(2.0, max(0.2, float(resp.get("retry_after_ms") or 2000)
+                                     / 1000.0))
             except (TypeError, ValueError):
                 wait_s = 2.0
+            if wait_deadline is not None:
+                wait_s = min(wait_s, max(0, wait_deadline - time.monotonic()))
             time.sleep(wait_s)
-            resp = _post_json(url, payload, _REQUEST_TIMEOUT_S)
+            if wait_deadline is not None and time.monotonic() >= wait_deadline:
+                return interrupted()
+            resp = post(_REQUEST_TIMEOUT_S)
             continue
         hso = resp.get("hookSpecificOutput")
         if isinstance(hso, dict) and hso.get("permissionDecision"):
             decision = str(hso.get("permissionDecision"))
             reason = str(hso.get("permissionDecisionReason") or "")
             if decision not in ("allow", "deny", "ask"):
-                return 0
+                return interrupted()
             try:
                 emit(decision, reason)
             except Exception:
                 pass
             return 0
-        return 0  # no decision in the response → no opinion
+        return interrupted()
