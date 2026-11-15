@@ -84,7 +84,7 @@
 #                         GHSA-6hr6-w5qg-qmwg (MODERATE, 4.4.1)
 #   msgpack==1.2.3        cap is exact. 1 advisory:
 #                         GHSA-6v7p-g79w-8964 (HIGH, 1.2.1)
-#   tornado==6.5.5        cap is exact, and this is the big one: 10
+#   tornado==6.6.1        cap is exact, and this is the big one: 10
 #                         advisories, every fix in 6.5.6-6.5.9 (latest
 #                         6.5.10). HIGH: GHSA-3x9g-8vmp-wqvf (6.5.6),
 #                         GHSA-mgf9-4vpg-hj56 (6.5.6), GHSA-mpf4-983q-p7j4
@@ -975,7 +975,7 @@ service-identity==26.1.0 \
 sortedcontainers==2.4.0 \
     --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0 \
     --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88
-tornado==6.5.5 \
+tornado==6.6.1 \
     --hash=sha256:487dc9cc380e29f58c7ab88f9e27cdeef04b2140862e5076a66fb6bb68bb1bfa \
     --hash=sha256:65a7f1d46d4bb41df1ac99f5fcb685fb25c7e61613742d5108b010975a9a6521 \
     --hash=sha256:e74c92e8e65086b338fd56333fb9a68b9f6f2fe7ad532645a290a464bcf46be5 \
