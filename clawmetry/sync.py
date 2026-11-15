@@ -264,8 +264,19 @@ def _lock_holder_verdict(rec, pid_path: Path = None) -> tuple:
 
         ok, why = _verify_pid(int(pid), recorded_start)
         if not ok:
-            # Alive, but not the process that took the lock: recycled number.
-            return "stale", f"pid_recycled({why})"
+            if why == "start_unverifiable":
+                # ps / platform temporarily unavailable — we cannot read the
+                # live start time, but that is not evidence of pid recycling.
+                # Fall through to the cmdline defence-in-depth and heartbeat
+                # checks below rather than immediately declaring the lock stale:
+                # unlinking a live daemon's lock file here starts a reclaim
+                # loop that ends with daemon_lock_refused (field-failure #6548,
+                # Darwin py3.13, where ps -o lstart= can fail under resource
+                # pressure).
+                pass
+            else:
+                # Alive, but not the process that took the lock: recycled number.
+                return "stale", f"pid_recycled({why})"
         # Defence-in-depth against PID reuse within the tolerance window
         # (field-failure #6553, daemon_lock_refused on Linux py3.12). A
         # recycled PID can share the daemon's start epoch by chance (the
