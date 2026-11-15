@@ -84,6 +84,7 @@ def test_denied_produces_deny_payload_without_kill(monkeypatch):
     assert "Block destructive deletes" in p["reason"]
     # THE parity fix: hook denies one call; the session must survive.
     assert capture["kill_on_deny"] is False
+    assert capture["runtime"] == "claude_code"
 
 
 def test_approved_produces_explicit_allow(monkeypatch):

@@ -3953,6 +3953,15 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .guard-finding-evidence h4 { font-size:14px; font-weight:600; margin-bottom:6px; }
 .guard-finding-evidence p { font-size:13px; color:var(--text-secondary); line-height:1.6; }
 .guard-finding footer { margin-top:8px; padding-top:12px; border-top:1px solid var(--border-secondary); }
+.guard-protection { margin-top:8px; max-width:42rem; font-size:12px; color:var(--text-secondary); white-space:normal; }
+.guard-protection > summary { cursor:pointer; color:var(--text-muted); width:fit-content; }
+.guard-protection > summary:focus-visible { outline:2px solid var(--text-accent); outline-offset:3px; }
+.guard-protection dl { margin:10px 0; display:grid; gap:8px; }
+.guard-protection dl > div { display:grid; grid-template-columns:minmax(8rem,1fr) minmax(9rem,2fr); gap:12px; }
+.guard-protection dt { font-weight:600; }
+.guard-protection dd { margin:0; }
+.guard-protection p { margin:8px 0 0; line-height:1.5; }
+@media(max-width:600px) { .guard-protection dl > div { grid-template-columns:1fr; gap:2px; } }
 
 .guard-history-tools { display:flex; flex-wrap:wrap; gap:16px; margin:16px 0; }
 .guard-history-tools label { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-muted); }

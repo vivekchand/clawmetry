@@ -211,6 +211,8 @@ def untrusted_package_source(events: Iterable[dict], session_id: str,
         evlist = d._chronological(events)
         cwd = str((facts or {}).get("cwd") or "").strip()
         hits: list = []
+        matched_indices = set()
+        critical_indices = set()
         first = None
         worst = "warning"
         seen = set()
@@ -230,6 +232,9 @@ def untrusted_package_source(events: Iterable[dict], session_id: str,
                     if not c:
                         continue
                     sev, why = _severity(c, cwd)
+                    matched_indices.add(i)
+                    if sev == "critical":
+                        critical_indices.add(i)
                     hit = {"tool": str(call.get("tool") or "")[:120], "arg": key,
                            "source": c["source"], "where": c["where"]}
                     if why:
@@ -261,12 +266,14 @@ def untrusted_package_source(events: Iterable[dict], session_id: str,
                       "it is also how an argument can make a tool install and run "
                       "code nobody chose. Worth confirming it is the source you "
                       "expect.")
-        return d._incident(
+        incident = d._incident(
             "untrusted_package_source", session_id, runtime, worst, title, detail,
             {"hits": hits, "count": len(hits),
              "sources": sorted({h["source"] for h in hits}),
              "tools": sorted({h["tool"] for h in hits}),
              "observed": "tool_arguments"},
             idx)
+        incident["_evidence_step_indices"] = sorted(critical_indices or matched_indices)
+        return incident
     except Exception:
         return None
