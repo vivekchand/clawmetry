@@ -70,8 +70,8 @@ PINS = {
     "langgraph": "1.2.14",
     "langchain-core": "1.6.3",
     "opentelemetry-instrumentation-langchain": "0.62.3",
-    "opentelemetry-sdk": "1.44.0",
-    "opentelemetry-exporter-otlp-proto-http": "1.44.0",
+    "opentelemetry-sdk": "1.45.2",
+    "opentelemetry-exporter-otlp-proto-http": "1.45.2",
 }
 
 

@@ -263,9 +263,28 @@ jobs:
             echo "No new OSS routes since $BASE — the pin PR can merge on its own."
             exit 0
           fi
-          echo "NEW_ROUTES<<EOF" >> "$GITHUB_ENV"
-          echo "$ADDED" >> "$GITHUB_ENV"
-          echo "EOF" >> "$GITHUB_ENV"
+          # Unguessable heredoc delimiter, not a fixed "EOF". A multi-line
+          # GITHUB_ENV write ends at the first line that equals the delimiter,
+          # so with a fixed one any value containing a bare `EOF` line closes
+          # the block early and everything after it is parsed as further
+          # NAME=VALUE assignments -- that is, it sets arbitrary environment
+          # variables for every later step in the job, including the two below
+          # that run `gh` with the cloud PAT.
+          #
+          # $ADDED is route text that scripts/list_oss_routes.py derives from
+          # this repository's own source, so nothing reaches it that is not
+          # already committed here and the gap is narrow today. It is narrow,
+          # not closed, and a 128-bit random delimiter closes it outright for
+          # the cost of one line. python3 rather than openssl/uuidgen because
+          # the `list_oss_routes.py` call above already makes python3 a hard
+          # requirement of this step -- this adds no new tool to depend on.
+          # (zizmor github-env, .github/workflows/auto-deploy-cloud.yml)
+          DELIM="NEW_ROUTES_EOF_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+          {
+            printf 'NEW_ROUTES<<%s\n' "$DELIM"
+            printf '%s\n' "$ADDED"
+            printf '%s\n' "$DELIM"
+          } >> "$GITHUB_ENV"
           echo "::warning::This release adds OSS routes with no cloud_route_policy entry; the pin PR cannot go green alone."
           echo "$ADDED" | sed 's/^/  added: /'
 

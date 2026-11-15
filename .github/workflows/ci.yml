@@ -870,6 +870,14 @@ jobs:
       - name: The daemon lock cannot lock the daemon out
         run: python3 -m pytest tests/test_pid_lock_reclaim.py tests/test_status_daemon_truth.py tests/test_pid_liveness_windows.py -q
 
+      # `clawmetry sync --restart` once reported success while the stale daemon
+      # kept running: on Linux without a user D-Bus session the fallback took
+      # ANY clawmetry.sync process on the box (another user's collector) as
+      # proof the service was up. These pin restart/stop/status to the lock
+      # holder in this user's ~/.clawmetry (docs/product-records/sync-daemon-restart.md).
+      - name: sync --restart restarts only this user's store owner
+        run: python3 -m pytest tests/test_cli_sync_restart.py tests/test_daemon_root_systemd.py -q
+
       # The field-failure pipeline (desktop shell -> cloud sink -> deduped
       # issue -> hourly fixer) had ONE producer, the installer, so a daemon
       # that stopped working reported to nobody: it exits before the error
