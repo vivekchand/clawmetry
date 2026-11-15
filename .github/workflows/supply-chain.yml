@@ -70,16 +70,27 @@ jobs:
       - run: >-
           python3 -m pip install --quiet --require-hashes
           -r .github/requirements/fonts-check.txt
-      # Proves the distinction the check depends on: an unreachable upstream is
-      # reported as unverified, while a real difference still fails. Runs first
-      # and needs no network, so a Google Fonts outage cannot stop it.
-      - name: Font check degrades on an unreachable upstream (and only then)
-        run: python3 -m pytest tests/test_vendor_fonts_degrades.py -q
-      # Regenerates from the Google Fonts API and diffs against what is checked
-      # in, so a hand-edited stylesheet or a half-finished regeneration fails.
-      # An outage or an API-shape change is reported as SKIP rather than DRIFT:
-      # the API is outside any contributor's control, so failing on it would
-      # leave every PR red with nothing anyone could do about it.
+      # Both halves of the checker's failure semantics: an upstream that is
+      # unreachable OR that answers inconsistently is "unverified", a stable
+      # difference is drift, and --check never writes into the tree it
+      # verifies. Runs first and needs no network, so a Google Fonts outage
+      # cannot stop it.
+      - name: Font check degrades on an unusable upstream (and only then)
+        run: >-
+          python3 -m pytest -q
+          tests/test_vendor_fonts_degrades.py
+          tests/test_vendor_fonts_check_readonly.py
+      # Regenerates from the Google Fonts API into a temporary directory and
+      # compares the checked-in stylesheet AND the vendored woff2 bytes against
+      # it, so a hand-edit, a half-finished regeneration, or a font changed
+      # upstream under an unchanged filename all fail.
+      #
+      # Three upstream conditions are reported as SKIP rather than DRIFT: an
+      # outage, an API-shape change, and two fetches of the same request that
+      # disagree with each other. The API is outside any contributor's control,
+      # so failing on it would leave every PR red with nothing anyone could do
+      # about it. A difference that reproduces across two independent
+      # generations still fails.
       - name: Check checked-in font CSS matches a fresh generation
         id: fonts
         run: python3 scripts/vendor_fonts.py --check

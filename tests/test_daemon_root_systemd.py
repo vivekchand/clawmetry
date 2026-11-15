@@ -6,10 +6,7 @@ silently failed and the daemon never started; status also only checked
 root uses a SYSTEM service, both verify + fall back to a subprocess, and status
 detects the daemon by the actual process.
 """
-import types
-import pytest
-
-import clawmetry.cli as cli
+from clawmetry import cli
 
 
 class _Res:
@@ -42,7 +39,7 @@ def test_root_uses_system_scope_not_user(monkeypatch):
     started = {"sub": False}
     monkeypatch.setattr(cli, "_start_subprocess", lambda: started.__setitem__("sub", True))
 
-    cli._register_systemd({"node_id": "n1", "api_key": "cm_x"})
+    assert cli._register_systemd({"node_id": "n1", "api_key": "cm_x"}) is True
     # No systemctl call may carry --user for root.
     assert not any("--user" in c for c in calls if isinstance(c, list))
     assert any("enable" in c for c in calls if isinstance(c, list))
@@ -54,18 +51,27 @@ def test_nonroot_uses_user_scope(monkeypatch):
     monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
     monkeypatch.setattr(cli, "_is_sync_running", lambda: True)
     monkeypatch.setattr(cli, "_start_subprocess", lambda: None)
-    cli._register_systemd({"node_id": "n1", "api_key": "cm_x"})
+    assert cli._register_systemd({"node_id": "n1", "api_key": "cm_x"}) is True
     assert any("--user" in c for c in calls if isinstance(c, list))
 
 
-def test_falls_back_to_subprocess_when_systemd_does_not_start(monkeypatch):
+def test_reports_systemd_failure_to_caller_even_if_an_unrelated_daemon_exists(monkeypatch):
     _recorder(monkeypatch, is_active="failed")  # never becomes active
     monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(cli, "_is_sync_running", lambda: False)  # process not up either
+    monkeypatch.setattr(cli, "_is_sync_running", lambda: True)  # may be another user's process
     started = {"sub": False}
     monkeypatch.setattr(cli, "_start_subprocess", lambda: started.__setitem__("sub", True))
-    cli._register_systemd({"node_id": "n1", "api_key": "cm_x"})
-    assert started["sub"] is True  # systemd failed -> subprocess fallback
+    assert cli._register_systemd({"node_id": "n1", "api_key": "cm_x"}) is False
+    assert started["sub"] is False  # fallback and restart policy belong to _start_daemon
+
+
+def test_register_systemd_uses_restart_for_an_existing_service(monkeypatch):
+    calls = _recorder(monkeypatch, is_active="active")
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    assert cli._register_systemd({"node_id": "n1"}, restart=True) is True
+    commands = [call for call in calls if isinstance(call, list)]
+    assert any("restart" in command for command in commands)
+    assert not any("enable" in command for command in commands)
 
 
 def test_status_detects_running_daemon_by_process(monkeypatch, capsys):
