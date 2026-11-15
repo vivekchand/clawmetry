@@ -40,7 +40,8 @@ def test_guard_builder_uses_the_call_it_is_given(monkeypatch):
         return []
 
     body = guard.build_guard_sessions_body(50, call=_call)
-    assert seen == ["query_sessions_table", "query_recent_loop_signals"]
+    assert seen == ["query_sessions_table", "query_recent_loop_signals",
+                    "query_approvals", "query_tool_policy", "list_node_settings"]
     assert body["count"] == 1 and body["flagged"] == 0
     row = body["sessions"][0]
     assert row["session_id"] == "claude_code:abc"
