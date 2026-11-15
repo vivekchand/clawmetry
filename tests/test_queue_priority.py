@@ -25,6 +25,12 @@ def queue_shell(tmp_path):
     gh.write_text('#!' + sys.executable + '\n' + '''
 import json, os, subprocess, sys
 args=sys.argv[1:]
+# Real gh refuses to filter a slurped response, and pairing the two is the
+# exact defect this workflow shipped. Reject it here so the suite cannot pass
+# a combination the runner would reject.
+if '--slurp' in args and '--jq' in args:
+    print('the `--slurp` option is not supported with `--jq` or `--template`', file=sys.stderr)
+    sys.exit(1)
 path=next(a for a in args if a.startswith('/repos/'))
 with open(os.environ['TRACE'], 'a') as out:out.write(json.dumps(args)+'\\n')
 data=json.load(open(os.environ['FIXTURE']))
@@ -38,8 +44,12 @@ else:key='runs'
 pages=data[key]
 if '--paginate' not in args:pages=pages[:1]
 value=pages if '--slurp' in args else pages[0]
-query=args[args.index('--jq')+1]
-sys.exit(subprocess.run(['jq','-r',query],input=json.dumps(value),text=True).returncode)
+# A slurped response is piped into the workflow's own `jq -r`, so the real
+# filters stay under test. An unslurped one may still use gh's `--jq`.
+if '--jq' in args:
+    query=args[args.index('--jq')+1]
+    sys.exit(subprocess.run(['jq','-r',query],input=json.dumps(value),text=True).returncode)
+print(json.dumps(value))
 ''')
     gh.chmod(0o755)
     date = tmp_path / 'date'
