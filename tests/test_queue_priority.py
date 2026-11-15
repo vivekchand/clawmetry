@@ -38,8 +38,10 @@ else:key='runs'
 pages=data[key]
 if '--paginate' not in args:pages=pages[:1]
 value=pages if '--slurp' in args else pages[0]
-query=args[args.index('--jq')+1]
-sys.exit(subprocess.run(['jq','-r',query],input=json.dumps(value),text=True).returncode)
+if '--jq' in args:
+    query=args[args.index('--jq')+1]
+    sys.exit(subprocess.run(['jq','-r',query],input=json.dumps(value),text=True).returncode)
+print(json.dumps(value))
 ''')
     gh.chmod(0o755)
     date = tmp_path / 'date'
