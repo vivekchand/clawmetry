@@ -1,0 +1,11 @@
+{
+  "scanner": "Bandit 1.9.4, CI hash-pinned requirements",
+  "scope": "Repository Python source with the same CI exclusions; generated wheel build copy moved outside the checkout",
+  "medium_or_higher_findings": 308,
+  "high_findings": 0,
+  "scan_errors": 0,
+  "baseline_before": 309,
+  "baseline_after": 308,
+  "changed_store_source_sha256": "21e9e9e4b807baa036d34c5a044e7c92485d4cd03f35ddc644f2528fb37ac2f3",
+  "resolution": "Static migration SQL and one shared bound-identity episode read replace duplicate constructions. No scanner suppression or baseline relaxation."
+}

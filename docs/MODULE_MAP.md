@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-341 modules, 98 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+350 modules, 98 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -161,6 +161,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/alert_evaluator.py` | large | Local alert-rule evaluator — pure logic, no I/O (PRD #779 PR-D part 2). |
 | `clawmetry/apikeys.py` | medium | scoped, revocable read keys for custom UIs. |
 | `clawmetry/apikeys_public.py` | small | read-side helpers for the keyed public API. |
+| `clawmetry/approval_binding.py` | small | Strict invocation identity shared by approval readers and writers. |
 | `clawmetry/approval_events.py` | small | The public seam between approvals and whoever delivers them. |
 | `clawmetry/approvals.py` | large | cloud-mediated approval policy engine. |
 | `clawmetry/assessment_privacy.py` | medium | Mandatory, local-only masking for explicitly consented assessments. |
@@ -205,10 +206,11 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/detector_behaviour.py` | medium | Is this agent doing something it does not normally do? |
 | `clawmetry/detector_calibration.py` | medium | How a detector decides what "too many" means, for THIS runtime and THIS team. |
 | `clawmetry/detector_decoding.py` | small | Bounded, inert text views for credential inspection (REQ-GOV-DET-001). |
-| `clawmetry/detector_injection.py` | small | the ``prompt_injection`` Guard detector. |
+| `clawmetry/detector_injection.py` | medium | the ``prompt_injection`` Guard detector. |
 | `clawmetry/detector_money.py` | small | What a finding costs, and therefore what to look at first. |
 | `clawmetry/detector_package_source.py` | medium | the ``untrusted_package_source`` Guard detector. |
 | `clawmetry/detector_payload.py` | medium | What a tool call SENT, and what it CARRIED. |
+| `clawmetry/detector_security.py` | medium | Action signatures which otherwise run only when the Security page opens. |
 | `clawmetry/detector_surface.py` | medium | What a tool call actually touched, and what a finding may repeat back. |
 | `clawmetry/detector_swarm.py` | medium | Are sessions that should be independent behaving as if they're coordinated? |
 | `clawmetry/detectors.py` | large | research-backed, judge-free, CPU-cheap trajectory anomaly detectors over a session's recent event sequence (issue #2999). |
@@ -236,6 +238,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/fleet_install.py` | medium | register the collector for shared and virtual desktops (multi-session Windows hosts, pooled images, shared Linux hosts). |
 | `clawmetry/flow_trace.py` | medium | Flow trace assembly for the Harness Engineering tab (REQ-HB-006). |
 | `clawmetry/framework_map.py` | medium | which published framework items a Guard finding is relevant to. |
+| `clawmetry/gate_policy_cache.py` | small | Short-lived, runtime-scoped policy evidence for an initial hook outage. |
 | `clawmetry/gateway_litellm.py` | medium | LiteLLM proxy telemetry: recognise it, and turn a proxied request into one gateway usage record (REQ-OBS-GWY-001, issue #5940). |
 | `clawmetry/gateway_protocol.py` | small | the single source of the OpenClaw gateway WebSocket protocol range every connect frame must advertise. |
 | `clawmetry/gateway_tap.py` | medium | live OpenClaw gateway WebSocket subscriber. |
@@ -301,6 +304,8 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/process_control.py` | large | host-side process control for runaway agents. |
 | `clawmetry/project_attribution.py` | medium | Project attribution and per-project budget arithmetic (REQ-OBS-PRJ-001). |
 | `clawmetry/prompt_injection.py` | medium | injection signatures and the untrusted-content signal. |
+| `clawmetry/protection_capture.py` | small | Daemon-only, bounded observations of native hook configuration. |
+| `clawmetry/protection_evidence.py` | medium | Protection evidence for Guard, with no inference from agent self-reports. |
 | `clawmetry/provenance.py` | medium | Every number says how it was obtained. |
 | `clawmetry/providers_pricing.py` | medium | ClawMetry provider detection and pricing table. |
 | `clawmetry/proxy.py` | large | ClawMetry Proxy — opt-in enforcement layer between OpenClaw and LLM providers. |
@@ -326,7 +331,10 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/runtime_records.py` | medium | What each runtime actually records — so a surface can say "not recorded" instead of rendering a zero. |
 | `clawmetry/sample_data.py` | medium | Synthetic sample sessions, so a fresh install is never an empty product. |
 | `clawmetry/secure.py` | medium | clawmetry secure — one-command numbat (Perplexity agent-EDR) setup. |
+| `clawmetry/security_ingest.py` | medium | Bounded security evaluation of committed events, independent of session age. |
+| `clawmetry/security_ingest_store.py` | small | Indexed exact-scope reads for the daemon's incremental security service. |
 | `clawmetry/security_posture.py` | large | Runtime-aware security posture registry. |
+| `clawmetry/security_signatures.py` | medium | Pure legacy action signatures shared by the daemon and dashboard. |
 | `clawmetry/self_diagnostics.py` | medium | Agent self-diagnostics: reports an agent files about its own trouble, and the independent check on whether the tool stream agrees (WO-59, REQ-SELF). |
 | `clawmetry/selfhosted.py` | medium | clawmetry.selfhosted — ClawMetry Enterprise single-tenant server mode. |
 | `clawmetry/session_context.py` | medium | Inputs & context: what the agent was actually given, per session. |
@@ -359,6 +367,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/watchdog.py` | medium | macOS "app-vanished" watchdog. |
 | `clawmetry/winconsole.py` | small | clawmetry.winconsole — stop Windows console windows flashing. |
 | `clawmetry/workload_profiles.py` | small | Workload profiling for the Harness Engineering tab (REQ-HB-004). |
+| `clawmetry/workspace_scope.py` | small | Bounded lexical workspace checks over declared mutation destinations. |
 
 ## Free runtime adapters (`clawmetry/adapters/`)
 
