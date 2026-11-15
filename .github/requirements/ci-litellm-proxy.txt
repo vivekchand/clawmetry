@@ -66,6 +66,28 @@
 # so that particular silence is over. Keep the block's `Name==Version` spelling;
 # that guard reads it.
 #
+# TWO SIBLINGS MUST MOVE WITH litellm, AND `--no-deps` MEANS NOTHING CHECKS THEM.
+# litellm pins litellm-proxy-extras and litellm-enterprise with an exact `==`
+# under the [proxy] extra, and litellm-proxy-extras is not an ordinary library:
+# it ships the Prisma MIGRATIONS that build the proxy's database, while
+# `prisma generate` in the job builds the client from litellm's OWN
+# proxy/schema.prisma. Those two have to describe the same database. They do:
+# litellm 1.100.4's proxy/schema.prisma is byte-identical to the schema.prisma
+# in litellm-proxy-extras 0.4.91, the version it pins.
+#
+# A single-package bump of litellm therefore silently splits the pair, and
+# --no-deps is what makes it silent: pip never reads the `==` and the install
+# step stays green. #6550 bumped litellm 1.88.6 -> 1.100.4 alone and left
+# litellm-proxy-extras at 0.4.72, whose 122 migrations build a database missing
+# 13 of the schema's 77 tables and 56 of its columns. The job got through
+# startup and `/team/new` and died on the first query to touch one:
+# `DataError: The column key_type does not exist in the current database`.
+# That is what took this job red on main from 2026-11-13 until it was realigned.
+#
+# So when litellm moves here, check what the new version pins for both siblings
+# and move them in the same commit. The install step cannot tell you; the
+# end-to-end job is the only thing that will, and it will tell you late.
+#
 # starlette and fastapi are NOT layered floors. They are the opposite: the
 # resolution catching up with the litellm pin. This block used to read that
 # starlette was "deliberately NOT layered", pinned to 0.50.0 by fastapi
@@ -725,14 +747,18 @@ distro==1.9.0 \
     --hash=sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed \
     --hash=sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2
     # via openai
-dnspython==2.8.0 \
-    --hash=sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af \
-    --hash=sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f
+dnspython==2.9.2 \
+    --hash=sha256:8d4d39a513e649d634004ce4d39ade2352efcea472a0247535a5c2d18a9d7ba9 \
+    --hash=sha256:af15f7d385a6ae2fb35a796fde2138004c8c42c7389090e2addc83e3b3340fd8
     # via email-validator
 email-validator==2.3.0 \
     --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4 \
     --hash=sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426
     # via pydantic
+expression==5.8.0 \
+    --hash=sha256:3420f0ed06e2282f1f030ab8eefb70f06ed62365cd1988ad3b7c6525db9df179 \
+    --hash=sha256:2286e4ff71802420a69b235fa78fffdd21f404958524c1cb95133419f7f64e5f
+    # via litellm
 fastapi==0.141.1 \
     --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3 \
     --hash=sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1
@@ -823,9 +849,9 @@ fastuuid==0.14.0 \
     --hash=sha256:f54d5b36c56a2d5e1a31e73b950b28a0d83eb0c37b91d10408875a5a29494bad \
     --hash=sha256:f74631b8322d2780ebcf2d2d75d58045c3e9378625ec51865fe0b5620800c39d
     # via litellm
-filelock==4.0.3 \
-    --hash=sha256:30cd166e2aee2c7534ce2c33c6367c4cd051b8368e20e2c4eb0c34f699bacfab \
-    --hash=sha256:87296d60478e14204fd9406e79831400fef76693bae2895deec236c98e87a8aa
+filelock==4.2.1 \
+    --hash=sha256:7be2662e9e826b9bba28afc0f843a123280d799a2ea44bb5d35ccec67905ae44 \
+    --hash=sha256:c4c937ccac2a813cee448e662a56366cfb374c0f8702e75f295c412cc1c5d5a3
     # via huggingface-hub
 frozenlist==1.8.0 \
     --hash=sha256:0325024fe97f94c41c08872db482cf8ac4800d80e79222c6b0b7b162d5b13686 \
@@ -1181,15 +1207,15 @@ jsonschema-specifications==2025.9.1 \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
     # via jsonschema
 litellm==1.100.4 \
-    --hash=sha256:8c01f7e9aebded5b3509128be648518a2ec4f1feb8dfb87a539895091651898b
+    --hash=sha256:ded14b15466163c76c9a7da0cd091663b4bebbff9aa56724a5905386a9d12532
     # via -r ll.in
-litellm-enterprise==0.1.40 \
-    --hash=sha256:bf0eada2309053556aef09d9071297f3c5952e787df9c283de13a393b6b85251 \
-    --hash=sha256:f2bc6d8ed3863f51d2aaafa99f2a5cda6ccf9fc64a9c646825ab8051a789bc62
+litellm-enterprise==0.1.62 \
+    --hash=sha256:2ce78366557335de557ee72ad86c92b2b062b0e07e31dff2139576feda849489 \
+    --hash=sha256:337697160896d52079290ffe8051c3dee450653d271cb29723af6db8546eb7d9
     # via litellm
-litellm-proxy-extras==0.4.72 \
-    --hash=sha256:869c40cb459e0c40c93d29eb4d4d8b3a197050c0673d7eca1765a034a690fb93 \
-    --hash=sha256:a9543165eb5e8b440a2a92963a67fcf143a15457bfdcb8fc05e68325aee75c0e
+litellm-proxy-extras==0.4.91 \
+    --hash=sha256:5cac5f06f9addd023b5c99a05c2c4c5147eaf799d8f00567e3ee8f04e4595c0b \
+    --hash=sha256:d19fe53591b0bbd48aff24cb1a166b0c68ff2491469ceec88eaa83c6a364562d
     # via litellm
 markdown-it-py==4.2.0 \
     --hash=sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49 \
@@ -1287,8 +1313,8 @@ markupsafe==3.0.3 \
     --hash=sha256:fed51ac40f757d41b7c48425901843666a6677e3e8eb0abcff09e4ba6e664f50
     # via jinja2
 mcp==1.30.0 \
-    --hash=sha256:2726bca5e7193f61c5dde8b12500a6de2d9acf6d1a1c0be9e8c2e706437991df \
-    --hash=sha256:d51e36a5f5644faea4f85ea649bfffa6bc6c26770d42798ad6a3de3d2ba69683
+    --hash=sha256:666edb5009503e1047c9d60346a756f94b261f05cc2625f23d41c728ffc484d0 \
+    --hash=sha256:445414625fce5c295faa505bb11bacece661ab6f4028d57c935db57820b7a3e4
     # via litellm
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
