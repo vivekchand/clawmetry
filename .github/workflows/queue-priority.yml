@@ -14,6 +14,14 @@
 #
 # No third-party actions on purpose: every step is `gh api` against
 # GITHUB_TOKEN, so there is nothing to SHA-pin and no checkout needed.
+#
+# Each `gh api --paginate --slurp` below pipes into `jq -r` rather than using
+# gh's own `--jq`. gh rejects `--slurp` together with `--jq` ("the `--slurp`
+# option is not supported with `--jq` or `--template`"), which took every run
+# of this workflow red. The filters are written against the slurped shape -- an
+# array of page objects, hence the leading `.[]` -- so the array has to be
+# built before the filter runs. `set -euo pipefail` is in force, so a failing
+# gh call still fails the step through the pipe.
 
 name: Queue priority (main first)
 
@@ -67,7 +75,7 @@ jobs:
           set -euo pipefail
           ok=0; fail=0
           ids=$(gh api "/repos/$REPO/actions/runs?status=queued&per_page=100" --paginate --slurp \
-                        --jq '.[].workflow_runs[]
+                        | jq -r '.[].workflow_runs[]
                               | select(.head_branch != "main")
                               # The PyPI publish fires on pull_request:closed, so its
                               # head branch is the merged PR branch, not main. Cancelling
@@ -114,7 +122,7 @@ jobs:
         run: |
           set -euo pipefail
           busy=$(gh api "/repos/$REPO/actions/runs?branch=main&per_page=100" --paginate --slurp \
-                   --jq '[.[].workflow_runs[]
+                   | jq -r '[.[].workflow_runs[]
                           | select(.status == "queued" or .status == "in_progress")
                           | select(.name != env.SELF)] | length')
           echo "main busy runs: $busy"
@@ -127,14 +135,14 @@ jobs:
           CUTOFF=$(date -u -d '48 hours ago' +%Y-%m-%dT%H:%M:%SZ)
           export CUTOFF
           pulls=$(gh api "/repos/$REPO/pulls?state=open&per_page=100" --paginate --slurp \
-            --jq '.[][] | select(.head.repo.full_name == env.REPO) | "\(.number)\t\(.head.ref)\t\(.head.sha)"')
+            | jq -r '.[][] | select(.head.repo.full_name == env.REPO) | "\(.number)\t\(.head.ref)\t\(.head.sha)"')
           rerun_failures=0
           while IFS=$'\t' read -r pr branch sha; do
             [ -n "$pr" ] || continue
             # Requeue only after the portable product-record check has passed.
             # This schedules work; the required E2E aggregate still gates merging.
             record=$(gh api "/repos/$REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp \
-                       --jq '[.[].check_runs[] | select(.name == "PR cites the product record that justified it")]
+                       | jq -r '[.[].check_runs[] | select(.name == "PR cites the product record that justified it")]
                              | max_by(.id) | .conclusion // "unreported"')
             [ "$record" = "success" ] || { echo "PR #$pr: product-record=$record, parked"; continue; }
             # Latest run per workflow on this exact head; re-run it only if it
@@ -142,7 +150,7 @@ jobs:
             export CANDIDATE_SHA="$sha"
             branch_query=$(jq -nr --arg ref "$branch" '$ref | @uri')
             ids=$(gh api "/repos/$REPO/actions/runs?branch=$branch_query&event=pull_request&per_page=100" --paginate --slurp \
-              --jq '[.[].workflow_runs[] | select(.head_sha == env.CANDIDATE_SHA and .created_at > env.CUTOFF)]
+              | jq -r '[.[].workflow_runs[] | select(.head_sha == env.CANDIDATE_SHA and .created_at > env.CUTOFF)]
                    | group_by(.workflow_id) | .[] | max_by(.created_at)
                    | select(.conclusion == "cancelled") | .id')
             while read -r id; do
