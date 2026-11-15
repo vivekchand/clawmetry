@@ -295,7 +295,8 @@ def evaluate(event: dict) -> "dict | None":
             policies = [p for p in policies if not _is_blanket_ask(p)]
         if not policies:
             return None
-        if not approvals.match_policy(policies, tool_name, tool_input):
+        if not approvals.match_policy(policies, tool_name, tool_input,
+                                      runtime="claude_code", cwd=str(event.get("cwd") or "")):
             return None  # cheap miss — no duckdb/local_store import paid
 
         result = approvals.process_tool_call(
@@ -307,6 +308,8 @@ def evaluate(event: dict) -> "dict | None":
             args=tool_input,
             policies=policies,
             kill_on_deny=False,   # the hook denies ONE call; session survives
+            cwd=str(event.get("cwd") or ""),
+            runtime="claude_code",
         )
         decision = (result or {}).get("decision") or ""
         pol = (result or {}).get("policy") or "policy"
@@ -316,6 +319,9 @@ def evaluate(event: dict) -> "dict | None":
         # "the human declined" when nobody answered erodes trust in the
         # whole gate (live confusion, 2026-07-26).
         if decision == "denied":
+            if (result or {}).get("reason") == "approval_service_unavailable":
+                return _deny_payload(
+                    "ClawMetry cannot verify this protected approval. Request a new review.")
             return _deny_payload(
                 f"Denied via ClawMetry approvals (policy '{pol}'). The human "
                 "declined this specific call — pick a different approach or "
