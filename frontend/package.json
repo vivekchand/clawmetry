@@ -14,21 +14,21 @@
     "@visx/group": "^4.0.0",
     "@visx/scale": "^4.0.0",
     "@visx/shape": "^4.0.0",
-    "framer-motion": "^14.0.0",
+    "framer-motion": "^14.11.1",
     "i18next": "^26.7.1",
     "i18next-browser-languagedetector": "^8.3.0",
-    "i18next-http-backend": "^4.0.9",
+    "i18next-http-backend": "^4.0.10",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-i18next": "^17.1.11",
     "react-router-dom": "^7.18.5",
-    "zustand": "^5.0.16"
+    "zustand": "^5.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.2.1",
+    "@vitejs/plugin-react": "^6.3.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.5"
+    "vite": "^8.3.7"
   }
 }
