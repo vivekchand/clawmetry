@@ -26,11 +26,7 @@ def _fresh(tmp_path, monkeypatch, name="phase.duckdb", **env):
 
 
 def _versions(store, table):
-    with store._write_lock:
-        store._conn.execute("CHECKPOINT")
-    return store._conn.execute(
-        "SELECT estimated_size FROM duckdb_tables() WHERE table_name = ?", [table]
-    ).fetchone()[0]
+    return store._table_write_counts.get(table, 0)
 
 
 # ── session_phase ──────────────────────────────────────────────────────────
