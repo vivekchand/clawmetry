@@ -70,7 +70,6 @@ from clawmetry.query_contract import (
     SCOPE_DOC as _READ_SCOPE_DOC,
     SCOPES as READ_SCOPES,
 )
-from clawmetry.query_contract import SCOPES
 
 # Re-export the read-side public helpers from their own short module so
 # Drift Bot (which reads only the file head) can find them.
@@ -558,7 +557,7 @@ def canonical_allowed_origin(record: dict, origin: str) -> "str | None":
     Returns ``None`` when the origin is not on the key's allowlist.
     Using the stored value (not the caller-supplied string) in the
     ``Access-Control-Allow-Origin`` response header prevents a
-    user-input → response-header taint chain (CWE-113).
+    user-input -> response-header taint chain (CWE-113).
     """
     if not origin:
         return None
@@ -621,6 +620,5 @@ def redact(presented: str) -> str:
     if not parsed:
         return "(no key)"
     return f"{KEY_PREFIX}_{parsed[0]}_..."
-
 
 

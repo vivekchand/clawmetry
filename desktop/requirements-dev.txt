@@ -46,7 +46,7 @@ pywebview>=6.2.1
 #
 # Needs libgirepository1.0-dev + libcairo2-dev + pkg-config at build time
 # (see the Linux job's "Install system deps" step in desktop-artifacts.yml).
-PyGObject==3.58.0; sys_platform == "linux"
+PyGObject==3.58.1; sys_platform == "linux"
 # Bundler for all three OSes. build_mac.spec / build_windows.spec /
 # build_linux.spec are all PyInstaller specs. py2app is intentionally
 # NOT the mac shipping path: py2app 0.28.x has a broken macOS version
@@ -61,5 +61,5 @@ pyinstaller>=6.22.3
 # Python 3.10+ only. Without either, the bundled Python's OpenSSL
 # has NO configured CA bundle and every HTTPS POST from the shell
 # fails CERTIFICATE_VERIFY_FAILED (support 2026-08-12 "Send code").
-certifi>=2026.10.19
+certifi>=2026.10.23
 truststore>=0.10.5; python_version >= "3.10"

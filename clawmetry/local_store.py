@@ -4464,6 +4464,12 @@ class LocalStore(SecurityIngestStoreMixin, NodeActivityStoreMixin, AgentMetaMixi
         # process uptime (first warning would mis-fire as already-on-
         # cooldown because ``time.monotonic() - 0 < cooldown``).
         self._last_over_cap_warning_ts: float | None = None
+        # Per-table SQL write counter. Incremented inside _write_lock after
+        # each SQL execute that writes a row (not on dedupe-skips). Used by
+        # tests as a portable proxy for "did this call actually hit the DB?"
+        # because duckdb_tables().estimated_size is unreliable in DuckDB 1.1.x
+        # on keyed tables where upserts take the UPDATE path.
+        self._table_write_counts: dict[str, int] = {}
         if not read_only:
             # Rename the legacy events.duckdb in place BEFORE opening — once
             # we hold a connection we can't atomically rename the file out
@@ -9076,6 +9082,9 @@ class LocalStore(SecurityIngestStoreMixin, NodeActivityStoreMixin, AgentMetaMixi
                       str(cwd or "")[:1024], now_ms])
                 if cache is not None:
                     cache[sid] = (h, now_ms)
+                self._table_write_counts["session_phase"] = (
+                    self._table_write_counts.get("session_phase", 0) + 1
+                )
                 if not return_row:
                     return {}
                 row = self._conn.execute("""
@@ -16949,6 +16958,9 @@ class LocalStore(SecurityIngestStoreMixin, NodeActivityStoreMixin, AgentMetaMixi
                     now_ms,
                 ])
                 n += 1
+                self._table_write_counts["session_context"] = (
+                    self._table_write_counts.get("session_context", 0) + 1
+                )
         return n
 
     def query_session_context(
