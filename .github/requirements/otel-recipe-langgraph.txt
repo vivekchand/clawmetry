@@ -2,7 +2,7 @@
 # (examples/otel/langgraph/), run by ci.yml's otel-recipe-langgraph job.
 #
 # Direct requirements (the versions the recipe page records as verified):
-#   langgraph==1.2.14 langchain-core==1.6.3
+#   langgraph==1.2.14 langchain-core==1.7.6
 #   opentelemetry-instrumentation-langchain==0.62.3
 #   opentelemetry-sdk==1.45.2 opentelemetry-exporter-otlp-proto-http==1.45.2
 #
@@ -253,8 +253,7 @@ jsonpointer==3.10 \
     --hash=sha256:3b08b9e5239f1b683e31c9561c350d75ce3fa8cdd407130ca8491fdb0c9e56f3 \
     --hash=sha256:69349c0e738c93e9efa501397091f49ad302ae686293effd05d7755c06f88ef0
 langchain-core==1.7.6 \
-    --hash=sha256:114fe1868c9ed60606662b9dd0074bf3152cc6b0b1522ba37cbd6b04f55ca77d \
-    --hash=sha256:88b430944fbd4d40fa98135d6c873581d497b6f33515d01962337548e918df2f
+    --hash=sha256:f61908be526fbeb5da8cc1ffd9d24bce3b50cf45b3a2f1737c1a7a2958046ce6
 langchain-protocol==0.0.21 \
     --hash=sha256:04b3e80852233a8db39b39d3ad2438d892531dc0ecd41459e857a139ee0e601c \
     --hash=sha256:7f42f9eae7c08bb9d74850057da50b5483970a3df91b7a8a5aadec6a3dfa4d12
