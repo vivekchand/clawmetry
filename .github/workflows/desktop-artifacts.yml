@@ -53,7 +53,7 @@ jobs:
         run: |
           echo "::error::${GITHUB_REF_NAME} would ship an UNSIGNED macOS build. Set MACOS_SIGN_IDENTITY + MACOS_CERT_P12_BASE64."
           exit 1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
 
@@ -311,7 +311,7 @@ jobs:
         run: |
           echo "::error::${GITHUB_REF_NAME} would ship an UNSIGNED Windows build. Set AZURE_CLIENT_ID + AZ_SIGN_PROFILE (Artifact Signing) or WINDOWS_CERT_PFX_BASE64."
           exit 1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
 
@@ -568,7 +568,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
 
