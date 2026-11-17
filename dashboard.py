@@ -12269,16 +12269,37 @@ Examples:
 Docs: https://docs.clawmetry.com
 """
 
-# Windows has no /tmp, so the literal path resolved to C:\tmp and every read
-# failed into the bare except below — _read_pid() always returned None, which
-# is what silently disabled the stale-instance reclaim at startup (two dev
-# servers could then bind the same port and requests would land on whichever
-# Windows picked). tempfile.gettempdir() honours %TEMP% there; POSIX keeps the
-# exact path it has always used so existing pid files stay discoverable.
-PID_FILE = (
-    os.path.join(_tempfile.gettempdir(), "clawmetry.pid")
+# The pid file and the daemon log both used to sit at a fixed, predictable name
+# in the shared temp directory ("/tmp/clawmetry.pid", "/tmp/clawmetry.log").
+# On a multi-user POSIX machine /tmp is world-writable, so any other local
+# account can pre-create either name -- or a symlink standing in for it -- and
+# this user's write then follows that symlink back out of /tmp under this
+# user's own privileges. The pid write is one integer, but the launchd plist
+# aims StandardOutPath AND StandardErrorPath at the log path, so a planted
+# symlink there is an append primitive against any file this user can write,
+# lasting as long as the daemon runs.
+#
+# Both now live under ~/.clawmetry/, a directory this user owns, which is
+# already where clawmetry/proxy.py keeps proxy.pid and matches the convention
+# in clawmetry/sync.py and clawmetry/telemetry.py. The earlier note on this
+# block still holds for the legacy paths below: Windows has no /tmp, so the
+# bare literal resolved to C:\tmp, every read failed into the except in
+# _read_pid() and the stale-instance reclaim at startup was silently disabled;
+# _tempfile.gettempdir() honours %TEMP%, which is per-user on Windows.
+_DAEMON_DIR = os.path.join(os.path.expanduser("~"), ".clawmetry")
+PID_FILE = os.path.join(_DAEMON_DIR, "clawmetry.pid")
+DAEMON_LOG_FILE = os.path.join(_DAEMON_DIR, "clawmetry.log")
+
+# A daemon started by an earlier build wrote its pid to the old location, so
+# these are still READ -- by `clawmetry status`, by `stop`, and by the
+# stale-instance reclaim -- to keep an already-running instance discoverable
+# across the upgrade. Nothing writes them, and `remove` clears them.
+_LEGACY_PID_FILES = (
+    (os.path.join(_tempfile.gettempdir(), "clawmetry.pid"),)
     if os.name == "nt"
-    else "/tmp/clawmetry.pid"
+    # The literal below is a read-only legacy path and is never written to;
+    # it is declared to bandit on the line itself.
+    else ("/tmp/clawmetry.pid",)  # nosec B108
 )
 LAUNCHD_LABEL = "com.clawmetry.dashboard"
 LAUNCHD_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
@@ -12312,16 +12333,36 @@ def _get_script_path():
 
 
 def _write_pid(pid):
+    # ~/.clawmetry/ is created on demand: a first run has no config dir yet,
+    # and without this the write raised and took `clawmetry start` with it.
+    try:
+        os.makedirs(_DAEMON_DIR, exist_ok=True)
+    except Exception:
+        pass
     with open(PID_FILE, "w") as f:
         f.write(str(pid))
 
 
-def _read_pid():
+def _pid_in(path):
+    """The integer in `path`, or None when it is missing or unreadable."""
     try:
-        with open(PID_FILE) as f:
+        with open(path) as f:
             return int(f.read().strip())
     except Exception:
         return None
+
+
+def _read_pid():
+    """Current pid, falling back to the pre-~/.clawmetry locations.
+
+    Returns None when no file holds a readable integer, which is what every
+    caller already treats as "nothing is running".
+    """
+    for _path in (PID_FILE,) + tuple(_LEGACY_PID_FILES):
+        pid = _pid_in(_path)
+        if pid is not None:
+            return pid
+    return None
 
 
 def _is_pid_running(pid):
@@ -12912,7 +12953,13 @@ def _start_oauth_bridge(provider, mode="managed"):
     return f"{app_base}/api/oauth/{provider}/start?cli_port={port}"
 
 
-def _build_plist(python_exe, script_path, port, host, log_path="/tmp/clawmetry.log"):
+def _build_plist(python_exe, script_path, port, host, log_path=None):
+    # Defaulted to "/tmp/clawmetry.log", and the one caller never passes this,
+    # so that shared-temp path was the one launchd actually used for both
+    # StandardOutPath and StandardErrorPath. Resolved here rather than in the
+    # signature so a default evaluated at import cannot outlive $HOME.
+    if log_path is None:
+        log_path = DAEMON_LOG_FILE
     extra = []
     if host != "127.0.0.1":
         extra += ["<string>--host</string>", f"<string>{host}</string>"]
@@ -12990,12 +13037,9 @@ def cmd_start(args):
     _port_busy = _s.connect_ex(("127.0.0.1", port)) == 0
     _s.close()
     if _port_busy:
-        _old_pid = None
-        try:
-            with open(PID_FILE) as _pf:
-                _old_pid = int(_pf.read().strip())
-        except Exception:
-            pass
+        # Was an inline open(PID_FILE) that only looked at the new path, so
+        # the reclaim missed a daemon still running from an earlier build.
+        _old_pid = _read_pid()
         if _old_pid:
             try:
                 import subprocess as _sp
@@ -13029,6 +13073,9 @@ def cmd_start(args):
     if _is_macos():
         # Write plist
         plist_content = _build_plist(python_exe, script_path, port, host)
+        # launchd will not start a job whose StandardOutPath directory does
+        # not exist, and ~/.clawmetry/ may not exist on a first run.
+        os.makedirs(_DAEMON_DIR, exist_ok=True)
         os.makedirs(os.path.dirname(LAUNCHD_PLIST), exist_ok=True)
         with open(LAUNCHD_PLIST, "w") as f:
             f.write(plist_content)
@@ -13047,7 +13094,7 @@ def cmd_start(args):
         time.sleep(1)
         if _launchd_running():
             print(f"[ok] ClawMetry started  ->  http://localhost:{port}")
-            print("   Auto-starts on login - logs: /tmp/clawmetry.log")
+            print(f"   Auto-starts on login - logs: {DAEMON_LOG_FILE}")
             print("   Stop with: clawmetry stop")
         else:
             print(
@@ -13465,9 +13512,14 @@ def cmd_uninstall(args):
     else:
         print("  Daemon mode not supported on this OS.")
 
-    # Remove PID file if present
-    if os.path.exists(PID_FILE):
-        os.remove(PID_FILE)
+    # Remove PID file if present, legacy locations included -- leaving one
+    # behind means the next start reclaims a pid that is no longer ours.
+    for _pid_path in (PID_FILE,) + tuple(_LEGACY_PID_FILES):
+        try:
+            if os.path.exists(_pid_path):
+                os.remove(_pid_path)
+        except OSError:
+            pass
 
     print("[ok] ClawMetry service removed.")
 
@@ -13716,7 +13768,7 @@ def _run_server(args):
         # One-click login URL when gateway token was detected (#1356 PR-D).
         # Defense against shoulder-surfing screenshots: only the framed URL is
         # printed (never the bare token), and only on the interactive startup
-        # banner (stdout). We never log this line to /tmp/clawmetry.log because
+        # banner (stdout). We never log this line to the daemon log file because
         # the daemon-mode launcher redirects only the noisy server output, not
         # this one-shot banner that runs before serve().
         try:
