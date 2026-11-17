@@ -308,6 +308,17 @@ jobs:
       - name: Stalled-collector banner advises a command that can work
         run: python3 -m pytest tests/test_stale_daemon_banner_advises_a_command_that_works.py -q
 
+      # The daemon's pid file and log sat at a fixed name in the shared /tmp.
+      # It is world-writable on a multi-user box, so another local account can
+      # leave a symlink under either name and the write follows it out of /tmp
+      # as this user. The plist aimed BOTH StandardOutPath and StandardErrorPath
+      # at the log and its one caller never overrode the default, so that was
+      # the path launchd really used. Both now resolve under ~/.clawmetry/; the
+      # /tmp pid path stays readable only so an older running daemon is still
+      # found by status/stop and the stale-instance reclaim.
+      - name: Daemon pid and log stay out of the shared temp directory
+        run: python3 -m pytest tests/test_daemon_paths_not_in_shared_tmp.py -q
+
       # The 3.9 pip bootstrap pin cannot follow Dependabot past 26.0.1: 26.1
       # moved pip's Requires-Python to >=3.10, which the release canary's 3.9
       # cell cannot install. That refusal was a comment in the pin file and
