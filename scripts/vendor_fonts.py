@@ -28,6 +28,12 @@ Usage
 
 ``--check`` is what CI runs: it re-derives the stylesheet and fails if the
 checked-in one drifted, so a hand-edit or a stale regeneration is caught.
+
+It separates three outcomes, because only one of them is the contributor's to
+fix: the upstream could not be reached (SKIP, unverified), the upstream answered
+but left out a family the request asked for (SKIP, unverified -- regenerating
+from such a reply would delete that family rather than repair anything), or the
+upstream answered in full and the result differs (DRIFT, fails).
 """
 from __future__ import annotations
 
@@ -38,6 +44,7 @@ import os
 import re
 import ssl
 import sys
+import urllib.parse
 import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -139,6 +146,49 @@ class FontDataError(ValueError):
     """Downloaded font data or required decoder cannot be verified."""
 
 
+class IncompleteFontSet(RuntimeError):
+    """The css2 response omitted a family the request asked for.
+
+    Distinct from ``FontDataError``: nothing we received is *wrong*, it is
+    simply not all of it. The response is a perfectly valid stylesheet for the
+    families it does carry, so neither ``_parse`` nor the block count notices.
+    """
+
+
+def _requested_families(url: str) -> list[str]:
+    """The families a css2 request asks for, in request order.
+
+    ``family=JetBrains+Mono:wght@400;500;600`` -> ``JetBrains Mono``. The part
+    after the colon is the axis spec, not part of the name.
+    """
+    names: list[str] = []
+    for raw in re.findall(r"[?&]family=([^&]+)", url):
+        name = urllib.parse.unquote_plus(raw.split(":", 1)[0]).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _missing_families(url: str, blocks: list[dict]) -> list[str]:
+    """Requested families that came back with no woff2 face at all.
+
+    Google's css2 endpoint can serve a response that silently drops one whole
+    family and still returns every face of the others. That is indistinguishable
+    from drift to a byte comparison, and it is the more dangerous of the two
+    readings: regenerating from such a response does not "repair" anything, it
+    DELETES the dropped family's faces from the vendored set. The dashboard then
+    renders in a system fallback, and the guarantee this script exists to make
+    -- that no page load contacts a third party -- quietly covers less than the
+    stylesheet claims.
+
+    Observed on 2026-11-18: a css2 reply carrying Instrument Serif and Space
+    Grotesk in full, and no JetBrains Mono at all. The checked-in stylesheet was
+    correct; the response was not.
+    """
+    returned = {block["family"] for block in blocks}
+    return [name for name in _requested_families(url) if name not in returned]
+
+
 def _effective_range(raw: bytes, advertised: str) -> str:
     """CSS font matching uses the intersection of unicode-range and cmap.
 
@@ -197,6 +247,13 @@ def build(spec: dict) -> str:
     blocks = _parse(_fetch(spec["url"]).decode("utf-8"))
     if not blocks:
         raise SystemExit(f"{spec['name']}: no @font-face blocks parsed — API shape changed?")
+    # Checked before anything is downloaded or written: an incomplete response
+    # must not reach the drift comparison, and must never overwrite a font file.
+    missing = _missing_families(spec["url"], blocks)
+    if missing:
+        raise IncompleteFontSet(
+            f"no woff2 faces returned for {', '.join(missing)}"
+        )
 
     os.makedirs(spec["fonts_dir"], exist_ok=True)
     by_hash: dict[str, str] = {}
@@ -347,6 +404,17 @@ def main() -> int:
             if isinstance(exc, FontDataError):
                 print(f"DRIFT  {spec['name']}: downloaded font cannot be verified ({exc})")
                 failed = True
+                continue
+            if isinstance(exc, IncompleteFontSet):
+                print(f"SKIP   {spec['name']}: upstream response was incomplete ({exc})")
+                print(
+                    "       Treated as UNVERIFIED, not as drift. A family this "
+                    "request asked for came back with no faces, so the "
+                    "checked-in stylesheet cannot be compared against it -- and "
+                    "regenerating would DELETE that family from the vendored "
+                    "set rather than repair anything. Re-run when the API "
+                    "returns the full set."
+                )
                 continue
             print(
                 f"SKIP   {spec['name']}: could not reach or parse the upstream "

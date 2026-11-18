@@ -220,3 +220,130 @@ def test_mirror_binary_mismatch_fails(tmp_path):
     (mirror/'fonts.css').write_text('same css')
     spec={'fonts_dir':str(source),'css_path':str(tmp_path/'fonts.css'),'mirror_dir':str(mirror)}
     assert module._mirror_is_current(spec,'same css') is False
+
+
+# --- A response that is valid, but not all of it -------------------------------
+#
+# The third reading, added after main went red on 2026-11-18. The two cases
+# above are "could not fetch" and "fetched and differs". This is a successful
+# fetch of a *complete-looking* stylesheet that silently carried no JetBrains
+# Mono at all, while carrying every face of the other two families in the same
+# request. Nothing in the response is malformed, so neither _parse nor the
+# empty-blocks guard notices, and the byte comparison can only read it as drift.
+#
+# Reading it as drift is not merely a false red. The failure tells the reader to
+# `run: python3 scripts/vendor_fonts.py`, and --capture-drift hands them an
+# artifact to copy in. Both, at that moment, DELETE 18 vendored faces. The v2 UI
+# loses its monospace face to a system fallback, and the one promise this script
+# exists to keep -- no page load contacts a third party -- silently covers less
+# than the stylesheet says it does. So an incomplete response must be unverified.
+
+
+def _two_family_spec(tmp_path):
+    """A spec whose request asks for two families, both served real bytes."""
+    return {
+        "name": "test",
+        "url": (
+            "https://fonts.invalid/css2"
+            "?family=Manrope:wght@400"
+            "&family=JetBrains+Mono:wght@400"
+            "&display=swap"
+        ),
+        "fonts_dir": str(tmp_path / "fonts"),
+        "css_path": str(tmp_path / "fonts.css"),
+        "rel": "fonts",
+        "note": "test",
+    }
+
+
+def _css_for(families):
+    face = (
+        "/* latin-ext */ @font-face {{ font-family: '{name}'; font-weight: 400; "
+        "font-style: normal; src: url(https://fonts.invalid/{slug}.woff2); "
+        "unicode-range: U+0100-02BA; }}"
+    )
+    return "\n".join(
+        face.format(name=name, slug=name.lower().replace(" ", "-"))
+        for name in families
+    ).encode()
+
+
+def test_requested_families_parses_axis_specs_out_of_the_url():
+    module = _load_module()
+    assert module._requested_families(
+        "https://fonts.googleapis.com/css2"
+        "?family=Instrument+Serif:ital@0;1"
+        "&family=JetBrains+Mono:wght@400;500;600"
+        "&display=swap"
+    ) == ["Instrument Serif", "JetBrains Mono"]
+
+
+@pytest.mark.parametrize("argv_extra", [[], ["--capture-drift"]], ids=["check", "capture"])
+def test_family_missing_from_response_is_unverified_and_changes_nothing(tmp_path, argv_extra):
+    """The whole point: an incomplete response may not rewrite the vendored set."""
+    module = _load_module()
+    spec = _two_family_spec(tmp_path)
+    both = ["Manrope", "JetBrains Mono"]
+    raw = _real_font()
+
+    # First, generate and check in the correct, complete stylesheet.
+    module._fetch = lambda url: raw if url.endswith(".woff2") else _css_for(both)
+    complete = module.build(spec)
+    assert "JetBrains Mono" in complete
+    with open(spec["css_path"], "w") as out:
+        out.write(complete)
+    module.FONT_SETS = [spec]
+    assert _run(module, ["vendor_fonts.py", "--check"])[0] == 0, "sanity: complete response verifies"
+
+    font_file = os.path.join(spec["fonts_dir"], "manrope-latin-ext.woff2")
+    before_fonts = open(font_file, "rb").read()
+
+    # Now upstream drops one requested family and returns the rest in full.
+    module._fetch = lambda url: raw if url.endswith(".woff2") else _css_for(["Manrope"])
+    code, output = _run(module, ["vendor_fonts.py", "--check"] + argv_extra)
+
+    assert code == 0, (
+        "A css2 response that omitted a requested family failed the check. The "
+        "checked-in stylesheet was correct and the contributor has no way to "
+        "make this green. Report it as unverified."
+    )
+    assert "SKIP" in output and "JetBrains Mono" in output, (
+        "the dropped family must be named, or the next reader cannot tell this "
+        "from a generic outage"
+    )
+    assert "DRIFT" not in output and "CAPTURE" not in output
+    assert "JetBrains Mono" in open(spec["css_path"]).read(), (
+        "the incomplete response DELETED a family from the vendored stylesheet. "
+        "This is the regression this check exists to prevent."
+    )
+    assert open(font_file, "rb").read() == before_fonts, "no font file may be rewritten"
+
+
+def test_generate_mode_refuses_to_write_an_incomplete_set(tmp_path):
+    """You cannot vendor a family the API did not send."""
+    module = _load_module()
+    spec = _two_family_spec(tmp_path)
+    raw = _real_font()
+    module._fetch = lambda url: raw if url.endswith(".woff2") else _css_for(["Manrope"])
+    module.FONT_SETS = [spec]
+
+    with pytest.raises(module.IncompleteFontSet):
+        _run(module, ["vendor_fonts.py"])
+    assert not os.path.exists(spec["css_path"]), "no stylesheet may be written"
+
+
+def test_complete_response_is_unaffected_by_the_completeness_check(tmp_path):
+    """The guard must not introduce a new way for a good response to fail."""
+    module = _load_module()
+    spec = _two_family_spec(tmp_path)
+    raw = _real_font()
+    module._fetch = lambda url: raw if url.endswith(".woff2") else _css_for(
+        ["Manrope", "JetBrains Mono"]
+    )
+    assert module._missing_families(spec["url"], module._parse(_css_for(
+        ["Manrope", "JetBrains Mono"]).decode())) == []
+    module.FONT_SETS = [spec]
+    with open(spec["css_path"], "w") as out:
+        out.write(module.build(spec))
+    code, output = _run(module, ["vendor_fonts.py", "--check"])
+    assert code == 0 and "ok" in output and "SKIP" not in output
