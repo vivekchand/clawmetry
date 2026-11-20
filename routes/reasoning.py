@@ -19,6 +19,7 @@ import re
 
 from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
+from clawmetry.file_security import is_path_within, is_safe_path_component
 from clawmetry import event_shape as _event_shape
 
 # Tier-1 DuckDB fast path: enable by exporting CLAWMETRY_LOCAL_STORE_READ=1.
@@ -136,9 +137,17 @@ def _parse_session_reasoning(session_id):
     session_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
-    jsonl_path = os.path.join(session_dir, f"{session_id}.jsonl")
-
     chains = []
+
+    # The route rejects a session id that is not a bare filename before we
+    # get here; re-check at the open so a future caller of this helper
+    # cannot reintroduce the traversal (GHSA-6r57-3vhv-2wpf containment).
+    if not is_safe_path_component(session_id):
+        return chains
+
+    jsonl_path = os.path.join(session_dir, f"{session_id}.jsonl")
+    if not is_path_within(jsonl_path, session_dir):
+        return chains
 
     if not os.path.isfile(jsonl_path):
         return chains
@@ -387,6 +396,11 @@ def api_reasoning():
     session_id = request.args.get("session", "").strip()
     if not session_id:
         return jsonify({"error": "session parameter required"}), 400
+    # A session id names one file inside the sessions directory. Anything
+    # with a separator or a ".." run is rejected here, matching the sibling
+    # transcript endpoints in routes/sessions.py.
+    if not is_safe_path_component(session_id):
+        return jsonify({"error": "invalid session id"}), 400
 
     # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
     # Falls through to legacy JSONL parser when flag is unset, the store

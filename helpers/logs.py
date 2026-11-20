@@ -11,6 +11,8 @@ keep working without changes.
 """
 
 import os
+
+from clawmetry.file_security import is_path_within, is_safe_path_component
 import re
 import subprocess
 import sys
@@ -71,6 +73,13 @@ def _find_log_file(ds):
     from `_get_log_dirs()`.
     """
     import dashboard as _d  # late import — LOG_DIR is set at runtime
+    # ``ds`` reaches us straight from ?date=. The "openclaw-" prefix means
+    # the first path segment can never be "..", but a segment pair like
+    # "x/../../.." still escapes, and Windows collapses ".." lexically
+    # before the filesystem sees it, so the leading segment need not exist
+    # there. Reject anything that is not a bare filename component.
+    if not is_safe_path_component(ds):
+        return None
     log_dir = getattr(_d, "LOG_DIR", None)
     dirs = ([log_dir] if log_dir else []) + _get_log_dirs()
     prefixes = ["openclaw-", "moltbot-"]
@@ -79,7 +88,7 @@ def _find_log_file(ds):
             continue
         for p in prefixes:
             f = os.path.join(d, f"{p}{ds}.log")
-            if os.path.exists(f):
+            if os.path.exists(f) and is_path_within(f, d):
                 return f
     return None
 
