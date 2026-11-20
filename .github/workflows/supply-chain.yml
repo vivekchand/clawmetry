@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       - name: Scan served pages for absolute http(s) asset references
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       - name: Verify sha256 pins and byte-compare against the npm registry
@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       # requests is needed because tests/conftest.py imports it at module
@@ -87,7 +87,7 @@ jobs:
         run: python3 scripts/vendor_fonts.py --check --capture-drift
       - name: Publish font drift evidence for review
         if: failure() && steps.fonts.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: regenerated-fonts
           path: |
@@ -106,7 +106,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       - run: >-
@@ -151,7 +151,7 @@ jobs:
           python3 -m pip install --quiet -r requirements.txt
           cyclonedx-py environment --output-format JSON > clawmetry-sbom.json
       - name: Publish SBOM as a build artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: clawmetry-sbom
           path: clawmetry-sbom.json
@@ -167,7 +167,7 @@ jobs:
       # Atheris publishes Linux wheels up to CPython 3.11; 3.12+ would build
       # from source and need clang. Pinning 3.11 here keeps the job a wheel
       # install, independent of what the rest of the matrix moves to.
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       # requests is needed because tests/conftest.py imports it at module
@@ -197,7 +197,7 @@ jobs:
       # bytes that triggered the failure exist only in a deleted runner.
       - name: Upload crashing inputs
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-crashes
           path: fuzz-crash-*
@@ -211,7 +211,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       # An unresolvable action fails its job at "Set up job" before any step
@@ -254,7 +254,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       # The npm-audit step below needs a Node of its own. Without this it runs
@@ -264,7 +264,7 @@ jobs:
       # That matters more here than it did there, because this job's gate
       # treats an npm-audit outage as RED -- an image bump could turn `main`
       # red with nothing in the diff to explain it.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
           # A GitHub Actions cache is not trusted input, and this job reads
@@ -522,7 +522,7 @@ jobs:
               print(f"| {sev} | `{rule}` | {c} |")
           PY
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: actions-security-audit
@@ -575,7 +575,7 @@ jobs:
       - name: Bandit findings ratchet (medium+ count, zero HIGH)
         if: always()
         env:
-          BANDIT_MEDIUM_BASELINE: "309"
+          BANDIT_MEDIUM_BASELINE: "306"
         run: |
           if [ -f audit/bandit.failed ] || [ ! -f audit/bandit.json ]; then
             echo "bandit produced no usable report; the outage gate above owns this. Skipping ratchet."
@@ -657,7 +657,7 @@ jobs:
           # Publishes to the public OpenSSF API so the README badge resolves.
           # Results are already public for a public repo.
           publish_results: true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scorecard-results
           path: scorecard-results.sarif
