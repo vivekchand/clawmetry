@@ -292,6 +292,19 @@ jobs:
       - name: Workflow integrity (dead steps, unreachable triggers, input injection)
         run: python3 -m pytest tests/test_ci_workflow_invocations_are_real.py -q
 
+      # A session id, a log date and a skill name each name ONE file inside a
+      # base directory. /api/reasoning joined its ?session= value on without
+      # that check and opened the result, so an absolute or ../ value read the
+      # thinking out of any .jsonl the dashboard user could open -- and a
+      # loopback request needs no credential, so another local account could
+      # read the dashboard user's transcripts (reported privately against
+      # 0.12.943). GHSA-6r57-3vhv-2wpf had set out to contain every transcript
+      # endpoint; this one was never routed through the check its siblings use.
+      # Every traversal case is paired with a positive control, so a handler
+      # that stops serving files cannot pass this suite by accident.
+      - name: Path traversal containment (reasoning / logs / skills)
+        run: python3 -m pytest tests/test_path_traversal_endpoints.py -q
+
       # `launchctl bootstrap` fails on an already-registered label and the
       # legacy `load -w` fallback fails while exiting 0, so a rewritten plist
       # was never re-read: a daemon whose pinned interpreter lost the package
