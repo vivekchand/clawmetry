@@ -35,7 +35,8 @@
     "AC-STE-003.",
     "AC-STE-005.",
     "AC-ASSIST-",
-    "AC-ASIMOV-"
+    "AC-ASIMOV-",
+    "AC-RPC-CP-"
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -3223,6 +3224,24 @@
       "doc": "Trial dialog usability and recovery",
       "doc_id": "TRR-001",
       "text": "A trial license refresh shall never replace a current paid license or shorten a longer current trial, including concurrent processes."
+    },
+    {
+      "id": "AC-RPC-CP-001.1",
+      "doc": "Private robotics control-plane RPC seam",
+      "doc_id": "BCP-015/SDK",
+      "text": "The exact declared control-plane operation shall forward to the existing private robotics plugin with its daemon-owned store and preserve unavailable or entitlement responses. Unknown operations shall remain rejected before plugin dispatch."
+    },
+    {
+      "id": "AC-RPC-CP-001.2",
+      "doc": "Private robotics control-plane RPC seam",
+      "doc_id": "BCP-015/SDK",
+      "text": "Every nested control-plane read or mutation through the generic dashboard RPC shall require the actual private daemon bearer before store access, including loopback and cross-origin requests."
+    },
+    {
+      "id": "AC-RPC-CP-001.3",
+      "doc": "Private robotics control-plane RPC seam",
+      "doc_id": "BCP-015/SDK",
+      "text": "The control-plane namespace shall not become a cloud relay query shape, raw SQL endpoint or motor command route."
     }
   ]
 }

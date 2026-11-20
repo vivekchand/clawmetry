@@ -4399,7 +4399,7 @@ class LocalStore(SecurityIngestStoreMixin, NodeActivityStoreMixin, AgentMetaMixi
         from clawmetry.extensions import call
         if operation not in {"runs", "events", "snapshot", "inventory", "guard_ack", "guard_incidents", "set_observation_only",
                              "trace_runs", "trace_detail", "trace_events", "trace_spans", "trace_artifact", "trace_artifacts", "trace_notes", "trace_guard_get", "trace_jobs",
-                             "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share"}:
+                             "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share", "control_plane"}:
             raise ValueError("Unsupported robotics query")
         return call("robotics.query", {"store": self, "operation": operation, "args": args or {}},
                     default={"error": "unavailable", "message": "Install ClawMetry Pro and restart the collector to view robot traces."})
