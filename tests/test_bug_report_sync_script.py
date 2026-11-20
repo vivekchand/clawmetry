@@ -121,7 +121,26 @@ def test_no_screenshot_means_no_mention():
 
 
 def test_bridge_token_can_read_checkout_and_write_issues():
+    """The scopes are asserted on the JOB, because that is where they are
+    granted and where GITHUB_TOKEN picks them up.
+
+    `issues: write` used to sit at the workflow level, which handed every job
+    in the file write access to the public tracker when only `sync` uses it.
+    It now lives on `sync`, so the two halves are pinned separately: the
+    workflow default stays read-only, and the one job that files tickets
+    carries exactly the two scopes it needs. Asserting only the top level
+    would now pass a file that had quietly dropped `issues: write`
+    altogether, which is why this reads the job block.
+    """
     from pathlib import Path
     import yaml
     workflow = yaml.safe_load((Path(_ROOT) / '.github/workflows/bug-report-sync.yml').read_text())
-    assert workflow['permissions'] == {'contents': 'read', 'issues': 'write'}
+
+    # No job in this file inherits a write scope by default.
+    assert workflow['permissions'] == {'contents': 'read'}
+
+    # A job-level block replaces the top level outright, so the bridge job has
+    # to name both scopes: read for the sparse checkout, write to file and
+    # read back an issue.
+    assert workflow['jobs']['sync']['permissions'] == {
+        'contents': 'read', 'issues': 'write'}
