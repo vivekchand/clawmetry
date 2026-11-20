@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify
-from clawmetry.file_security import is_path_within
+from clawmetry.file_security import is_path_within, is_safe_path_component
 
 bp_skills = Blueprint("skills", __name__)
 
@@ -189,8 +189,16 @@ def _find_skill_dir(skill_name):
     Returns the absolute skill directory path or ``None`` if the skill
     isn't installed in any candidate.
     """
+    # ``skill_name`` arrives from the URL. Werkzeug unquotes %2F after it
+    # splits the path, so a separator can reach this converter; without
+    # this check a crafted name selects any directory holding a SKILL.md
+    # and ``?path=`` then reads freely inside it.
+    if not is_safe_path_component(skill_name):
+        return None
     for base in _get_skills_dirs():
         candidate = os.path.join(base, skill_name)
+        if not is_path_within(candidate, base):
+            continue
         if os.path.isdir(candidate) and os.path.isfile(
             os.path.join(candidate, "SKILL.md")
         ):

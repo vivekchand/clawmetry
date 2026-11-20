@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Security: contain the file path on /api/reasoning, /api/logs and /api/skills
+
+- `GET /api/reasoning?session=<id>` joined the query value onto the sessions directory and opened the result, so an absolute path or a `../` run read the assistant thinking out of any `.jsonl` file the dashboard user could open. Because a loopback request is trusted without a credential, any other local account could read the dashboard user's transcripts, including files the operating system would not let them open directly. Reported privately by [@immingyu0](https://github.com/immingyu0), who reproduced it against the published 0.12.943 wheel in an offline container.
+- This is the containment [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf) set out to enforce for every transcript endpoint. The sibling endpoints in `routes/sessions.py` already rejected `/`, `\\` and `..`; `/api/reasoning` was never routed through the same check.
+- The same reporter flagged two more paths built the same way, both now closed: `?date=` on `/api/logs` is interpolated into `openclaw-{date}.log`, and `<skill_name>` on `/api/skills` is joined onto each skills root, where a crafted name could select any directory holding a `SKILL.md` and `?path=` then read freely inside it. Neither needed an existing leading segment on Windows, which collapses `..` lexically before the filesystem sees the path.
+- The check now lives in one place, `file_security.is_safe_path_component`, beside the `is_path_within` containment check it is meant to be paired with: the first stops the escape, the second contains a symlink that points out of the base. `/api/reasoning` applies it at the route *and* at the file open, so a future caller of the parser cannot reintroduce the traversal.
+- Verified by reproducing the leak first: the absolute, relative, URL-encoded and doubled-dot forms all returned the out-of-tree thinking content on the unpatched tree, and all return `400` after the fix, while a real session in the sessions directory still serves its reasoning. `tests/test_path_traversal_endpoints.py` keeps every case, each paired with a positive control so a handler that stops serving files cannot pass the suite by accident.
+
 ### Security: publish GHSA-6r57-3vhv-2wpf and close the stale self-hosted pin
 
 - The file-boundary and loopback-authentication fixes released in 0.12.933 (#6511) now carry a published advisory, [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf), CVSS 3.1 `AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H` (7.5). Everything before 0.12.933 is affected. Reported by Wu Jiaxuan (吴嘉炫); a CVE has been requested through GitHub.
