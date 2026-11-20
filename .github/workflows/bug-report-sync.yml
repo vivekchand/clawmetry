@@ -21,9 +21,11 @@ on:
         type: boolean
         default: false
 
+# Least privilege at the workflow level: the default grant for any job here is
+# read-only. `issues: write` is elevated on the one job that files and reads
+# tickets, so a job added later starts with no write scope by default.
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: bug-report-sync
@@ -34,6 +36,13 @@ jobs:
     runs-on: ubuntu-24.04
     # A fork has neither the shared token nor our tracker.
     if: github.repository == 'vivekchand/clawmetry'
+    # contents: read -- the sparse checkout of scripts/bug_report_sync.py.
+    # issues: write -- `gh issue create` files a report and `gh issue view`
+    # reads its state back. Both run through GH_TOKEN=secrets.GITHUB_TOKEN
+    # below, so this block is what governs them.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
