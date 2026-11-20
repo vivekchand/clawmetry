@@ -4,8 +4,12 @@ import pytest
 
 @pytest.mark.parametrize('operation', ['runs', 'events', 'snapshot', 'inventory', 'guard_ack', 'guard_incidents', 'set_observation_only',
     'trace_runs', 'trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts', 'trace_notes', 'trace_guard_get', 'trace_jobs',
-    'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share'])
+    'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share', 'control_plane'])
 def test_robotics_operation_dispatches_to_private_plugin(monkeypatch, operation):
+    """Private SDK dispatch.
+
+    AC-RPC-CP-001.1: fixed names retain the existing store and plugin dispatch.
+    """
     from clawmetry import extensions
     from clawmetry.local_store import LocalStore
     store = object.__new__(LocalStore)
@@ -26,11 +30,16 @@ def test_unknown_robotics_operation_is_rejected_before_plugin(monkeypatch, opera
 
 
 def test_mutation_does_not_become_a_cloud_read_shape():
+    """Private query isolation.
+
+    AC-RPC-CP-001.3: private namespaces are not encrypted cloud read shapes.
+    """
     from clawmetry.query_contract import QUERY_CONTRACT
     assert 'robotics_guard_ack' not in QUERY_CONTRACT
     assert 'robotics_control' not in QUERY_CONTRACT
     assert 'robotics_query' not in QUERY_CONTRACT
     assert 'set_observation_only' not in QUERY_CONTRACT
+    assert 'control_plane' not in QUERY_CONTRACT
 
 
 def test_incident_read_shape_preserves_cursor_precision_and_clamps_page():
@@ -45,14 +54,14 @@ def test_incident_read_shape_preserves_cursor_precision_and_clamps_page():
 
 
 @pytest.mark.parametrize('operation', ['trace_runs', 'trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts',
-    'trace_notes', 'trace_guard_get', 'trace_jobs', 'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share'])
+    'trace_notes', 'trace_guard_get', 'trace_jobs', 'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share', 'control_plane'])
 def test_private_trace_operations_are_not_cloud_relay_shapes(operation):
     from clawmetry.query_contract import QUERY_CONTRACT
     assert operation not in QUERY_CONTRACT
 
 
 @pytest.mark.parametrize('operation', ['trace_runs', 'trace_detail', 'trace_events', 'trace_spans', 'trace_artifact', 'trace_artifacts',
-    'trace_notes', 'trace_guard_get', 'trace_jobs', 'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share'])
+    'trace_notes', 'trace_guard_get', 'trace_jobs', 'trace_annotate', 'trace_guard_set', 'trace_evaluate', 'trace_share', 'control_plane'])
 def test_private_trace_unavailable_and_denied_results_stay_owned_by_plugin(monkeypatch, operation):
     from clawmetry import extensions
     from clawmetry.local_store import LocalStore
