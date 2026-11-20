@@ -21,7 +21,7 @@ def generic_rpc(monkeypatch):
 
 
 @pytest.mark.parametrize("operation", ["set_observation_only", "guard_ack",
-    "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share"])
+    "trace_annotate", "trace_guard_set", "trace_evaluate", "trace_share", "control_plane"])
 @pytest.mark.parametrize("daemon_token,authorization", [
     (None, None), (None, "Bearer guessed"),
     ("private-test-token", None), ("private-test-token", "Bearer wrong"),
@@ -132,6 +132,7 @@ def actual_plugin_store(tmp_path, monkeypatch):
     ("trace_guard_set", {"run_id": "a" * 32, "mode": "monitor"}),
     ("trace_evaluate", {"run_id": "a" * 32, "offline": True}),
     ("trace_share", {"run_id": "a" * 32, "full_trace_shared": True, "expected_version": 1}),
+    ("control_plane", {"schema": "clawmetry.control_plane.query.v1", "operation": "capabilities", "payload": {}}),
 ])
 def test_real_daemon_bearer_dispatches_through_store_and_extension(
         actual_plugin_store, monkeypatch, operation, args):
@@ -161,6 +162,22 @@ def test_cloud_query_contract_cannot_select_mutations(generic_rpc, monkeypatch, 
     monkeypatch.setattr(query, "_store", lambda: pytest.fail("Cloud mutation reached writer"))
     result = query.relay_dispatch(shape, {"operation": "set_observation_only", "enabled": True})
     assert "unknown shape" in result["error"]
+
+
+@pytest.mark.parametrize('operation', ['capabilities', 'snapshot', 'history_owner', 'reserve_tool', 'complete_tool'])
+def test_control_plane_namespace_always_requires_private_daemon_token(generic_rpc, monkeypatch, operation):
+    """Private transport authorization.
+
+    AC-RPC-CP-001.2: nested reads and writes share the private token boundary.
+    """
+    query, local_server, client = generic_rpc
+    monkeypatch.setattr(local_server, '_token', 'private-test-token')
+    monkeypatch.setattr(query, '_store', lambda: pytest.fail('Unauthenticated control-plane query reached store'))
+    response=client.post('/__local_query__/robotics_query', json={'kwargs': {
+        'operation':'control_plane','args':{'schema':'clawmetry.control_plane.query.v1',
+            'operation':operation,'payload':{}}}},
+        headers={'Origin':'https://untrusted.example'},environ_overrides={'REMOTE_ADDR':'127.0.0.1'})
+    assert response.status_code==401 and response.json=={'error':'unauthorized'}
 
 
 def test_cloud_read_shape_cannot_smuggle_mutation_arguments(actual_plugin_store, monkeypatch):

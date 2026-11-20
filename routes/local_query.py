@@ -1384,7 +1384,7 @@ def http_local_method(method: str):
     if method in {"query_node_activity", "query_node_activity_live", "set_node_activity_preferences", "review_node_activity_event",
                   "query_asimov_runs", "query_asimov_events", "query_physical_ai_runs", "query_physical_ai_events"} or (
             method == "robotics_query" and (operation.startswith("trace_")
-                or operation in {"guard_ack", "set_observation_only"})):
+                or operation in {"guard_ack", "set_observation_only", "control_plane"})):
         # This Blueprint also exists on the dashboard. Its internal RPC route
         # must not bypass route authentication or local-origin/CSRF checks. Only
         # the actual daemon owns this private token; the dashboard has none.
