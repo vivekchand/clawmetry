@@ -575,7 +575,7 @@ jobs:
       - name: Bandit findings ratchet (medium+ count, zero HIGH)
         if: always()
         env:
-          BANDIT_MEDIUM_BASELINE: "306"
+          BANDIT_MEDIUM_BASELINE: "298"
         run: |
           if [ -f audit/bandit.failed ] || [ ! -f audit/bandit.json ]; then
             echo "bandit produced no usable report; the outage gate above owns this. Skipping ratchet."

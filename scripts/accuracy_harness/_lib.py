@@ -8,6 +8,7 @@ and a fix to (e.g.) the daemon discovery flow only needs to land once.
 
 Public surface:
     DEFAULT_DASHBOARD_PORTS, GH_REPO, OPENCLAW_BIN, OPENCLAW_AVAILABLE
+    require_web_url (http(s)-only scheme guard for every shim below)
     http_get_json, http_post_json
     discover_dashboard_url, discover_daemon, daemon_event_count
     daemon_call (generic ``__local_query__/<method>`` proxy)
@@ -25,6 +26,7 @@ import socket
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +47,30 @@ OPENCLAW_AVAILABLE: bool = (
 )
 
 
+# ─── URL scheme guard ───────────────────────────────────────────────────────
+#
+# Every base URL below arrives from outside this file: ``--dashboard-url``,
+# ``$CLAWMETRY_URL``, or a port scan. ``urllib`` opens whatever scheme has a
+# handler registered -- ``file:``, ``ftp:``, ``data:`` -- so an unchecked base
+# turns a dashboard fetch into a local file read, and the harness then prints
+# or files whatever came back. These shims only ever mean to speak HTTP, so a
+# non-HTTP scheme is a configuration mistake worth failing on rather than
+# following. (bandit B310.)
+
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def require_web_url(url: str) -> str:
+    """Return ``url`` unchanged, or raise when it is not http(s)."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        raise ValueError(
+            f"refusing to open {url!r}: expected an http(s) URL, "
+            f"got scheme {scheme or '(none)'!r}"
+        )
+    return url
+
+
 # ─── HTTP shims ─────────────────────────────────────────────────────────────
 
 def http_get_json(url: str, timeout: float = 10.0,
@@ -52,8 +78,8 @@ def http_get_json(url: str, timeout: float = 10.0,
     h = {"Accept": "application/json"}
     if headers:
         h.update(headers)
-    req = urllib.request.Request(url, headers=h)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    req = urllib.request.Request(require_web_url(url), headers=h)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 - require_web_url
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -64,8 +90,8 @@ def http_post_json(url: str, body: dict | None = None,
     h = {"Content-Type": "application/json", "Accept": "application/json"}
     if headers:
         h.update(headers)
-    req = urllib.request.Request(url, data=data, headers=h, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    req = urllib.request.Request(require_web_url(url), data=data, headers=h, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 - require_web_url
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -76,8 +102,8 @@ def http_delete_json(url: str, headers: dict | None = None,
     h = {"Accept": "application/json"}
     if headers:
         h.update(headers)
-    req = urllib.request.Request(url, headers=h, method="DELETE")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    req = urllib.request.Request(require_web_url(url), headers=h, method="DELETE")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 - require_web_url
         raw = resp.read().decode("utf-8") or ""
     if not raw.strip():
         return None

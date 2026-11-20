@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 
 
@@ -33,11 +34,35 @@ def _load_config() -> dict:
         return {}
 
 
+# ─── URL scheme guard ───────────────────────────────────────────────────────
+#
+# ``base`` is ``--base`` / ``$CLAWMETRY_API_BASE``; it arrives from the
+# command line or the environment, not from this file.
+# ``urllib`` opens whatever scheme has a handler registered -- ``file:``,
+# ``ftp:``, ``data:`` -- so an unchecked base turns an API fetch into a local
+# file read, and this script then reports on whatever came back. It only ever
+# means to speak HTTP, so a non-HTTP scheme is a configuration mistake worth
+# failing on rather than following. (bandit B310.)
+
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _require_web_url(url: str) -> str:
+    """Return ``url`` unchanged, or raise when it is not http(s)."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        raise ValueError(
+            f"refusing to open {url!r}: expected an http(s) URL, "
+            f"got scheme {scheme or '(none)'!r}"
+        )
+    return url
+
+
 def _get(base: str, path: str, api_key: str) -> dict | list | None:
-    url = f"{base.rstrip('/')}/api/v1/{path.lstrip('/')}"
+    url = _require_web_url(f"{base.rstrip('/')}/api/v1/{path.lstrip('/')}")
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:  # nosec B310 - _require_web_url
             return json.loads(r.read().decode())
     except Exception as e:
         print(f"  ! GET {path} failed: {e}")

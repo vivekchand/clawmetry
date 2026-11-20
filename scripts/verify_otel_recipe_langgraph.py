@@ -62,15 +62,39 @@ RUN_INPUT_TOKENS = 120 + 160
 RUN_OUTPUT_TOKENS = 18 + 9
 
 
+# ─── URL scheme guard ───────────────────────────────────────────────────────
+#
+# ``base`` is ``--url`` and ``remote`` is ``--remote-url``; both arrive from
+# the command line, not from this file.
+# ``urllib`` opens whatever scheme has a handler registered -- ``file:``,
+# ``ftp:``, ``data:`` -- so an unchecked URL turns a fetch into a local file
+# read, and this script then verifies the recipe against whatever came
+# back. Only HTTP is ever meant here, so a non-HTTP scheme is a mistake
+# worth failing on rather than following. (bandit B310.)
+
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _require_web_url(url: str) -> str:
+    """Return ``url`` unchanged, or raise when it is not http(s)."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        raise ValueError(
+            f"refusing to open {url!r}: expected an http(s) URL, "
+            f"got scheme {scheme or '(none)'!r}"
+        )
+    return url
+
+
 class Failed(Exception):
     pass
 
 
 def _get(base: str, path: str, token: str, **params) -> dict:
     q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-    req = urllib.request.Request(f"{base}{path}?{q}",
+    req = urllib.request.Request(_require_web_url(f"{base}{path}?{q}"),
                                  headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 - _require_web_url
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -111,10 +135,11 @@ def _wait_for(fn, what: str, timeout: float = 45.0):
 
 def check_remote_auth(remote: str, token: str) -> None:
     body = json.dumps({"resourceSpans": []}).encode()
-    req = urllib.request.Request(f"{remote}/v1/traces", data=body, method="POST",
+    req = urllib.request.Request(_require_web_url(f"{remote}/v1/traces"), data=body,
+                                 method="POST",
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - _require_web_url
             code = resp.status
     except urllib.error.HTTPError as e:
         code = e.code
