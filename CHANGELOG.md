@@ -1,6 +1,6 @@
 ## Unreleased
 
-### Security: contain the file path on /api/reasoning, /api/logs and /api/skills
+### Security: contain the file path on /api/reasoning, /api/logs and /api/skills (#6658)
 
 - `GET /api/reasoning?session=<id>` joined the query value onto the sessions directory and opened the result, so an absolute path or a `../` run read the assistant thinking out of any `.jsonl` file the dashboard user could open. Because a loopback request is trusted without a credential, any other local account could read the dashboard user's transcripts, including files the operating system would not let them open directly. Reported privately by [@immingyu0](https://github.com/immingyu0), who reproduced it against the published 0.12.943 wheel in an offline container.
 - This is the containment [GHSA-6r57-3vhv-2wpf](https://github.com/vivekchand/clawmetry/security/advisories/GHSA-6r57-3vhv-2wpf) set out to enforce for every transcript endpoint. The sibling endpoints in `routes/sessions.py` already rejected `/`, `\\` and `..`; `/api/reasoning` was never routed through the same check.
