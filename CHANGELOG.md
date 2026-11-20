@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Added: private control-plane query namespace (#6662)
+
+- Installed robotics plugins can use a named private query namespace on the daemon-owned store.
+- Its reads and writes require the daemon token and remain excluded from cloud read queries. No robot command endpoint was added.
+- Verified plugin dispatch, private RPC authentication, unavailable responses and cloud-query isolation. All 51 feature checks passed.
+
 ### Security: contain the file path on /api/reasoning, /api/logs and /api/skills (#6658)
 
 - `GET /api/reasoning?session=<id>` joined the query value onto the sessions directory and opened the result, so an absolute path or a `../` run read the assistant thinking out of any `.jsonl` file the dashboard user could open. Because a loopback request is trusted without a credential, any other local account could read the dashboard user's transcripts, including files the operating system would not let them open directly. Reported privately by [@immingyu0](https://github.com/immingyu0), who reproduced it against the published 0.12.943 wheel in an offline container.
