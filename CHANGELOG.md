@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Changed: the free dashboard now advertises ClawMetry for Physical AI (#6672)
+
+- The single announcement pill in the dashboard header sold Agent Builder. It now reads "New: Physical AI · ClawMetry now watches robots. Try a real robot arm in your browser" and opens clawmetry.com/physical-ai, the page that already carries both the robot playground and the pilot booking. The link is tagged with the campaign that page reports on, so the clicks are countable.
+- Dismissing the previous pill does not hide this one. The dismiss key changed along with the message, and the README screenshot capture pre-dismisses the new key so the published screenshots stay clear of it.
+- The pill keeps its element id deliberately. The hosted dashboard hides that id in its demo lab and stands down its own announcement when the id is present, so renaming it would put two pills in the hosted header.
+- The retired English string is removed from all 36 translation catalogues in the same change, because a catalogue that keeps a key English has dropped is a hard build failure. The new string ships in English and the translation bot backfills the rest; until it does, every language falls back to English.
+- Verified with 44 new checks covering the destination, the campaign tags, agreement between the markup and the English catalogue, the dismiss wiring and the screenshot pairing. Each was proven to fail against the previous markup before the change was accepted, and the pill was rendered and inspected at desktop and phone width.
+
 ### Added: private control-plane query namespace (#6662)
 
 - Installed robotics plugins can use a named private query namespace on the daemon-owned store.
