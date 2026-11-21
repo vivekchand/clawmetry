@@ -37,6 +37,7 @@ import argparse
 import io
 import json
 import sys
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -47,8 +48,35 @@ DEFAULT_CLOUD_BASE = "https://app.clawmetry.com"
 PYPI_INDEX = "https://pypi.org/pypi/clawmetry/json"
 
 
+# ─── URL scheme guard ───────────────────────────────────────────────────────
+#
+# ``_fetch`` is called with ``--cloud BASE_URL`` from the command line and
+# with ``wheel_url``, which is read out of the PyPI JSON response -- a URL
+# named by a remote document, not by this file.
+# ``urllib`` opens whatever scheme has a handler registered -- ``file:``,
+# ``ftp:``, ``data:`` -- so an unchecked URL turns a fetch into a local file
+# read, and this script then reports coverage from whatever came back.
+# Only HTTP is ever meant here, so a non-HTTP scheme is a mistake worth
+# failing on rather than following. (bandit B310.)
+
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _require_web_url(url: str) -> str:
+    """Return ``url`` unchanged, or raise when it is not http(s)."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        raise ValueError(
+            f"refusing to open {url!r}: expected an http(s) URL, "
+            f"got scheme {scheme or '(none)'!r}"
+        )
+    return url
+
+
 def _fetch(url: str, timeout: int = 20) -> bytes:
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+    with urllib.request.urlopen(  # nosec B310 - _require_web_url
+        _require_web_url(url), timeout=timeout
+    ) as resp:
         return resp.read()
 
 

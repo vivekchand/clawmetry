@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from datetime import datetime
@@ -45,13 +46,39 @@ COAUTH = re.compile(r"^Co-Authored-By:\s*Claude", re.MULTILINE | re.IGNORECASE)
 PRNUM = re.compile(r"\(#(\d+)\)\s*$")
 
 
+# ─── URL scheme guard ───────────────────────────────────────────────────────
+#
+# ``DASH`` is whatever ``$CLAWMETRY_URL`` holds; it arrives from the
+# environment, not from this file.
+# ``urllib`` opens whatever scheme has a handler registered -- ``file:``,
+# ``ftp:``, ``data:`` -- so an unchecked base turns an API fetch into a local
+# file read, and this script then reports on whatever came back. It only ever
+# means to speak HTTP, so a non-HTTP scheme is a configuration mistake worth
+# failing on rather than following. (bandit B310.)
+
+_ALLOWED_URL_SCHEMES = ("http", "https")
+
+
+def _require_web_url(url: str) -> str:
+    """Return ``url`` unchanged, or raise when it is not http(s)."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        raise ValueError(
+            f"refusing to open {url!r}: expected an http(s) URL, "
+            f"got scheme {scheme or '(none)'!r}"
+        )
+    return url
+
+
 def sh(*a):
     return subprocess.run(a, cwd=REPO, capture_output=True, text=True, check=False).stdout
 
 
 def api(path):
     try:
-        with urllib.request.urlopen(DASH + path, timeout=20) as r:
+        with urllib.request.urlopen(  # nosec B310 - _require_web_url
+            _require_web_url(DASH + path), timeout=20
+        ) as r:
             return json.load(r)
     except Exception as e:
         return {"_err": str(e)[:90]}

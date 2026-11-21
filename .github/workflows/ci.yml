@@ -262,6 +262,13 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py tests/ci/test_hosted_linux_image.py -q
 
+      # The CI scripts that fetch an operator-supplied URL screen its scheme
+      # before urlopen, which otherwise also opens file:, ftp: and data:.
+      # Listed by name because the ratchet is right -- a test file no
+      # workflow names is a test that never runs.
+      - name: CI scripts refuse a non-HTTP fetch URL
+        run: python3 -m pytest tests/test_scripts_url_scheme_guard.py -q
+
       # Report a bug: the dialog, its intake route and the GitHub bridge.
       # Listed by name because the ratchet is right -- a test file no
       # workflow names is a test that never runs.
