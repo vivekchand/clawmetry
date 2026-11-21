@@ -523,7 +523,6 @@
   "approvals.tool_write": "Dateischreibvorgänge (write)",
   "approvals.trial_note": "7 Tage kostenlos testen · keine Kreditkarte erforderlich",
   "approvals.upgrade_pitch": "Cloud-vermittelte Freigaben blockieren riskante Agentenaktionen, bevor sie ausgeführt werden. Lassen Sie sich über Slack, E-Mail, PagerDuty oder Telegram benachrichtigen und genehmigen oder verweigern Sie mit einem Klick.",
-  "banners.agent_builder_pill": "Neu: Agent Builder · Sie beschreiben Ihren Agenten, wir entwickeln und hosten ihn, Sie behalten jeden Schritt im Blick",
   "banners.changelog": "Änderungsprotokoll",
   "banners.get_license": "Lizenz erhalten",
   "banners.have_license_key": "Ich habe einen Lizenzschlüssel",

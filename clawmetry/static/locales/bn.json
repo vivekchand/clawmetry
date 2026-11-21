@@ -523,7 +523,6 @@
   "approvals.tool_write": "ফাইল রাইট (write)",
   "approvals.trial_note": "7-দিনের ফ্রি ট্রায়াল · কোনো ক্রেডিট কার্ড লাগবে না",
   "approvals.upgrade_pitch": "Cloud-নিয়ন্ত্রিত অনুমোদন ঝুঁকিপূর্ণ এজেন্ট অ্যাকশন কার্যকর হওয়ার আগেই ব্লক করে। Slack, ইমেইল, PagerDuty বা Telegram এর মাধ্যমে নোটিফিকেশন পান, এবং এক ক্লিকেই অনুমোদন বা প্রত্যাখ্যান করুন।",
-  "banners.agent_builder_pill": "নতুন: Agent Builder · আপনার এজেন্ট বর্ণনা করুন, আমরা তৈরি করব, হোস্ট করব, আপনি প্রতিটি পদক্ষেপ দেখতে পাবেন",
   "banners.changelog": "চেঞ্জলগ",
   "banners.get_license": "একটি লাইসেন্স নিন",
   "banners.have_license_key": "আমার কাছে একটি লাইসেন্স কী আছে",

@@ -523,7 +523,6 @@
   "approvals.tool_write": "Bestanden schrijven (write)",
   "approvals.trial_note": "Gratis proefperiode van 7 dagen · geen creditcard vereist",
   "approvals.upgrade_pitch": "Door Cloud bemiddelde goedkeuringen blokkeren riskante agentacties voordat ze worden uitgevoerd. Ontvang meldingen via Slack, E-mail, PagerDuty of Telegram en keur goed of weiger met één klik.",
-  "banners.agent_builder_pill": "Nieuw: Agent Builder · beschrijf je agent, wij bouwen hem, hosten hem, jij ziet elke stap",
   "banners.changelog": "Wijzigingslogboek",
   "banners.get_license": "Licentie aanschaffen",
   "banners.have_license_key": "Ik heb een licentiesleutel",

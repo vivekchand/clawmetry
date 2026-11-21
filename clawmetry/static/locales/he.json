@@ -523,7 +523,6 @@
   "approvals.tool_write": "כתיבת קבצים (write)",
   "approvals.trial_note": "ניסיון חינם ל־7 ימים · ללא צורך בכרטיס אשראי",
   "approvals.upgrade_pitch": "אישורים מתווכי Cloud חוסמים פעולות סוכן מסוכנות לפני ביצוען. קבלו התראה דרך Slack, אימייל, PagerDuty או Telegram, ואשרו או דחו בלחיצה אחת.",
-  "banners.agent_builder_pill": "חדש: Agent Builder · תארו את הסוכן שלכם, אנחנו בונים אותו, מארחים אותו, ואתם עוקבים אחר כל צעד",
   "banners.changelog": "יומן שינויים",
   "banners.get_license": "קבלו רישיון",
   "banners.have_license_key": "יש לי מפתח רישיון",

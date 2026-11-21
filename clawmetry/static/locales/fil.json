@@ -523,7 +523,6 @@
   "approvals.tool_write": "Mga pagsulat sa file (write)",
   "approvals.trial_note": "7-araw na libreng trial · walang kinakailangang credit card",
   "approvals.upgrade_pitch": "Hinaharang ng mga pag-apruba na pinamamagitan ng Cloud ang mga mapanganib na aksyon ng agent bago ito maisagawa. Makatanggap ng abiso sa pamamagitan ng Slack, Email, PagerDuty o Telegram, at mag-apruba o tumanggi sa isang click.",
-  "banners.agent_builder_pill": "Bago: Agent Builder · ilarawan ang iyong agent, kami ang gagawa at mag-host nito, mapapanood mo ang bawat galaw",
   "banners.changelog": "Changelog",
   "banners.get_license": "Kumuha ng license",
   "banners.have_license_key": "May license key ako",

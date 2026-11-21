@@ -523,7 +523,6 @@
   "approvals.tool_write": "نوشتن فایل (write)",
   "approvals.trial_note": "آزمایش رایگان 7 روزه · بدون نیاز به کارت اعتباری",
   "approvals.upgrade_pitch": "تأییدهای واسطه‌گری‌شده با Cloud، اقدامات پرخطر عامل را پیش از اجرا مسدود می‌کنند. از طریق Slack، ایمیل، PagerDuty یا Telegram اعلان دریافت کنید و با یک کلیک تأیید یا رد کنید.",
-  "banners.agent_builder_pill": "جدید: Agent Builder · ایجنت خود را توصیف کنید، ما آن را می‌سازیم، میزبانی می‌کنیم، شما هر حرکت را تماشا می‌کنید",
   "banners.changelog": "فهرست تغییرات",
   "banners.get_license": "دریافت لایسنس",
   "banners.have_license_key": "کلید لایسنس دارم",

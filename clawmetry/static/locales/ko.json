@@ -523,7 +523,6 @@
   "approvals.tool_write": "파일 쓰기 (write)",
   "approvals.trial_note": "7일 무료 체험 · 신용카드 불필요",
   "approvals.upgrade_pitch": "Cloud 중개 승인은 위험한 에이전트 작업이 실행되기 전에 차단합니다. Slack, 이메일, PagerDuty 또는 Telegram으로 알림을 받고 클릭 한 번으로 승인하거나 거부하세요.",
-  "banners.agent_builder_pill": "신규: Agent Builder · 에이전트를 설명하면 빌드와 호스팅까지 처리하고, 모든 움직임을 직접 확인하세요",
   "banners.changelog": "변경 로그",
   "banners.get_license": "라이선스 받기",
   "banners.have_license_key": "라이선스 키가 있어요",

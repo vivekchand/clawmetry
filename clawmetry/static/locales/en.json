@@ -525,7 +525,7 @@
   "approvals.tool_write": "File writes (write)",
   "approvals.trial_note": "7-day free trial · no credit card required",
   "approvals.upgrade_pitch": "Cloud-mediated approvals block risky agent actions before they execute. Get notified via Slack, Email, PagerDuty or Telegram, and approve or deny with one click.",
-  "banners.agent_builder_pill": "New: Agent Builder · describe your agent, we build it, host it, you watch every move",
+  "banners.physical_ai_pill": "New: Physical AI · ClawMetry now watches robots. Try a real robot arm in your browser",
   "banners.changelog": "Changelog",
   "banners.get_license": "Get a license",
   "banners.have_license_key": "I have a license key",

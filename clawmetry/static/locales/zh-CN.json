@@ -523,7 +523,6 @@
   "approvals.tool_write": "文件写入 (write)",
   "approvals.trial_note": "7 天免费试用 · 无需信用卡",
   "approvals.upgrade_pitch": "Cloud 托管的审批会在风险操作执行前将其拦截。通过 Slack、邮件、PagerDuty 或 Telegram 获取通知，一键批准或拒绝。",
-  "banners.agent_builder_pill": "新功能：Agent Builder，描述你的智能体，我们负责构建和托管，你可以实时查看每一步操作",
   "banners.changelog": "更新日志",
   "banners.get_license": "获取许可证",
   "banners.have_license_key": "我已有许可证密钥",
