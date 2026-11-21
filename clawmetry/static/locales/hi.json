@@ -523,7 +523,6 @@
   "approvals.tool_write": "फ़ाइल राइट (write)",
   "approvals.trial_note": "7-दिन का मुफ़्त ट्रायल · क्रेडिट कार्ड की ज़रूरत नहीं",
   "approvals.upgrade_pitch": "Cloud से नियंत्रित अनुमोदन जोखिम भरी एजेंट कार्रवाइयों को चलने से पहले रोक देते हैं। Slack, ईमेल, PagerDuty या Telegram पर सूचना पाएं, और एक क्लिक में स्वीकृत या अस्वीकृत करें।",
-  "banners.agent_builder_pill": "नया: Agent Builder · अपने एजेंट का विवरण दें, हम इसे बनाते हैं, होस्ट करते हैं, आप हर कदम देखते हैं",
   "banners.changelog": "बदलाव सूची",
   "banners.get_license": "लाइसेंस प्राप्त करें",
   "banners.have_license_key": "मेरे पास लाइसेंस कुंजी है",

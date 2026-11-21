@@ -523,7 +523,6 @@
   "approvals.tool_write": "ファイル書き込み (write)",
   "approvals.trial_note": "7日間の無料トライアル · クレジットカード不要",
   "approvals.upgrade_pitch": "Cloud経由の承認は、危険なエージェントの操作を実行前にブロックします。Slack、メール、PagerDuty、Telegramで通知を受け取り、ワンクリックで承認または拒否できます。",
-  "banners.agent_builder_pill": "新機能: Agent Builder ・ エージェントの内容を伝えるだけで、構築からホスティングまで行い、すべての動作を確認できます",
   "banners.changelog": "変更履歴",
   "banners.get_license": "ライセンスを取得",
   "banners.have_license_key": "ライセンスキーをお持ちの方",

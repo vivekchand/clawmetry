@@ -523,7 +523,6 @@
   "approvals.tool_write": "Filskrivningar (write)",
   "approvals.trial_note": "7 dagars gratis provperiod · inget kreditkort krävs",
   "approvals.upgrade_pitch": "Molnstyrda godkännanden blockerar riskfyllda agentåtgärder innan de körs. Få aviseringar via Slack, E-post, PagerDuty eller Telegram, och godkänn eller neka med ett klick.",
-  "banners.agent_builder_pill": "Nytt: Agent Builder · beskriv din agent, vi bygger den, driftar den, du följer varje steg",
   "banners.changelog": "Ändringslogg",
   "banners.get_license": "Skaffa en licens",
   "banners.have_license_key": "Jag har en licensnyckel",

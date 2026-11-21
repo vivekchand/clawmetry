@@ -523,7 +523,6 @@
   "approvals.tool_write": "Запись файлов (write)",
   "approvals.trial_note": "7-дневный бесплатный период · кредитная карта не нужна",
   "approvals.upgrade_pitch": "Подтверждения через Cloud блокируют рискованные действия агента до их выполнения. Получайте уведомления в Slack, Email, PagerDuty или Telegram и разрешайте или отклоняйте одним кликом.",
-  "banners.agent_builder_pill": "Новинка: Agent Builder — опишите своего агента, мы соберём его, разместим на хостинге, а вы будете видеть каждое действие",
   "banners.changelog": "Список изменений",
   "banners.get_license": "Получить лицензию",
   "banners.have_license_key": "У меня есть лицензионный ключ",

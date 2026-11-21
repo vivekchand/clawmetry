@@ -523,7 +523,6 @@
   "approvals.tool_write": "Zapisy plików (write)",
   "approvals.trial_note": "7-dniowy bezpłatny okres próbny · bez karty kredytowej",
   "approvals.upgrade_pitch": "Zatwierdzenia obsługiwane w chmurze blokują ryzykowne działania agentów, zanim zostaną wykonane. Otrzymuj powiadomienia przez Slack, e-mail, PagerDuty lub Telegram i zatwierdzaj albo odrzucaj jednym kliknięciem.",
-  "banners.agent_builder_pill": "Nowość: Agent Builder – opisujesz swojego agenta, my go budujemy, hostujemy, a Ty obserwujesz każdy jego ruch",
   "banners.changelog": "Lista zmian",
   "banners.get_license": "Uzyskaj licencję",
   "banners.have_license_key": "Mam klucz licencyjny",

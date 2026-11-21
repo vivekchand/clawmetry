@@ -523,7 +523,6 @@
   "approvals.tool_write": "ਫਾਈਲ ਲਿਖਣਾ (write)",
   "approvals.trial_note": "7-ਦਿਨ ਮੁਫ਼ਤ ਟ੍ਰਾਇਲ · ਕ੍ਰੈਡਿਟ ਕਾਰਡ ਦੀ ਲੋੜ ਨਹੀਂ",
   "approvals.upgrade_pitch": "Cloud ਰਾਹੀਂ ਮਨਜ਼ੂਰੀਆਂ ਜੋਖਮ ਭਰੀਆਂ ਏਜੰਟ ਕਾਰਵਾਈਆਂ ਨੂੰ ਚੱਲਣ ਤੋਂ ਪਹਿਲਾਂ ਰੋਕਦੀਆਂ ਹਨ। Slack, Email, PagerDuty ਜਾਂ Telegram ਰਾਹੀਂ ਸੂਚਨਾ ਲਵੋ, ਅਤੇ ਇੱਕ ਕਲਿੱਕ ਨਾਲ ਮਨਜ਼ੂਰ ਜਾਂ ਅਸਵੀਕਾਰ ਕਰੋ।",
-  "banners.agent_builder_pill": "ਨਵਾਂ: Agent Builder · ਆਪਣੇ ਏਜੰਟ ਦਾ ਵੇਰਵਾ ਦਿਓ, ਅਸੀਂ ਇਸਨੂੰ ਬਣਾਉਂਦੇ ਹਾਂ, ਹੋਸਟ ਕਰਦੇ ਹਾਂ, ਤੁਸੀਂ ਹਰ ਕਦਮ ਦੇਖੋ",
   "banners.changelog": "ਚੇਂਜਲੌਗ",
   "banners.get_license": "ਲਾਇਸੈਂਸ ਲਵੋ",
   "banners.have_license_key": "ਮੇਰੇ ਕੋਲ ਲਾਇਸੈਂਸ ਕੁੰਜੀ ਹੈ",

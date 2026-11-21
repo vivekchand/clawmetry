@@ -523,7 +523,6 @@
   "approvals.tool_write": "Εγγραφές αρχείων (write)",
   "approvals.trial_note": "Δωρεάν δοκιμή 7 ημερών · χωρίς πιστωτική κάρτα",
   "approvals.upgrade_pitch": "Οι εγκρίσεις με διαμεσολάβηση Cloud αποκλείουν επικίνδυνες ενέργειες πρακτόρων πριν εκτελεστούν. Λάβετε ειδοποιήσεις μέσω Slack, Email, PagerDuty ή Telegram και εγκρίνετε ή απορρίψτε με ένα κλικ.",
-  "banners.agent_builder_pill": "Νέο: Agent Builder · περιγράψτε τον πράκτορά σας, εμείς τον δημιουργούμε, τον φιλοξενούμε, εσείς παρακολουθείτε κάθε κίνηση",
   "banners.changelog": "Αρχείο Αλλαγών",
   "banners.get_license": "Αποκτήστε άδεια",
   "banners.have_license_key": "Έχω κλειδί άδειας",

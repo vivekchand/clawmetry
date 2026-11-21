@@ -43,7 +43,7 @@ const ctx = await browser.newContext({ viewport: { width: 1680, height: 1000 }, 
 await ctx.addInitScript(() => {
   try {
     localStorage.removeItem('cm-runtime-filter');   // All runtimes
-    localStorage.setItem('cm_ab_pill_dismissed', '1');
+    localStorage.setItem('cm_pai_pill_dismissed', '1');  // the announcement pill, keyed per message
   } catch {}
 });
 const page = await ctx.newPage();

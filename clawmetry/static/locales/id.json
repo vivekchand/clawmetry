@@ -523,7 +523,6 @@
   "approvals.tool_write": "Penulisan file (write)",
   "approvals.trial_note": "Uji coba gratis 7 hari · tanpa kartu kredit",
   "approvals.upgrade_pitch": "Persetujuan yang dimediasi Cloud memblokir tindakan agen berisiko sebelum dieksekusi. Dapatkan notifikasi melalui Slack, Email, PagerDuty atau Telegram, lalu setujui atau tolak dengan satu klik.",
-  "banners.agent_builder_pill": "Baru: Agent Builder · jelaskan agen Anda, kami membangunnya, meng-hosting-nya, Anda memantau setiap gerakannya",
   "banners.changelog": "Changelog",
   "banners.get_license": "Dapatkan lisensi",
   "banners.have_license_key": "Saya punya kunci lisensi",

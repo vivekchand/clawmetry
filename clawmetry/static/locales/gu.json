@@ -523,7 +523,6 @@
   "approvals.tool_write": "ફાઇલ રાઇટ (write)",
   "approvals.trial_note": "7 દિવસની મફત ટ્રાયલ · ક્રેડિટ કાર્ડ જરૂરી નથી",
   "approvals.upgrade_pitch": "Cloud દ્વારા મધ્યસ્થી થયેલી મંજૂરીઓ જોખમી એજન્ટ ક્રિયાઓ અમલમાં આવે તે પહેલાં બ્લોક કરે છે. Slack, Email, PagerDuty અથવા Telegram દ્વારા સૂચના મેળવો, અને એક ક્લિકથી મંજૂર કે નામંજૂર કરો.",
-  "banners.agent_builder_pill": "નવું: Agent Builder · તમારો એજન્ટ વર્ણવો, અમે તેને બનાવીએ છીએ, હોસ્ટ કરીએ છીએ, તમે દરેક પગલું જુઓ",
   "banners.changelog": "ચેન્જલોગ",
   "banners.get_license": "લાઇસન્સ મેળવો",
   "banners.have_license_key": "મારી પાસે લાઇસન્સ કી છે",

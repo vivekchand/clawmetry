@@ -523,7 +523,6 @@
   "approvals.tool_write": "ఫైల్ రైట్‌లు (write)",
   "approvals.trial_note": "7-రోజుల ఉచిత ట్రయల్ · క్రెడిట్ కార్డ్ అవసరం లేదు",
   "approvals.upgrade_pitch": "Cloud ద్వారా మధ్యవర్తిత్వ ఆమోదాలు ప్రమాదకర ఏజెంట్ చర్యలను అవి అమలయ్యే ముందే బ్లాక్ చేస్తాయి. Slack, Email, PagerDuty లేదా Telegram ద్వారా నోటిఫికేషన్ పొందండి, ఒక క్లిక్‌తో ఆమోదించండి లేదా తిరస్కరించండి.",
-  "banners.agent_builder_pill": "కొత్తది: Agent Builder · మీ ఏజెంట్‌ను వివరించండి, మేము దాన్ని నిర్మిస్తాం, హోస్ట్ చేస్తాం, ప్రతి కదలికను మీరు చూస్తారు",
   "banners.changelog": "చేంజ్‌లాగ్",
   "banners.get_license": "లైసెన్స్ పొందండి",
   "banners.have_license_key": "నా వద్ద లైసెన్స్ కీ ఉంది",

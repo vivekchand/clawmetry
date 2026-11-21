@@ -523,7 +523,6 @@
   "approvals.tool_write": "كتابة الملفات (write)",
   "approvals.trial_note": "تجربة مجانية لمدة 7 أيام · لا حاجة لبطاقة ائتمان",
   "approvals.upgrade_pitch": "تحظر الموافقات الوسيطة عبر Cloud إجراءات الوكلاء الخطرة قبل تنفيذها. احصل على إشعار عبر Slack أو البريد الإلكتروني أو PagerDuty أو Telegram، ووافق أو ارفض بنقرة واحدة.",
-  "banners.agent_builder_pill": "جديد: Agent Builder، صف وكيلك، نتولى بناءه واستضافته، وأنت تراقب كل حركة",
   "banners.changelog": "سجل التغييرات",
   "banners.get_license": "احصل على ترخيص",
   "banners.have_license_key": "لدي مفتاح ترخيص",

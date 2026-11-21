@@ -523,7 +523,6 @@
   "approvals.tool_write": "Gravações de arquivo (write)",
   "approvals.trial_note": "7 dias de teste grátis · sem cartão de crédito",
   "approvals.upgrade_pitch": "Aprovações mediadas pela Cloud bloqueiam ações arriscadas do agente antes que elas sejam executadas. Receba notificações via Slack, Email, PagerDuty ou Telegram, e aprove ou negue com um clique.",
-  "banners.agent_builder_pill": "Novidade: Agent Builder · descreva seu agente, nós construímos, hospedamos, você acompanha cada movimento",
   "banners.changelog": "Changelog",
   "banners.get_license": "Obter uma licença",
   "banners.have_license_key": "Eu tenho uma chave de licença",

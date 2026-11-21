@@ -523,7 +523,6 @@
   "approvals.tool_write": "การเขียนไฟล์ (write)",
   "approvals.trial_note": "ทดลองใช้ฟรี 7 วัน · ไม่ต้องใช้บัตรเครดิต",
   "approvals.upgrade_pitch": "การอนุมัติผ่าน Cloud จะบล็อกการดำเนินการเสี่ยงของเอเจนต์ก่อนที่จะถูกเรียกใช้ รับการแจ้งเตือนผ่าน Slack, อีเมล, PagerDuty หรือ Telegram และอนุมัติหรือปฏิเสธได้ด้วยคลิกเดียว",
-  "banners.agent_builder_pill": "ใหม่: Agent Builder · อธิบายเอเจนต์ที่ต้องการ เราสร้างให้ โฮสต์ให้ คุณติดตามทุกความเคลื่อนไหว",
   "banners.changelog": "บันทึกการเปลี่ยนแปลง",
   "banners.get_license": "รับไลเซนส์",
   "banners.have_license_key": "ฉันมีคีย์ไลเซนส์แล้ว",

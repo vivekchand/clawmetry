@@ -523,7 +523,6 @@
   "approvals.tool_write": "फाइल लेखन (write)",
   "approvals.trial_note": "7 दिवसांची मोफत चाचणी · क्रेडिट कार्ड आवश्यक नाही",
   "approvals.upgrade_pitch": "Cloud-मध्यस्थ मंजुऱ्या धोकादायक एजंट कृती अंमलात येण्यापूर्वीच रोखतात. Slack, Email, PagerDuty किंवा Telegram द्वारे सूचना मिळवा आणि एका क्लिकवर मंजूर किंवा नाकारा.",
-  "banners.agent_builder_pill": "नवीन: Agent Builder · तुमच्या एजंटचे वर्णन करा, आम्ही तो तयार करतो, होस्ट करतो, तुम्ही प्रत्येक हालचाल पाहा",
   "banners.changelog": "बदल नोंदी",
   "banners.get_license": "लायसन्स मिळवा",
   "banners.have_license_key": "माझ्याकडे लायसन्स की आहे",
