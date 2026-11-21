@@ -115,7 +115,7 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("openclaw", "OpenClaw", ("~/.openclaw/openclaw.json", "~/.openclaw/gateway"), env="OPENCLAW_HOME"),
     RuntimeProbe("nemoclaw", "NVIDIA NemoClaw", ("~/.nemoclaw", "~/.openclaw/sandboxes")),
     RuntimeProbe("claude_code", "Claude Code", ("~/.claude/projects",)),
-    RuntimeProbe("codex", "Codex", ("~/.codex/sessions", "~/.codex/archived_sessions")),
+    RuntimeProbe("codex", "Codex / ChatGPT Work", ("~/.codex/sessions", "~/.codex/archived_sessions")),
     RuntimeProbe("cursor", "Cursor", (
         "~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb",
         "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",

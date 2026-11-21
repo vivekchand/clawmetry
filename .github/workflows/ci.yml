@@ -1297,6 +1297,7 @@ jobs:
             tests/test_guard_live_probe.py \
             tests/test_process_control.py \
             tests/test_process_control_windows.py \
+            tests/test_chatgpt_desktop_coverage.py \
             tests/test_fleet_install.py \
             tests/test_detector_incident_delivery.py \
             tests/test_blocked_agent_always_notifies.py \
