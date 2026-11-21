@@ -36,7 +36,8 @@
     "AC-STE-005.",
     "AC-ASSIST-",
     "AC-ASIMOV-",
-    "AC-RPC-CP-"
+    "AC-RPC-CP-",
+    "AC-CHATGPT-"
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -3242,6 +3243,24 @@
       "doc": "Private robotics control-plane RPC seam",
       "doc_id": "BCP-015/SDK",
       "text": "The control-plane namespace shall not become a cloud relay query shape, raw SQL endpoint or motor command route."
+    },
+    {
+      "id": "AC-CHATGPT-001.2",
+      "doc": "ChatGPT desktop activity with accurate product attribution",
+      "doc_id": "3a9a6ab2-212d-486a-bd49-32baf2367088",
+      "text": "When the same native session is readable by both Codex and ChatGPT integration paths, the system shall ingest it under one runtime and count each recorded usage amount once."
+    },
+    {
+      "id": "AC-CHATGPT-001.4",
+      "doc": "ChatGPT desktop activity with accurate product attribution",
+      "doc_id": "3a9a6ab2-212d-486a-bd49-32baf2367088",
+      "text": "When a desktop mode or hosted conversation has no validated accessible local transcript, the system shall explain that coverage limit without representing it as monitored or claiming inactivity."
+    },
+    {
+      "id": "AC-CHATGPT-001.7",
+      "doc": "ChatGPT desktop activity with accurate product attribution",
+      "doc_id": "3a9a6ab2-212d-486a-bd49-32baf2367088",
+      "text": "When the operator selects ChatGPT locally or in the hosted dashboard, its data shall be backed by the daemon-owned DuckDB and existing encrypted snapshot path, and shall obey the paid runtime entitlement."
     }
   ]
 }
