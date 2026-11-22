@@ -106,7 +106,7 @@
           " onkeydown="if(event.key==='Enter')shmSendOtp()">
         <button id="shm-send-btn" onclick="shmSendOtp()" style="
           padding:10px 18px;
-          background:#E5443A;
+          background:#E0462F;
           color:#fff;
           border:none;
           border-radius:8px;
@@ -116,7 +116,7 @@
           white-space:nowrap;
           " data-i18n="selfhost.get_started">Get Started</button>
       </div>
-      <p id="shm-home-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <p id="shm-home-error" style="color:#E0462F;font-size:12px;margin:6px 0 0;display:none;"></p>
       <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
         <a href="#" onclick="shmShowLicense();return false;" style="color:#94a3b8;font-size:12px;text-decoration:none;" data-i18n="selfhost.have_license">I have a license key</a>
         <span style="color:#334155;font-size:12px;margin:0 8px;">·</span>
@@ -140,7 +140,7 @@
           " onkeydown="if(event.key==='Enter')shmVerifyOtp()">
         <button id="shm-verify-btn" onclick="shmVerifyOtp()" style="
           padding:10px 18px;
-          background:#E5443A;
+          background:#E0462F;
           color:#fff;
           border:none;
           border-radius:8px;
@@ -149,12 +149,12 @@
           cursor:pointer;
           " data-i18n="selfhost.activate_trial">Activate trial</button>
       </div>
-      <p id="shm-otp-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <p id="shm-otp-error" style="color:#E0462F;font-size:12px;margin:6px 0 0;display:none;"></p>
       <!-- An account whose trial is already spent fails activation with the
            cloud's message and nothing to do about it. Offer the plans step
            right there instead of sending them back to the email box. -->
       <p id="shm-otp-plans" style="margin:8px 0 0;text-align:center;display:none;">
-        <span style="color:#E5443A;font-size:12px;font-weight:600;cursor:pointer;" onclick="shmShowPlans()" data-i18n="selfhost.see_plans">See plans</span>
+        <span style="color:#E0462F;font-size:12px;font-weight:600;cursor:pointer;" onclick="shmShowPlans()" data-i18n="selfhost.see_plans">See plans</span>
       </p>
       <p style="color:#64748b;font-size:12px;margin:10px 0 0;text-align:center;">
         <span style="cursor:pointer;" onclick="shmResendOtp()" data-i18n="selfhost.resend_code">Resend code</span>
@@ -166,7 +166,7 @@
       <div style="width:32px;height:32px;border:3px solid rgba(255,255,255,0.15);border-top-color:#60a5fa;border-radius:50%;margin:0 auto 14px;animation:shmspin 0.8s linear infinite;"></div>
       <p style="color:#cbd5e1;font-size:14px;font-weight:600;margin:0 0 6px;" data-i18n="selfhost.finish_in_browser">Finish sign-in in the new browser tab</p>
       <p style="color:#64748b;font-size:12px;margin:0;" data-i18n="selfhost.waiting_oauth">Complete sign-in to activate your trial here. Sign-in does not enable cloud sync for agent data.</p>
-      <p id="shm-wait-error" style="color:#E5443A;font-size:12px;margin:10px 0 0;display:none;"></p>
+      <p id="shm-wait-error" style="color:#E0462F;font-size:12px;margin:10px 0 0;display:none;"></p>
       <p style="color:#64748b;font-size:12px;margin:10px 0 0;cursor:pointer;" onclick="shmBackHome()" data-i18n="selfhost.cancel">Cancel</p>
       <style>@keyframes shmspin{to{transform:rotate(360deg)}}</style>
     </div>
@@ -185,7 +185,7 @@
           " onkeydown="if(event.key==='Enter')shmActivateLicense()">
         <button id="shm-license-btn" onclick="shmActivateLicense()" style="
           padding:10px 18px;
-          background:#E5443A;
+          background:#E0462F;
           color:#fff;
           border:none;
           border-radius:8px;
@@ -194,7 +194,7 @@
           cursor:pointer;
           " data-i18n="selfhost.activate_license">Activate</button>
       </div>
-      <p id="shm-license-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <p id="shm-license-error" style="color:#E0462F;font-size:12px;margin:6px 0 0;display:none;"></p>
       <p style="color:#64748b;font-size:12px;margin:10px 0 0;text-align:center;cursor:pointer;" onclick="shmBackHome()" data-i18n="selfhost.back">Back</p>
     </div>
     <!-- Expired trial → in-modal plan picker. This step used to be a single
@@ -213,9 +213,9 @@
         #shm-step-ended .shm-seg button[aria-pressed="true"]{background:#2a3550;color:#fff;}
         #shm-step-ended .shm-save{display:block;font-size:10px;font-weight:600;color:#4ade80;letter-spacing:0.2px;}
         #shm-step-ended .shm-tier{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:12px;margin-bottom:8px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:#141c2c;color:#e2e8f0;cursor:pointer;font-family:inherit;}
-        #shm-step-ended .shm-tier[aria-pressed="true"]{border-color:#E5443A;background:rgba(229,68,58,0.08);}
+        #shm-step-ended .shm-tier[aria-pressed="true"]{border-color:#E0462F;background:rgba(229,68,58,0.08);}
         #shm-step-ended .shm-radio{flex:0 0 16px;width:16px;height:16px;margin-top:2px;border-radius:50%;border:2px solid #475569;}
-        #shm-step-ended .shm-tier[aria-pressed="true"] .shm-radio{border-color:#E5443A;background:radial-gradient(#E5443A 45%,transparent 47%);}
+        #shm-step-ended .shm-tier[aria-pressed="true"] .shm-radio{border-color:#E0462F;background:radial-gradient(#E0462F 45%,transparent 47%);}
         #shm-step-ended .shm-tier-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
         #shm-step-ended .shm-tier-name{font-size:14px;font-weight:700;color:#fff;}
         #shm-step-ended .shm-tier-price{font-size:13px;font-weight:700;color:#fff;white-space:nowrap;}
@@ -246,7 +246,7 @@
       <div id="shm-device" style="margin:2px 0 12px;padding:9px 11px;border-radius:8px;background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);color:#bbf7d0;font-size:12px;line-height:1.45;">
         <span data-i18n="selfhost.device_perk">Includes a free $149 desk device, shipped when your first annual invoice is paid.</span>
       </div>
-      <button type="button" id="shm-checkout-btn" onclick="shmCheckout()" style="display:block;width:100%;padding:11px 14px;background:#E5443A;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;" data-i18n="selfhost.continue_checkout">Continue to secure checkout</button>
+      <button type="button" id="shm-checkout-btn" onclick="shmCheckout()" style="display:block;width:100%;padding:11px 14px;background:#E0462F;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;" data-i18n="selfhost.continue_checkout">Continue to secure checkout</button>
       <p id="shm-ended-status" style="color:#94a3b8;font-size:12px;margin:8px 0 0;text-align:center;line-height:1.45;display:none;"></p>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
         <span style="color:#94a3b8;font-size:12px;cursor:pointer;" onclick="shmShowLicense()" data-i18n="selfhost.have_license">I have a license key</span>

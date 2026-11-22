@@ -4428,13 +4428,13 @@ function _renderWasteSummary() {
       _opps.push([(Number(w.compressible_usd) || 0) * 3 + Number(w.compressible_sessions), 'Try reducing large tool results, then check that the agent still has the evidence needed to finish the task.']);
     _opps.sort(function(a, b){ return b[0] - a[0]; });
     var startHere = _opps.length ? ('<div style="font-size:12px;color:#22c55e;background:rgba(34,197,94,0.08);border-radius:6px;padding:7px 10px;margin-top:10px;"><strong>Start here:</strong> ' + escHtml(_opps[0][1]) + '</div>') : '';
-    var html = '<div id="cm-waste-summary" style="background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-left:3px solid #E5443A;border-radius:10px;padding:14px 18px;margin:0 0 16px;">'
+    var html = '<div id="cm-waste-summary" style="background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-left:3px solid #E0462F;border-radius:10px;padding:14px 18px;margin:0 0 16px;">'
       + '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">💡 Cost review '
       + '<span style="font-weight:500;color:var(--text-muted,#6b7280);">(' + Number(w.flagged_session_count) + ' of ' + Number(w.session_count) + ' recent sessions have review signals)</span></div>'
       + '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">All runtimes on this node. Dollar figures are estimates at published rates, not an invoice or proven savings. Reasoning can be useful; these signals do not measure the quality of the result.</div>'
       + inner
       + startHere
-      + '<div style="font-size:12px;color:var(--text-muted,#6b7280);margin-top:8px;">Drill into each on the Cost tab. <a href="https://clawmetry.com/blog/estimating-productivity-gains" target="_blank" rel="noopener" style="color:#E5443A;">How to estimate what this is worth →</a></div>'
+      + '<div style="font-size:12px;color:var(--text-muted,#6b7280);margin-top:8px;">Drill into each on the Cost tab. <a href="https://clawmetry.com/blog/estimating-productivity-gains" target="_blank" rel="noopener" style="color:#E0462F;">How to estimate what this is worth →</a></div>'
       + '</div>';
     var heroEl = document.getElementById('overview-hero');
     if (ex) { ex.outerHTML = html; }
@@ -12959,9 +12959,9 @@ function _cmRenderRuntimeSwitcher(counts, anchor, reload) {
   if (active !== 'all' && !counts[active]) active = 'all';
   var total = order.reduce(function(a, k) { return a + counts[k]; }, 0);
   function chip(val, label, n, on) {
-    var bg = on ? 'var(--bg-accent,#E5443A)' : 'var(--bg-secondary,#161b22)';
+    var bg = on ? 'var(--bg-accent,#E0462F)' : 'var(--bg-secondary,#161b22)';
     var fg = on ? '#fff' : 'var(--text-secondary,#9ca3af)';
-    var bd = on ? 'var(--bg-accent,#E5443A)' : 'var(--border-primary,#30363d)';
+    var bd = on ? 'var(--bg-accent,#E0462F)' : 'var(--border-primary,#30363d)';
     // Runtime pixel-logo (chip variant) before the label, keyed off the runtime
     // id. The "All" chip (val==='all') carries no mascot.
     var ic = (val !== 'all' && typeof window.cmRuntimeIcon === 'function')

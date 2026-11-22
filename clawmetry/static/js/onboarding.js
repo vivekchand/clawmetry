@@ -236,7 +236,7 @@
     var el = $('shm-ended-status');
     if (!el) return;
     el.textContent = msg || '';
-    el.style.color = isErr ? '#E5443A' : '#94a3b8';
+    el.style.color = isErr ? '#E0462F' : '#94a3b8';
     el.style.display = msg ? 'block' : 'none';
   }
 
@@ -325,7 +325,7 @@
     var link = $('shm-signout-link');
     if (!_shmSignoutArmed) {
       _shmSignoutArmed = true;
-      if (link) { link.textContent = 'Confirm sign out'; link.style.color = '#E5443A'; }
+      if (link) { link.textContent = 'Confirm sign out'; link.style.color = '#E0462F'; }
       _shmStatus('Signs this machine out of the current account. Your local data stays.');
       setTimeout(function () {
         if (!_shmSignoutArmed) return;

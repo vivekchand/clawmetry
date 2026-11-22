@@ -1,5 +1,5 @@
 """
-ClawMetry - See your agent think 🦞
+ClawMetry - See your agent think
 
 Real-time observability dashboard for your AI agents (OpenClaw, NVIDIA NemoClaw, Claude Code, Codex + 8 more runtimes).
 Single-file Flask app with zero config - auto-detects your setup.
@@ -7211,7 +7211,7 @@ DASHBOARD_HTML = r"""
 {% include 'partials/overlays.html' %}
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
+  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E0462F">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
     <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
@@ -7285,7 +7285,7 @@ DASHBOARD_HTML = r"""
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
     {% if v2_enabled %}
-    <a class="nav-tab v1-to-v2-link" href="/v2" onclick="var _m={'flow':'trace','transcripts':'brain','sessions':'brain','memory':'context','usage':'cost','crons':'ops','logs':'ops'};var _t=window._cmCurrentTab;this.href='/v2?from='+encodeURIComponent(_m[_t]||_t||'')" style="text-decoration:none;color:#E5443A;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
+    <a class="nav-tab v1-to-v2-link" href="/v2" onclick="var _m={'flow':'trace','transcripts':'brain','sessions':'brain','memory':'context','usage':'cost','crons':'ops','logs':'ops'};var _t=window._cmCurrentTab;this.href='/v2?from='+encodeURIComponent(_m[_t]||_t||'')" style="text-decoration:none;color:#E0462F;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
     {% endif %}
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
   <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com/cloud','_blank')" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>
@@ -7297,7 +7297,7 @@ DASHBOARD_HTML = r"""
      header because the rest of the JS still hides/shows them by id. #}
   <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
     {% if v2_enabled %}
-    <a class="nav-tab v1-to-v2-link" href="/v2" onclick="var _m={'flow':'trace','transcripts':'brain','sessions':'brain','memory':'context','usage':'cost','crons':'ops','logs':'ops'};var _t=window._cmCurrentTab;this.href='/v2?from='+encodeURIComponent(_m[_t]||_t||'')" style="text-decoration:none;color:#E5443A;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
+    <a class="nav-tab v1-to-v2-link" href="/v2" onclick="var _m={'flow':'trace','transcripts':'brain','sessions':'brain','memory':'context','usage':'cost','crons':'ops','logs':'ops'};var _t=window._cmCurrentTab;this.href='/v2?from='+encodeURIComponent(_m[_t]||_t||'')" style="text-decoration:none;color:#E0462F;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
     {% endif %}
     <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
     <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com/cloud','_blank')" style="display:none;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>
@@ -12215,10 +12215,10 @@ BANNER = r"""
 """
 
 ARCHITECTURE_OVERVIEW = """\
-🦞 ClawMetry {version} -- See your agent think.
+🎯 ClawMetry {version} -- See your agent think.
 
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
-  │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
+  │  🤖                 │  READS FILES │  🎯                 │  SHOWS YOU  │  📊                 │
   │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
   │  Any of 32 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
@@ -12231,7 +12231,7 @@ ARCHITECTURE_OVERVIEW = """\
 """
 
 HELP_TEXT = """\
-🦞 ClawMetry {version} -- See your agent think.
+🎯 ClawMetry {version} -- See your agent think.
 
 Usage: clawmetry [command] [options]
 
@@ -13235,7 +13235,7 @@ def cmd_status(args):
     cloud_status = "[ok] Connected" if token else "❌ Not connected"
 
     print(f"""
-🦞 ClawMetry Status
+🎯 ClawMetry Status
 
   Service:   {status_icon} ({svc_type})
   Port:      {port}

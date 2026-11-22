@@ -125,7 +125,7 @@ def resolve_app_base() -> str:
     return DEFAULT_APP_BASE
 
 # ─── Brand tokens (must match desktop/app.py) ───────────────────────────
-BRAND_RED = "#E94644"
+BRAND_RED = "#E0462F"
 BRAND_BG_DARK = "#0b0e14"
 BRAND_BG_PANEL = "#141924"
 BRAND_TEXT = "#e2e8f0"
@@ -676,7 +676,7 @@ SLIDE_ART_SVG = {
   <g fill="#273143">
     <circle cx="30" cy="28" r="4"/><circle cx="44" cy="28" r="4"/><circle cx="58" cy="28" r="4"/>
   </g>
-  <circle cx="86" cy="28" r="4.5" fill="#E94644"/>
+  <circle cx="86" cy="28" r="4.5" fill="#E0462F"/>
   <text x="96" y="32" font-size="11" font-weight="700" fill="#e2e8f0">ClawMetry</text>
   <g font-size="10" fill="#94a3b8">
     <text x="240" y="32" fill="#e2e8f0" font-weight="600">Overview</text>
@@ -684,7 +684,7 @@ SLIDE_ART_SVG = {
     <text x="352" y="32">Usage</text>
     <text x="392" y="32">Brain</text>
   </g>
-  <rect x="240" y="38" width="48" height="2" rx="1" fill="#E94644"/>
+  <rect x="240" y="38" width="48" height="2" rx="1" fill="#E0462F"/>
   <g>
     <rect x="26" y="52" width="128" height="52" rx="10" fill="#141924" stroke="#1f2937"/>
     <text x="38" y="70" font-size="7.5" letter-spacing="1" fill="#94a3b8">TOKENS TODAY</text>
@@ -705,15 +705,15 @@ SLIDE_ART_SVG = {
     </g>
     <defs>
       <linearGradient id="cm-a" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#E94644" stop-opacity=".28"/>
-        <stop offset="1" stop-color="#E94644" stop-opacity="0"/>
+        <stop offset="0" stop-color="#E0462F" stop-opacity=".28"/>
+        <stop offset="1" stop-color="#E0462F" stop-opacity="0"/>
       </linearGradient>
     </defs>
     <path d="M38 196 L 66 184 L 94 190 L 122 168 L 150 176 L 178 152 L 206 160 L 234 142 L 262 148 L 282 138 L 282 206 L 38 206 Z"
           fill="url(#cm-a)"/>
     <path d="M38 196 L 66 184 L 94 190 L 122 168 L 150 176 L 178 152 L 206 160 L 234 142 L 262 148 L 282 138"
-          fill="none" stroke="#E94644" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="282" cy="138" r="3.5" fill="#E94644"/>
+          fill="none" stroke="#E0462F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="282" cy="138" r="3.5" fill="#E0462F"/>
   </g>
   <g>
     <rect x="306" y="114" width="128" height="104" rx="10" fill="#141924" stroke="#1f2937"/>
@@ -723,7 +723,7 @@ SLIDE_ART_SVG = {
       <text x="318" y="176">sonnet</text>
       <text x="318" y="200">haiku</text>
     </g>
-    <g fill="#E94644">
+    <g fill="#E0462F">
       <rect x="352" y="145" width="70" height="8" rx="4"/>
       <rect x="352" y="169" width="44" height="8" rx="4" opacity=".65"/>
       <rect x="352" y="193" width="22" height="8" rx="4" opacity=".4"/>
@@ -754,8 +754,8 @@ SLIDE_ART_SVG = {
     <path d="M150 156 L 150 168"/>
     <path d="M290 156 L 290 168"/>
   </g>
-  <circle cx="220" cy="68" r="20" fill="#141924" stroke="#E94644" stroke-width="2"/>
-  <rect x="212" y="60" width="16" height="16" rx="4" fill="#E94644"/>
+  <circle cx="220" cy="68" r="20" fill="#141924" stroke="#E0462F" stroke-width="2"/>
+  <rect x="212" y="60" width="16" height="16" rx="4" fill="#E0462F"/>
   <g fill="#141924" stroke="#1f2937">
     <rect x="122" y="132" width="56" height="26" rx="8"/>
     <rect x="262" y="132" width="56" height="26" rx="8"/>
@@ -783,14 +783,14 @@ SLIDE_ART_SVG = {
     <rect x="182" y="56" width="66" height="7" rx="3.5" fill="#94a3b8"/>
     <circle cx="170" cy="84" r="4" fill="#4ade80"/>
     <rect x="182" y="80" width="52" height="7" rx="3.5" fill="#94a3b8"/>
-    <circle cx="170" cy="108" r="4" fill="#E94644"/>
+    <circle cx="170" cy="108" r="4" fill="#E0462F"/>
     <rect x="182" y="104" width="60" height="7" rx="3.5" fill="#94a3b8"/>
   </g>
   <g>
     <rect x="164" y="130" width="52" height="24" rx="12" fill="none" stroke="#4ade80" stroke-width="1.5"/>
     <path d="M182 142 L 187 147 L 197 136" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    <rect x="224" y="130" width="52" height="24" rx="12" fill="none" stroke="#E94644" stroke-width="1.5"/>
-    <path d="M244 137 L 255 147 M255 137 L 244 147" stroke="#E94644" stroke-width="2" stroke-linecap="round"/>
+    <rect x="224" y="130" width="52" height="24" rx="12" fill="none" stroke="#E0462F" stroke-width="1.5"/>
+    <path d="M244 137 L 255 147 M255 137 L 244 147" stroke="#E0462F" stroke-width="2" stroke-linecap="round"/>
   </g>
   <rect x="204" y="182" width="32" height="8" rx="4" fill="#1f2937"/>
   <rect x="210" y="206" width="20" height="5" rx="2.5" fill="#1f2937"/>
@@ -817,8 +817,8 @@ SLIDE_ART_SVG = {
   </g>
   <path d="M240 40 L 306 62 L 306 122 C 306 164, 276 190, 240 202
            C 204 190, 174 164, 174 122 L 174 62 Z"
-        fill="#141924" stroke="#E94644" stroke-width="2"/>
-  <path d="M214 120 L 234 142 L 268 100" fill="none" stroke="#E94644"
+        fill="#141924" stroke="#E0462F" stroke-width="2"/>
+  <path d="M214 120 L 234 142 L 268 100" fill="none" stroke="#E0462F"
         stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
   <g fill="#334155">
     <rect x="336" y="76" width="70" height="9" rx="4.5"/>

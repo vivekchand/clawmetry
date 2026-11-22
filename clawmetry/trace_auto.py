@@ -121,7 +121,7 @@ def render_comment(bundle: dict, url: str) -> str:
     }.get(attr, "")
 
     return (
-        f"**🦞 ClawMetry: what the agent was asked to do**\n\n"
+        f"**🎯 ClawMetry: what the agent was asked to do**\n\n"
         f"[View the trace]({url})\n\n"
         f"| prompts | turns | tools | cost | attribution |\n"
         f"|---|---|---|---|---|\n"

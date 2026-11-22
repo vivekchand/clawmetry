@@ -3,7 +3,7 @@ REM ClawMetry Installer for Windows (CMD)
 REM Usage: curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd
 
 echo.
-echo   🦞 ClawMetry Installer
+echo   ClawMetry Installer
 echo   Real-time observability ^& governance for AI agents
 echo.
 

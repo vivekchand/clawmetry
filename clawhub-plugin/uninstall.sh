@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo ""
-echo -e "  ${BOLD}🦞 ClawMetry — Uninstalling${NC}"
+echo -e "  ${BOLD}🎯 ClawMetry — Uninstalling${NC}"
 echo -e "  ${DIM}$(printf '%.0s─' {1..46})${NC}"
 echo ""
 

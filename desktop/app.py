@@ -126,7 +126,7 @@ WATCHER_TICK_SECS = 60
 # crash checks instead of five minutes of them.
 WATCHER_UPDATE_TIMEOUT_SECS = 90
 
-BRAND_RED = "#E94644"
+BRAND_RED = "#E0462F"
 BRAND_BG_DARK = "#0b0e14"
 
 # Injected after every navigation. WKWebView (macOS) and EdgeWebView2
