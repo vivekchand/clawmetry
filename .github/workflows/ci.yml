@@ -498,6 +498,16 @@ jobs:
       - name: Action references stay pinned to a commit SHA
         run: python3 -m pytest tests/test_action_refs_pinned.py -q
 
+      # The same two rules for the workflow we publish rather than run.
+      # docs/github-action-template.yml is the file the eval-gate docs tell
+      # other repositories to copy into .github/workflows/, so its steps run
+      # in somebody else's job with their token and their ANTHROPIC_API_KEY.
+      # It sits outside .github/, so the ratchet above never discovered it,
+      # and it shipped three mutable tags and no `permissions:` block. Named
+      # explicitly because this job runs FILE LISTS.
+      - name: Published workflow templates stay pinned and least-privilege
+        run: python3 -m pytest tests/test_published_workflow_templates_hardened.py -q
+
       # The same ratchet for `pip install`. Almost every install in this repo
       # resolves from a hash-pinned set under .github/requirements/; twenty do
       # not, and each of those is either this repo's own tree (nothing to pin)

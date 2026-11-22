@@ -10,6 +10,13 @@
 #   2. Add ANTHROPIC_API_KEY (or OPENAI_API_KEY) to your repo Secrets.
 #   3. Drop this workflow file in and push.
 #
+# The action refs below are pinned to full commit SHAs, not tags. A tag is
+# mutable: whoever owns `@v7` can repoint it, and the new code then runs in
+# YOUR job with YOUR token and YOUR ANTHROPIC_API_KEY in the environment.
+# The trailing comment records which release each SHA was. Keep the pins
+# when you copy this file; Dependabot's `github-actions` ecosystem will
+# move them for you if you enable it.
+#
 # Cost guard: 100 judge calls/hour ceiling (per CLAWMETRY_EVALS_RATE_LIMIT)
 # plus skip-trivial-sessions filter caps spend at ~$0.001 per test with
 # the default claude-haiku-4-5 judge. A 20-test suite costs ~$0.02.
@@ -24,15 +31,26 @@ on:
       - "src/**"
   workflow_dispatch:
 
+# The job reads the checkout and runs the suite. It pushes nothing, opens
+# nothing and publishes nothing, so the token it runs with needs no write
+# scope. Declaring that here matters more in a template than in our own
+# workflows: a repository whose default workflow permissions are still
+# read/write would otherwise hand this job -- and the judge calls it makes
+# against third-party eval content -- a token that can push to the default
+# branch. Narrow it where the file lands rather than leaving it to the
+# settings of whoever copies it.
+permissions:
+  contents: read
+
 jobs:
   golden-evals:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
 
@@ -61,7 +79,7 @@ jobs:
         # Stored as a build artefact so a failed run leaves a paste-able
         # diagnosis for the PR author.
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: clawmetry-eval-result
