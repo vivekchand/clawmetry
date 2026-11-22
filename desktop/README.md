@@ -136,7 +136,7 @@ Only when every rung fails does the shell show the old
 | `build_windows.spec` | PyInstaller: WebView2, `ClawMetry.ico`. |
 | `build_linux.spec` | PyInstaller: GTK WebKit2. |
 | `installer/windows.nsi` | NSIS script wrapping `build_windows.spec`'s output into a real `.exe` installer (Start Menu + Desktop shortcuts, uninstaller, per-user install, no admin/UAC prompt). |
-| `assets/` | Brand SVGs (`clawmetry-logo*.svg`), generated `ClawMetry.icns`, `ClawMetry.ico`, `clawmetry-512.png`. |
+| `assets/` | Brand SVGs (`clawmetry-logo*.svg`, `clawmetry-mark-*.svg`), generated `ClawMetry.icns`, `ClawMetry.ico`, `clawmetry-512.png`. All written by `scripts/build_brand_assets.py` — never by hand. |
 | `requirements-dev.txt` | pywebview, Pillow, PyInstaller (build-only). |
 | `setup_py2app.py` | Retained for the day py2app catches up to macOS 26 Tahoe — not on the shipping path. |
 
@@ -240,23 +240,30 @@ name for each platform.
 ## Regenerating icons
 
 The generated `.icns` / `.ico` / PNG are committed so CI doesn't need
-image tooling. To regenerate from the source SVGs:
+image tooling. Don't hand-edit them, and don't hand-edit the SVGs either:
+every brand asset in the repo is generated from one geometric definition
+in `scripts/build_brand_assets.py`, so the mark cannot drift between the
+favicon, the Dock icon and the lockups.
 
 ```bash
 brew install librsvg imagemagick    # macOS
-# then, from desktop/assets/:
-for pair in "16 icon_16x16.png" "32 icon_16x16@2x.png" "32 icon_32x32.png" \
-            "64 icon_32x32@2x.png" "128 icon_128x128.png" "256 icon_128x128@2x.png" \
-            "256 icon_256x256.png" "512 icon_256x256@2x.png" "512 icon_512x512.png" \
-            "1024 icon_512x512@2x.png"; do
-  sz=${pair%% *}; name=${pair##* }
-  rsvg-convert -w "$sz" -h "$sz" clawmetry-logo.svg -o "ClawMetry.iconset/$name"
-done
-iconutil --convert icns ClawMetry.iconset --output ClawMetry.icns
-magick clawmetry-logo.svg -density 300 -background none \
-  -define icon:auto-resize=16,32,48,64,128,256 ClawMetry.ico
-rsvg-convert -w 512 -h 512 clawmetry-logo.svg -o clawmetry-512.png
+python3 scripts/build_brand_assets.py   # from the repo root
 ```
+
+That rewrites, from the 64-unit grid in that script:
+
+| Output | Cut | Notes |
+|--------|-----|-------|
+| `clawmetry-logo.svg` (repo root) | full | single-colour; the canonical mark |
+| `clawmetry/static/img/logo.svg` | compact | favicon + 22px header, single-colour so it is safe on any ground |
+| `desktop/assets/clawmetry-mark-{darkbg,lightbg}.svg` | full | two-tone, for grounds we control |
+| `desktop/assets/clawmetry-logo-{horizontal,stacked}[-darkbg].svg` | full | mark + the existing outlined wordmark |
+| `desktop/assets/ClawMetry.icns` / `.ico` / `clawmetry-512.png` | — | `.icns` needs macOS `iconutil` and is skipped elsewhere |
+
+**Two cuts, on purpose.** The full cut's mid-ring notches close up below
+about 32px and the mark turns to mush; the compact cut drops that ring and
+thickens the strokes so the silhouette survives a 16px favicon. Use the
+full cut at 48px and above, the compact cut at 32px and below.
 
 ## Sharp edges (kept for future maintainers)
 

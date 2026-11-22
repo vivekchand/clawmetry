@@ -2097,7 +2097,7 @@
 body.has-profile-menu #logout-btn { display: none !important; }
 #cm-profile-btn:hover { background: rgba(127, 127, 127, 0.12); }
 #cm-profile-btn[data-signed-in="1"] {
-  background: linear-gradient(135deg, #e5443a, #f97316);
+  background: linear-gradient(135deg, #e0462f, #f97316);
   border-color: transparent;
   color: #fff;
 }
@@ -3803,7 +3803,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
 #page-trail .trail-step {
   flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 800; color: #fff; background: #E5443A;
+  font-size: 12px; font-weight: 800; color: #fff; background: #E0462F;
   margin-top: 1px;
 }
 #page-trail .trail-section-title { margin: 0; font-size: 16px; font-weight: 700; color: var(--text-primary); line-height: 1.3; }

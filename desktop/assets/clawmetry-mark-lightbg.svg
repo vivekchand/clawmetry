@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64" fill="none" role="img" aria-label="ClawMetry">
+  <g stroke="#E0462F" stroke-linecap="butt">
+      <path d="M51.32 14.60A26 26 0 0 0 6.14 29.28" stroke-width="8"/>
+      <path d="M6.14 34.72A26 26 0 0 0 51.32 49.40" stroke-width="8"/>
+      <path d="M42.77 18.21A17.5 17.5 0 0 0 34.13 14.63" stroke-width="6"/>
+      <path d="M29.87 14.63A17.5 17.5 0 0 0 14.63 29.87" stroke-width="6"/>
+      <path d="M14.63 34.13A17.5 17.5 0 0 0 29.87 49.37" stroke-width="6"/>
+      <path d="M34.13 49.37A17.5 17.5 0 0 0 42.77 45.79" stroke-width="6"/>
+      <path d="M36.75 23.77A9.5 9.5 0 0 0 22.62 30.51" stroke-width="5.5"/>
+      <path d="M22.62 33.49A9.5 9.5 0 0 0 36.75 40.23" stroke-width="5.5"/>
+    </g>
+    <path d="M32 32H59" stroke="#10151C" stroke-width="3.6" stroke-linecap="round"/>
+    <circle cx="32" cy="32" r="5.2" fill="#10151C"/>
+</svg>

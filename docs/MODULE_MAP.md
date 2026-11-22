@@ -16,7 +16,7 @@ The Flask app itself plus the optional SQLite time-series companion.
 
 | Module | Size | Purpose |
 |---|---|---|
-| `dashboard.py` | huge | ClawMetry - See your agent think 🦞 |
+| `dashboard.py` | huge | ClawMetry - See your agent think. |
 | `history.py` | medium | ClawMetry History - Time-series data collection and storage. |
 
 ## HTTP routes (`routes/`)

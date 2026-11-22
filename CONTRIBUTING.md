@@ -1,6 +1,6 @@
 # Contributing to OpenClaw Dashboard
 
-Thanks for your interest in contributing! 🦞
+Thanks for your interest in contributing!
 
 OpenClaw Dashboard is built to be **simple, fast, and useful** for personal AI agent observability. Contributions that align with these principles are always welcome.
 
@@ -252,7 +252,7 @@ By contributing to OpenClaw Dashboard, you agree that your contributions will be
 
 ---
 
-**Thanks for making OpenClaw Dashboard better! 🦞**
+**Thanks for making ClawMetry better!**
 ## English explanations
 
 Use the [English writing policy](docs/STE100_WRITING.md) for UI text, help, errors, CLI messages, reports, and documentation.

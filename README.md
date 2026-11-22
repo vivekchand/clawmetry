@@ -1,8 +1,8 @@
 # ClawMetry
 
-[![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E0462F&label=version)](https://pypi.org/project/clawmetry/)
 [![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E0462F)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
 [![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
@@ -19,7 +19,7 @@ Works with **32 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenC
 
 **Download the desktop app.** Install it on the machine where your agents run, then open ClawMetry. No terminal commands required.
 
-[![Download for macOS](https://img.shields.io/badge/macOS-Download%20.dmg-E5443A?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/vivekchand/clawmetry/releases/latest/download/ClawMetry-mac.dmg)
+[![Download for macOS](https://img.shields.io/badge/macOS-Download%20.dmg-E0462F?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/vivekchand/clawmetry/releases/latest/download/ClawMetry-mac.dmg)
 [![Download for Windows](https://img.shields.io/badge/Windows-Download%20.exe-0078D4?style=for-the-badge)](https://github.com/vivekchand/clawmetry/releases/latest/download/ClawMetry-windows-setup.exe)
 [![Download for Linux](https://img.shields.io/badge/Linux-Download%20.AppImage-333333?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/vivekchand/clawmetry/releases/latest/download/clawmetry-linux.AppImage)
 

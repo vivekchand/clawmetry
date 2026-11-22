@@ -3,9 +3,9 @@
 
 # ClawMetry
 
-[![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E0462F&label=version)](https://pypi.org/project/clawmetry/)
 [![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E0462F)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
 [![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)

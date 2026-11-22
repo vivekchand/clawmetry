@@ -4,7 +4,7 @@
 .physical-ai-nav{display:flex;justify-content:space-between;align-items:center;padding:18px 4%;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary)}
 .physical-ai-nav a{color:var(--text-link);text-decoration:none}
 .physical-ai-nav .physical-ai-brand{display:flex;align-items:center;gap:8px;font-size:19px;font-weight:800;color:var(--text-primary)}
-.physical-ai-brand span{color:#e5443a;margin-left:-8px}
+.physical-ai-brand span{color:#e0462f;margin-left:-8px}
 #physical-ai-app{max-width:1480px;margin:0 auto;padding:42px 4% 60px}
 .physical-ai-heading{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:14px}
 .physical-ai-heading h1{font-size:38px;line-height:1.2;letter-spacing:-1.4px;font-weight:700}
