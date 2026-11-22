@@ -9,6 +9,6 @@
       <path d="M36.75 23.77A9.5 9.5 0 0 0 22.62 30.51" stroke-width="5.5"/>
       <path d="M22.62 33.49A9.5 9.5 0 0 0 36.75 40.23" stroke-width="5.5"/>
     </g>
-    <path d="M32 32H59" stroke="#E0462F" stroke-width="3.6" stroke-linecap="round"/>
-    <circle cx="32" cy="32" r="5.2" fill="#E0462F"/>
+    <path d="M32 32H59" stroke="#FFFFFF" stroke-width="3.6" stroke-linecap="round"/>
+    <circle cx="32" cy="32" r="5.2" fill="#FFFFFF"/>
 </svg>

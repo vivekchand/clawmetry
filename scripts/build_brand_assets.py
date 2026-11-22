@@ -138,6 +138,26 @@ def build_lockup(name: str, word: str) -> str:
 # --- raster ------------------------------------------------------------------
 
 
+def tile_mark_svg(cut: str = "full", size: int = 256) -> str:
+    """The mark on a dark rounded tile.
+
+    Used where the ground is not ours to choose: the in-app logo renders in
+    both the light and the dark dashboard theme (the header sets
+    `color: var(--text-primary)`), and the same file is the favicon, where the
+    browser's tab bar may be either. A bare white probe disappears on a light
+    ground; the tile gives it one. The surrounding markup already applies
+    `border-radius` to this image, so a tile is what it was always expecting.
+    """
+    body = mark_body(cut, BRAND, PAPER, indent="    ")
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
+        f'viewBox="0 0 64 64" fill="none" role="img" aria-label="ClawMetry">\n'
+        f'  <rect width="64" height="64" rx="14" fill="{TILE}"/>\n'
+        f'  <g transform="translate(32,32) scale(0.82) translate(-32,-32)">\n'
+        f"{body}\n  </g>\n</svg>\n"
+    )
+
+
 def need(tool: str) -> str:
     path = shutil.which(tool)
     if not path:
@@ -190,14 +210,26 @@ def build_icns(out: Path, src: Path) -> bool:
 def main() -> int:
     print(f"building ClawMetry brand assets in {ROOT}")
 
-    # 1. the universal single-colour marks (safe on any ground)
-    (ROOT / "clawmetry-logo.svg").write_text(mark_svg("full"), encoding="utf-8")
+    # 1. ONE mark everywhere: full cut, vermilion rings, WHITE probe and hub.
+    #    Earlier builds shipped a compact cut here and a full cut there, both
+    #    with a single-colour probe. That put two visibly different logos on the
+    #    product and the website, neither with the centre line the mark is built
+    #    around. clawmetry.com serves exactly this geometry.
+    (ROOT / "clawmetry-logo.svg").write_text(
+        mark_svg("full", field=PAPER), encoding="utf-8"
+    )
+    # The in-app logo and favicon render on a ground we do not control (both
+    # dashboard themes, and any browser tab bar), so this one carries the tile.
     (ROOT / "clawmetry" / "static" / "img" / "logo.svg").write_text(
-        mark_svg("compact", size=64), encoding="utf-8"
+        tile_mark_svg("full", size=64), encoding="utf-8"
     )
     assets = ROOT / "desktop" / "assets"
-    (assets / "clawmetry-logo.svg").write_text(mark_svg("full"), encoding="utf-8")
-    (assets / "clawmetry-mark-compact.svg").write_text(mark_svg("compact"), encoding="utf-8")
+    (assets / "clawmetry-logo.svg").write_text(
+        mark_svg("full", field=PAPER), encoding="utf-8"
+    )
+    (assets / "clawmetry-mark-compact.svg").write_text(
+        mark_svg("compact", field=PAPER), encoding="utf-8"
+    )
     # 2. two-tone cuts, for grounds we control
     (assets / "clawmetry-mark-darkbg.svg").write_text(
         mark_svg("full", field=PAPER), encoding="utf-8"
