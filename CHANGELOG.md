@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixed: one mark everywhere, with the white centre line (#6677 follow-up)
+
+- The previous release shipped two different cuts of the mark and drew the probe and hub in vermilion. `clawmetry/static/img/logo.svg` was the compact cut, the repo-root mark was the full cut, and clawmetry.com was serving a third combination, so the product and the website showed visibly different logos and none of them had the white centre line the mark is designed around.
+- Every mark is now the full cut with a **white probe and hub**, generated from the same geometry as clawmetry.com, which serves byte-identical paths.
+- `clawmetry/static/img/logo.svg` carries a dark rounded tile. It is the one file whose ground is not ours to choose: the dashboard header sets `color: var(--text-primary)` and so renders light in the light theme, the same file is the favicon, and a browser tab bar may be either. A bare white probe disappears on a light ground. The surrounding markup already applied `border-radius` to this image, so a tile is the shape it was written for.
+- The compact cut survives only inside the 16 and 32px frames of `ClawMetry.ico`, where the full cut's notches close up and the silhouette is illegible rather than merely soft. At that size the two cannot be told apart.
+- Verified by rendering the in-app mark at 22, 28 and 56px on both theme grounds and the canonical mark at 150px, and by diffing the generated paths against the asset clawmetry.com serves.
+
 ### Changed: the radar mark replaces the crab across every brand surface (#6677)
 
 - The logo was a red crustacean in `#E94644`, the same animal and nearly the same red as OpenClaw, so the brand read as an OpenClaw accessory rather than the layer that observes 32 runtimes and a robot arm. The mark now reads as what the name says: concentric open range rings (*-metry*) cut by a horizontal measurement axis, with a hub and a probe on the 0° bearing.
