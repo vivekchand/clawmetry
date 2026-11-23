@@ -1090,7 +1090,10 @@ idna==3.20 \
     #   httpx
     #   requests
     #   yarl
-importlib-metadata==10.2.0 \
+importlib-metadata==8.7.1 ; python_full_version < '3.11' \
+    --hash=sha256:5a1f80bf1daa489495071efbb095d75a634cf28a8bc299581244063b53176151 \
+    --hash=sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb
+importlib-metadata==10.2.0 ; python_full_version >= '3.11' \
     --hash=sha256:9413a2029fd9ca5669d27f1386071bbfe3c7ebca0545692ec975088241fe1d79 \
     --hash=sha256:c7a4bf1c7479601f6b8e437cfc14f4f77028ba62a8f34ae95cd93d9774dfba51
     # via litellm
