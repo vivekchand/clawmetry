@@ -173,8 +173,15 @@ updates:
   # updater here the pin would simply freeze. This is the same pin/updater
   # pairing described above for the SHA pins: the lock makes an upgrade
   # deliberate, this entry keeps it from going stale.
+  #
+  # The pin set lives at /ci-node/claude-cli rather than under .github/
+  # because an npm entry pointing inside .github/ cannot open a pull request
+  # on this account: the updater resolves the new version, then the PR-creation
+  # call is refused with HTTP 400 "The request contains invalid or unauthorized
+  # changes" and the job records `dependency_file_not_supported`. See the
+  # ci-node/README.md note for the measurements behind that.
   - package-ecosystem: "npm"
-    directory: "/.github/claude-cli"
+    directory: "/ci-node/claude-cli"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -190,8 +197,11 @@ updates:
   # moving. Kept in step with /tests/e2e, which pins the same Playwright
   # line; bumping one without the other means CI downloads two browser
   # builds for no reason.
+  #
+  # Lives at /ci-node/auth-bootstrap, not under .github/, for the reason
+  # recorded in ci-node/README.md.
   - package-ecosystem: "npm"
-    directory: "/.github/ci-node/auth-bootstrap"
+    directory: "/ci-node/auth-bootstrap"
     schedule:
       interval: "weekly"
       day: "monday"

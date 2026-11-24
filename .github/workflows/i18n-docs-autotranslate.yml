@@ -64,13 +64,13 @@ jobs:
       # release is published into.
       #
       # `npm ci` installs exactly the tree recorded in
-      # .github/claude-cli/package-lock.json and verifies every tarball against
+      # ci-node/claude-cli/package-lock.json and verifies every tarball against
       # the integrity hash stored beside it. A bare `@version` pin does neither:
       # it re-resolves transitive deps on each run and checks nothing. The npm
       # entry in .github/dependabot.yml is what keeps the lock from going stale.
       - name: Install Claude Code CLI (from lockfile)
         if: env.SKIP != '1'
-        working-directory: .github/claude-cli
+        working-directory: ci-node/claude-cli
         run: |
           npm ci --no-audit --no-fund --silent
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
