@@ -13,7 +13,17 @@ deploy/self-hosted/Dockerfile.release is built, by container-image.yml). The
 same class of drift already bit clawmetry-cloud, whose production image and
 requirements.txt disagreed on a gevent floor until someone noticed by hand.
 
-So this is the guard that makes the pin honest. It is pure parsing -- no
+The image installs a SECOND pinned set, and it is guarded here too.
+`.github/requirements/docker-package.txt` pins the part of setup.py's
+install_requires that requirements.txt does not name -- waitress, cryptography,
+cffi, websocket-client -- because the `pip install -e .` layer resolved those
+four live against the index: the editable install has nothing to pin, but the
+wheel's own requirements do. requirements.txt and install_requires are
+different manifests, so covering one says nothing about the other, and the
+drift here is silent in the other direction: add a dependency to setup.py and
+the image resolves it unpinned without a word.
+
+So this is the guard that makes both pins honest. It is pure parsing -- no
 network, no pip -- so it runs in the Syntax & Lint job on Python 3.9 alongside
 the other drift guards.
 
@@ -233,4 +243,192 @@ def test_dockerfile_installs_the_pinned_set_with_require_hashes():
     ), (
         "the Dockerfile installs requirements.txt directly again, which "
         "re-introduces the unpinned resolve docker-runtime.txt replaced"
+    )
+
+
+# -- the second pinned set: setup.py's install_requires -----------------------
+#
+# requirements.txt is not install_requires. The guards above hold
+# docker-runtime.txt to the first; these hold docker-package.txt, together with
+# it, to the second -- the manifest the WHEEL declares and the `pip install -e .`
+# layer therefore resolves.
+#
+# The marker evaluation is stricter here than for requirements.txt. That file
+# carries only `python_version` markers, so an unrecognised one can be treated
+# as applying (the safe direction). install_requires carries
+# `python_full_version` too, and compound `A and B` clauses, so an unrecognised
+# marker fails rather than guesses -- the same rule
+# tests/test_selfhosted_runtime_pin.py applies to the signed release image's
+# copy of this closure.
+PACKAGE_PINNED = os.path.join(
+    REPO_ROOT, ".github", "requirements", "docker-package.txt"
+)
+SETUP_PY = os.path.join(REPO_ROOT, "setup.py")
+
+_CLAUSE = re.compile(
+    r"""^\s*(?P<var>python_version|python_full_version)\s*"""
+    r"""(?P<op>[<>=!]=?)\s*['"](?P<version>[0-9.]+)['"]\s*$"""
+)
+
+
+def _install_requires_marker_applies(marker, py_version):
+    """True when every clause of an install_requires marker holds for the image."""
+    if not marker:
+        return True
+    for clause in marker.split(" and "):
+        match = _CLAUSE.match(clause)
+        assert match, (
+            "unparsed environment marker %r in setup.py install_requires; this "
+            "guard needs extending before such a pin lands" % marker
+        )
+        left = py_version
+        if match.group("var") == "python_full_version":
+            # `3.15` compares as `3.15.0` against a patch-level bound. Every
+            # full-version marker in install_requires is a py3.9 boundary, so
+            # the patch digit only ever decides 3.9.0/3.9.1 vs 3.9.2.
+            left = py_version + ".0"
+        if not _satisfies(left, match.group("op"), match.group("version")):
+            return False
+    return True
+
+
+def install_requires():
+    """The literal install_requires list from setup.py."""
+    import ast
+
+    with open(SETUP_PY, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "id", None) != "setup":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "install_requires":
+                return list(ast.literal_eval(keyword.value))
+    raise AssertionError("no literal install_requires= in setup.py")
+
+
+def _parse_pin_file(path, label):
+    """({normalized name: version}, {normalized name: hash count}) for a pin set."""
+    pins = {}
+    hashes = {}
+    current = None
+    with open(path, encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.endswith("\\"):
+                line = line[:-1].rstrip()
+            if line.startswith("--hash="):
+                assert current, "--hash line before any pin: %r" % line
+                assert re.match(r"^--hash=sha256:[0-9a-f]{64}$", line), (
+                    "a pin must be hashed with a full sha256: %r" % line
+                )
+                hashes[current] = hashes.get(current, 0) + 1
+                continue
+            match = _PIN.match(line)
+            assert match, "unparsed %s line: %r" % (label, line)
+            current = _normalize(match.group("name"))
+            assert current not in pins, "%s pinned twice in %s" % (current, label)
+            pins[current] = match.group("version")
+    return pins, hashes
+
+
+def _parse_install_requirement(raw):
+    """(name, [(op, version)], marker) for one install_requires entry."""
+    body, _, marker = raw.partition(";")
+    body = body.strip()
+    name_match = _NAME.match(body)
+    assert name_match, "unparsed install_requires entry: %r" % raw
+    rest = body[name_match.end():]
+    specs = []
+    while rest.strip():
+        spec_match = _SPEC.match(rest)
+        assert spec_match, "unparsed specifier %r in %r" % (rest, raw)
+        specs.append((spec_match.group("op"), spec_match.group("version")))
+        rest = rest[spec_match.end():]
+    return name_match.group(0), specs, marker.strip()
+
+
+def test_every_install_requires_entry_is_pinned_by_one_of_the_two_sets():
+    """Nothing the wheel declares is left for `pip install -e .` to resolve."""
+    py_version = image_python_version()
+    runtime_pins, _ = parse_pinned()
+    package_pins, _ = _parse_pin_file(PACKAGE_PINNED, "docker-package.txt")
+    pins = dict(runtime_pins)
+    pins.update(package_pins)
+    missing = []
+    violated = []
+    for raw in install_requires():
+        name, specs, marker = _parse_install_requirement(raw)
+        if not _install_requires_marker_applies(marker, py_version):
+            continue
+        key = _normalize(name)
+        if key not in pins:
+            missing.append(name)
+            continue
+        for op, bound in specs:
+            if not _satisfies(pins[key], op, bound):
+                violated.append(
+                    "%s is pinned at %s, which does not satisfy %s%s"
+                    % (name, pins[key], op, bound)
+                )
+    assert not missing, (
+        "setup.py install_requires names %s on Python %s, which neither "
+        ".github/requirements/docker-runtime.txt nor "
+        ".github/requirements/docker-package.txt pins -- so the image's "
+        "`pip install -e .` layer resolves it live against the index with no "
+        "hash. Add it to docker-package.txt (see that file's header)."
+        % (", ".join(sorted(missing)), py_version)
+    )
+    assert not violated, (
+        "the pinned sets no longer satisfy setup.py install_requires:\n  "
+        + "\n  ".join(sorted(violated))
+    )
+
+
+def test_the_two_pinned_sets_do_not_pin_the_same_name():
+    """One name, one version: two layers must not install it twice."""
+    runtime_pins, _ = parse_pinned()
+    package_pins, _ = _parse_pin_file(PACKAGE_PINNED, "docker-package.txt")
+    both = sorted(set(runtime_pins) & set(package_pins))
+    assert not both, (
+        "pinned in BOTH docker-runtime.txt and docker-package.txt: %s. The two "
+        "files are installed as consecutive layers, so a name in both can drift "
+        "into two different versions and the later layer silently replaces the "
+        "earlier one." % ", ".join(both)
+    )
+
+
+def test_every_package_pin_is_exact_and_carries_a_hash():
+    """--require-hashes is only worth as much as the hashes actually present."""
+    pins, hashes = _parse_pin_file(PACKAGE_PINNED, "docker-package.txt")
+    assert pins, "docker-package.txt pins nothing"
+    unhashed = sorted(name for name in pins if not hashes.get(name))
+    assert not unhashed, (
+        "pinned with no --hash line, which --require-hashes would reject at "
+        "build time: %s" % ", ".join(unhashed)
+    )
+
+
+def test_dockerfile_installs_the_package_set_before_the_editable_install():
+    """A pin that lands after the layer it protects protects nothing."""
+    with open(DOCKERFILE, encoding="utf-8") as handle:
+        dockerfile = handle.read()
+    assert ".github/requirements/docker-package.txt" in dockerfile, (
+        "Dockerfile does not COPY the pinned install_requires set"
+    )
+    install = re.search(
+        r"pip install[^\n]*--require-hashes[^\n]*docker-package\.txt", dockerfile
+    )
+    assert install, (
+        "Dockerfile does not install docker-package.txt with --require-hashes"
+    )
+    editable = re.search(r"^RUN pip install[^\n]*(?<!-r )-e \.", dockerfile, re.M)
+    assert editable, "Dockerfile no longer installs the working tree with `-e .`"
+    assert install.start() < editable.start(), (
+        "docker-package.txt is installed AFTER `pip install -e .`, so that "
+        "layer still resolves the wheel's requirements from the index first"
     )

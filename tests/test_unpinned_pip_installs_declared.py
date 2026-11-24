@@ -16,6 +16,16 @@ the code under test, it never came from an index, and a hash would describe
 the commit rather than verify it. Those are recognised structurally by
 `_is_local_artifact` below and need no bookkeeping.
 
+That is a statement about the ARTIFACT, not about its requirements. pip still
+resolves whatever the wheel declares, so a local-artifact install is only as
+pinned as the environment it lands in: both Dockerfiles therefore install
+clawmetry's install_requires from a hash-pinned set FIRST
+(`.github/requirements/docker-package.txt` and
+`deploy/self-hosted/runtime-requirements.txt`), leaving the `-e .` and wheel
+layers with nothing to fetch. `tests/test_docker_runtime_pin.py` and
+`tests/test_selfhosted_runtime_pin.py` are what keep those two sets complete;
+this guard only counts install sites and cannot see the difference.
+
 The other ten resolve from an index without a hash, on purpose, and each one
 has a reason that is specific enough to write down. The release canary
 installs the exact version just published, because proving a published release
