@@ -54,6 +54,29 @@ updates:
       ci-scanners:
         patterns:
           - "*"
+    # `directory` is not a leaf: Dependabot scans the subdirectories under it
+    # too, so this entry also claimed `py39/`, the sets resolved for CPython
+    # 3.9 that have their OWN entry (and its 3.10+ ceilings) below. Both
+    # streams owning the same file means the one WITHOUT the ceilings can bump
+    # it: #6707 is based on the commit that created the split and still
+    # rewrote `py39/ci-lint-verify.txt` to click==8.5.1, which declares
+    # Requires-Python >= 3.10, taking "Syntax & Lint" -- a gate on every PR --
+    # red. Excluding the subdirectory here is what makes the split below
+    # actually hold.
+    #
+    # This matters beyond one red PR: while a group PR sits un-mergeable,
+    # Dependabot answers `pull_request_exists_for_security_update` for this
+    # directory and opens no SECURITY updates for any of its sets, the one
+    # that installs bandit/pip-audit/zizmor included.
+    #
+    # Patterns are relative to `directory` (GitHub's dependabot options
+    # reference, "exclude-paths"). The repository-root spelling is listed
+    # beside it because this option's failure mode is silent -- a pattern that
+    # anchors elsewhere excludes nothing and the overlap returns unnoticed --
+    # and a pattern that matches nothing costs nothing.
+    exclude-paths:
+      - "py39/**"
+      - ".github/requirements/py39/**"
     # These releases cannot install on the Python the CI jobs run (3.11), and
     # a hash-pinned install fails the whole job rather than the one package.
     # The 2026-09-12 group bump broke E2E Browser Tests (the required E2E Gate
