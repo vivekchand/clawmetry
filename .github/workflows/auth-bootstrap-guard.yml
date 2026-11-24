@@ -8,7 +8,7 @@ on:
       # The pinned Playwright this job's smoke test runs on. Without this
       # path a Dependabot bump of that lockfile would change what the guard
       # executes while never running the guard.
-      - ".github/ci-node/auth-bootstrap/**"
+      - "ci-node/auth-bootstrap/**"
 
 concurrency:
   group: abg-${{ github.event.pull_request.number || github.ref }}
@@ -64,13 +64,13 @@ jobs:
       # is the landing-deploy manifest, so the install rewrote a tracked file
       # as a side effect of a smoke test.
       #
-      # `npm ci` against the committed lockfile in .github/ci-node/auth-bootstrap
+      # `npm ci` against the committed lockfile in ci-node/auth-bootstrap
       # installs exactly the recorded tree and checks every tarball against its
       # sha512 hash. Same pin/updater pairing the other CI Node installs here
       # use: the lockfile makes an upgrade deliberate, the Dependabot entry in
       # .github/dependabot.yml keeps it from freezing.
       - name: Install Node deps (npm ci from the pinned lockfile)
-        working-directory: .github/ci-node/auth-bootstrap
+        working-directory: ci-node/auth-bootstrap
         run: |
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
@@ -90,7 +90,7 @@ jobs:
       # root, so this step runs there. Nothing else in the script reads the
       # working directory: it talks to the dashboard over 127.0.0.1:8900.
       - name: Smoke test zero-click bootstrap does not reload
-        working-directory: .github/ci-node/auth-bootstrap
+        working-directory: ci-node/auth-bootstrap
         run: |
           node <<'NODE'
           const { chromium } = require('playwright');
