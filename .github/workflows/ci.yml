@@ -249,11 +249,11 @@ jobs:
         # escape) cannot even be COLLECTED without it, and a collection
         # error fails the whole step, not just that file.
         #
-        # ci-lint-verify.txt is the hash-pinned set carrying those four and
+        # py39/ci-lint-verify.txt is the hash-pinned set carrying those four and
         # their closure, resolved for 3.9. It is deliberately NOT ci-tests.txt,
         # which is resolved for 3.11 and pins releases that cannot install
         # here; see that file's header for the boundary.
-        run: pip install --require-hashes -r .github/requirements/ci-lint-verify.txt
+        run: pip install --require-hashes -r .github/requirements/py39/ci-lint-verify.txt
 
       # A malformed workflow fails at STARTUP, before any step runs, and shows
       # up named after its own file path. c6-schedule-heal.yml carried two such

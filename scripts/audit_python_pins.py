@@ -77,6 +77,13 @@ RANGE_FILES = (
 )
 PINNED_GLOBS = (
     os.path.join(".github", "requirements", "*.txt"),
+    # The interpreter-ceilinged sets. These live in their own directory so
+    # Dependabot can be told their ceiling without that ignore also freezing
+    # the same name in the 3.11-resolved sets beside them; see
+    # `.github/requirements/py39/ci-lint-verify.txt`. The audit covers them
+    # exactly as it covers the directory above -- a set that moved out of
+    # Dependabot's default stream must not also move out of the advisory gate.
+    os.path.join(".github", "requirements", "py39", "*.txt"),
     # Both halves of the published, signed self-hosted image: the OTLP decoder
     # and clawmetry's own runtime deps (#6269). These are the only files in
     # this audit whose advisories reach a user machine rather than a runner.
