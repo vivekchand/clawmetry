@@ -5,6 +5,6 @@
   "description": "Pinned Claude Code CLI for the CI workflows that shell out to `claude`.",
   "license": "UNLICENSED",
   "devDependencies": {
-    "@anthropic-ai/claude-code": "2.1.251"
+    "@anthropic-ai/claude-code": "2.1.326"
   }
 }
