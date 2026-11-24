@@ -52,6 +52,26 @@ COPY .github/requirements/docker-otel.txt /tmp/docker-otel.txt
 RUN pip install --no-cache-dir --require-hashes -r /tmp/docker-otel.txt \
     && rm -f /tmp/docker-otel.txt
 
+# The rest of clawmetry's own install_requires, hash-pinned.
+#
+# The `pip install -e .` layer below installs the working tree, which is the
+# code under test and has nothing to pin. pip then resolves the wheel's own
+# requirements, and four of them -- waitress, cryptography, cffi and
+# websocket-client -- are NOT in requirements.txt, so docker-runtime.txt above
+# does not pin them and they resolved live against the index at build time.
+# Two matter in their own right: cryptography is the AES-256-GCM on the
+# cloud-sync snapshot path, waitress the WSGI server this image's CMD runs.
+#
+# Installed here rather than left to that layer, which is what
+# deploy/self-hosted/Dockerfile.release does for the same closure before it
+# installs its wheel. With these present the `-e .` layer finds every
+# requirement satisfied and resolves nothing, and
+# tests/test_docker_runtime_pin.py fails if setup.py gains a dependency that
+# neither pinned set covers. See that file's header for why it is separate.
+COPY .github/requirements/docker-package.txt /tmp/docker-package.txt
+RUN pip install --no-cache-dir --require-hashes -r /tmp/docker-package.txt \
+    && rm -f /tmp/docker-package.txt
+
 # Copy application code and necessary files for setup
 COPY dashboard.py .
 COPY history.py .
