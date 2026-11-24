@@ -9,6 +9,7 @@ run time. Nothing here ships in the wheel or is imported by the app.
 |---|---|
 | `claude-cli/` | `harness-observability-audit`, `i18n-autotranslate`, `i18n-docs-autotranslate` |
 | `auth-bootstrap/` | `auth-bootstrap-guard` (the pinned Playwright its smoke test runs on) |
+| `visual-diff/` | `pr-screenshots` (the PR visual-diff bot: Playwright, pixelmatch, pngjs) |
 
 ## Why these live outside `.github/`
 
@@ -46,12 +47,22 @@ measurement actually supports: keep npm pin sets out of `.github/`.
 
 ### What is still under `.github/`
 
-Two npm pin sets cannot simply move and are left as they are:
+One npm pin set is left, and it is the one that cannot simply move:
 
 - `.github/actions/setup-openclaw/` — a composite action installs it, and its
-  `package.json` and lockfile have to sit beside `action.yml`.
-- `.github/scripts/` — holds the workflow scripts themselves
-  (`visual-diff.mjs`, `post-visual-diff.mjs`), not only a pin set.
+  `package.json` and lockfile have to sit beside `action.yml`. Its advisory
+  fixes still have to be raised by hand; the `overrides` block in its
+  `package.json` is the record of the last time that was done.
 
-Both keep needing their advisory fixes raised by hand until they are given
-somewhere else to live. Add a new pin set here, not under `.github/`.
+`.github/scripts/` used to be listed here too, on the grounds that it held the
+workflow scripts themselves (`visual-diff.mjs`, `post-visual-diff.mjs`) and not
+only a pin set. That was a reason the scripts could not be left behind, not a
+reason the set had to stay: `visual-diff.mjs` imports `playwright`,
+`pixelmatch` and `pngjs` as bare specifiers, which Node resolves by walking up
+from the importing file, so `node_modules` has to land in the scripts' own
+directory. Moving the scripts *with* the set preserves that and takes the
+`directory:` out of `.github/`; the pair now lives at `visual-diff/` above.
+Nothing about the install changed — `npm ci` still runs in the directory that
+holds the lockfile, which is the invariant that mattered.
+
+Add a new pin set here, not under `.github/`.

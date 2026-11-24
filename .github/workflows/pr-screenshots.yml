@@ -23,10 +23,10 @@ on:
       - "clawmetry/templates/**"
       - "helpers/**"
       - ".github/workflows/pr-screenshots.yml"
-      - ".github/scripts/visual-diff.mjs"
-      - ".github/scripts/post-visual-diff.mjs"
-      - ".github/scripts/package.json"
-      - ".github/scripts/package-lock.json"
+      - "ci-node/visual-diff/visual-diff.mjs"
+      - "ci-node/visual-diff/post-visual-diff.mjs"
+      - "ci-node/visual-diff/package.json"
+      - "ci-node/visual-diff/package-lock.json"
 
 permissions:
   contents: read
@@ -121,7 +121,7 @@ jobs:
           pip install --require-hashes -r head/.github/requirements/pr-screenshots.txt
 
       # -- 5. Node deps (Playwright + pixelmatch + pngjs) ----------------------
-      # `npm ci` against the committed .github/scripts/package-lock.json, not a
+      # `npm ci` against the committed ci-node/visual-diff/package-lock.json, not a
       # bare `npm install`. The versions were already pinned, but without a lock
       # every TRANSITIVE dependency still re-resolved on each run and no tarball
       # was checked against an integrity hash -- and this job holds
@@ -132,9 +132,11 @@ jobs:
       # node_modules must land in the same directory as the scripts that import
       # it: `visual-diff.mjs` imports `playwright`/`pixelmatch`/`pngjs` as bare
       # specifiers, which Node resolves by walking up from the importing file.
-      # head/.github/scripts/node_modules is the first directory it checks.
+      # head/ci-node/visual-diff/node_modules is the first directory it checks.
+      # This is why the pin set and the scripts moved together out of
+      # .github/: splitting them would leave the bare specifiers unresolvable.
       - name: Install Node deps
-        working-directory: head/.github/scripts
+        working-directory: head/ci-node/visual-diff
         run: |
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
@@ -283,7 +285,7 @@ jobs:
           # bootstrap (routes/meta.py:api_auth_check) returns valid=true
           # and dismisses the login overlay before we screenshot.
           CLAWMETRY_VISUAL_DIFF_TOKEN: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
-        run: node .github/scripts/visual-diff.mjs
+        run: node ci-node/visual-diff/visual-diff.mjs
 
       # -- 9. Stop dashboards + gateway (best-effort) -------------------------
       - name: Stop dashboards
@@ -374,7 +376,7 @@ jobs:
             echo "" >> /tmp/visual-diff-body.md
             echo "_This check is non-blocking._" >> /tmp/visual-diff-body.md
           else
-            node head/.github/scripts/post-visual-diff.mjs > /tmp/visual-diff-body.md
+            node head/ci-node/visual-diff/post-visual-diff.mjs > /tmp/visual-diff-body.md
           fi
           cat /tmp/visual-diff-body.md
 

@@ -52,7 +52,7 @@ TOKEN = os.environ.get("CLAWMETRY_TOKEN", "ci-test-token")
 def _overlay_page(_shared_chromium):
     ctx = _shared_chromium.new_context(viewport={"width": 1280, "height": 720})
     # Seed the gateway token into localStorage before any page script runs.
-    # Mirrors the approach in .github/scripts/visual-diff.mjs.
+    # Mirrors the approach in ci-node/visual-diff/visual-diff.mjs.
     ctx.add_init_script(
         "try { "
         f"localStorage.setItem('clawmetry-token', {json.dumps(TOKEN)}); "
@@ -198,7 +198,7 @@ def test_canonical_tabs_cover_all_templates():
         f"Add each missing name to:\n"
         f"  1. CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py\n"
         f"  2. PR_SCREENSHOT_TABS in .github/workflows/pr-screenshots.yml\n"
-        f"  3. DEFAULT_TABS in .github/scripts/visual-diff.mjs"
+        f"  3. DEFAULT_TABS in ci-node/visual-diff/visual-diff.mjs"
     )
 
 
@@ -255,7 +255,7 @@ def test_pr_screenshot_tabs_match_canonical():
         "Tab list mismatch -- these three sources must be identical:\n"
         "  CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py\n"
         "  PR_SCREENSHOT_TABS in .github/workflows/pr-screenshots.yml\n"
-        "  DEFAULT_TABS in .github/scripts/visual-diff.mjs\n"
+        "  DEFAULT_TABS in ci-node/visual-diff/visual-diff.mjs\n"
         + "\n".join(errors)
     )
 
@@ -271,8 +271,8 @@ def test_visual_diff_default_tabs_match_canonical():
 
     script_path = (
         pathlib.Path(__file__).parent.parent
-        / ".github"
-        / "scripts"
+        / "ci-node"
+        / "visual-diff"
         / "visual-diff.mjs"
     )
     if not script_path.exists():
@@ -285,7 +285,7 @@ def test_visual_diff_default_tabs_match_canonical():
     if not m:
         pytest.fail(
             "Could not find `const DEFAULT_TABS = \"...\"` in "
-            ".github/scripts/visual-diff.mjs."
+            "ci-node/visual-diff/visual-diff.mjs."
         )
 
     vd_tabs = [t.strip() for t in m.group(1).split(",") if t.strip()]
@@ -308,7 +308,7 @@ def test_visual_diff_default_tabs_match_canonical():
         "Tab list mismatch -- these three sources must be identical:\n"
         "  CANONICAL_TABS in tests/test_e2e_oss_all_tabs.py\n"
         "  PR_SCREENSHOT_TABS in .github/workflows/pr-screenshots.yml\n"
-        "  DEFAULT_TABS in .github/scripts/visual-diff.mjs\n"
+        "  DEFAULT_TABS in ci-node/visual-diff/visual-diff.mjs\n"
         + "\n".join(errors)
     )
 
