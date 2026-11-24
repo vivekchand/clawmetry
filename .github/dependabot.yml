@@ -69,6 +69,67 @@ updates:
     cooldown:
       default-days: 7
 
+  # pip -- .github/requirements/py39/, the sets resolved for CPython 3.9.
+  #
+  # Why these are a SEPARATE entry and not more `ignore` rules on the one
+  # above. ci.yml's "Syntax & Lint" job runs on 3.9 deliberately (it is the
+  # floor setup.py advertises), so its install set sits at the last release of
+  # each name that still installs there. The directory above is resolved for
+  # 3.11 and pins the newer releases of those same names. `ignore` is scoped
+  # to an entry, not to a file, so a `click >= 8.2` rule written up there to
+  # protect the 3.9 set would equally stop click moving in the twelve
+  # 3.11-resolved sets beside it -- trading a weekly red PR for silently
+  # frozen pins in the sets that CAN take the bump. Splitting the directory is
+  # what lets each stream carry the ceiling that is true for it.
+  #
+  # Without this entry the group bump above proposes a release that cannot
+  # install on 3.9, `--require-hashes` fails the whole step rather than the one
+  # package, and "Syntax & Lint" -- which gates every PR -- goes red on the
+  # bump PR. That red also blocks the directory's SECURITY updates: Dependabot
+  # answers `pull_request_exists_for_security_update` and opens none while the
+  # stuck group PR is open, so advisories affecting the 3.11 sets wait behind a
+  # PR that can never go green.
+  #
+  # Each ceiling below is the FIRST release above the current pin that declares
+  # Requires-Python >= 3.10, measured against PyPI on 2026-11-24. No name here
+  # has an installable release above its pin, so none of these rules withholds
+  # a bump the job could take. Lift each rule when this job's interpreter
+  # moves; at that point the whole set folds into ci-tests.txt, which already
+  # pins the fixed releases. The four of these that are also named by
+  # published advisories are declared, with their exposure analysed, in
+  # `.github/requirements/audit-acceptance.json` and the pin file's own header.
+  - package-ecosystem: "pip"
+    directory: "/.github/requirements/py39"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    ignore:
+      - dependency-name: "click"              # 8.2.0+ requires >= 3.10
+        versions: [">=8.2.0"]
+      - dependency-name: "importlib-metadata" # 8.8.0+ requires >= 3.10
+        versions: [">=8.8.0"]
+      - dependency-name: "iniconfig"          # 2.2.0+ requires >= 3.10
+        versions: [">=2.2.0"]
+      - dependency-name: "packaging"          # 26.4+ requires >= 3.10
+        versions: [">=26.4"]
+      - dependency-name: "pluggy"             # 1.7.0+ requires >= 3.10
+        versions: [">=1.7.0"]
+      - dependency-name: "pytest"             # 9.0.0+ requires >= 3.10
+        versions: [">=9.0.0"]
+      - dependency-name: "pyyaml"             # 6.0.4+ requires >= 3.10
+        versions: [">=6.0.4"]
+      - dependency-name: "requests"           # 2.33.0+ requires >= 3.10
+        versions: [">=2.33.0"]
+      - dependency-name: "urllib3"            # 2.7.0+ requires >= 3.10
+        versions: [">=2.7.0"]
+      - dependency-name: "zipp"               # 4.1.0+ requires >= 3.10
+        versions: [">=4.1.0"]
+    cooldown:
+      default-days: 7
+
   # Docker base images. Required because the Dockerfile pins its base image by
   # sha256 digest: a digest never moves on its own, so without an updater the
   # image would stay on whatever CVEs it shipped with on the day it was pinned.

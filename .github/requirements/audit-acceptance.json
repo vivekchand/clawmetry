@@ -24,7 +24,7 @@
     "description of a repository that has moved on."
   ],
   "accepted_advisories": {
-    ".github/requirements/ci-lint-verify.txt": [
+    ".github/requirements/py39/ci-lint-verify.txt": [
       {
         "package": "click",
         "version": "8.1.8",

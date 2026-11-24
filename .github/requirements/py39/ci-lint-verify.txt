@@ -19,16 +19,37 @@
 # Requires-Python >= 3.10), so pinning changes the artifacts' provenance,
 # not the versions the job has been running.
 #
-# NOTE FOR A DEPENDABOT BUMP HERE: a proposed move to a release that dropped
-# 3.9 cannot install on this job at all, and `--require-hashes` fails the
-# whole step rather than the one package. That failure lands on the bump PR,
-# where the lint job runs on every PR -- it is the signal, not a flake. Lift
-# the 3.9 floor first, or leave the pin.
+# WHY THIS FILE LIVES IN ITS OWN DIRECTORY. A proposed move to a release that
+# dropped 3.9 cannot install on this job at all, and `--require-hashes` fails
+# the whole step rather than the one package -- so the bump lands as a red
+# "Syntax & Lint" on the bump PR, in the job that gates every PR. That was
+# left as a signal for a human to read and close, which cost a red grouped PR
+# a week; worse, Dependabot answers `pull_request_exists_for_security_update`
+# and opens NO security PRs for a directory while a stuck group PR sits in it,
+# so advisories against the 3.11-resolved sets waited behind a PR that could
+# never go green.
 #
-# WHAT STAYING ON THESE VERSIONS ACCEPTS. Four names here sit at the LAST
-# release that installs on 3.9, and each is named by published advisories
-# whose only fixes require 3.10+. Measured 2026-10-02 against PyPI
-# Requires-Python and OSV:
+# `ignore` is scoped to a Dependabot entry, not to a file, and an entry is
+# keyed by directory. Writing the 3.9 ceilings onto the entry for
+# `.github/requirements` would have frozen those same names in the twelve
+# 3.11-resolved sets beside this one, which CAN take the bump. So this set
+# moved one directory down and got its own entry, whose ignore rules state the
+# ceiling that is actually true here. The ten rules are in
+# `.github/dependabot.yml`; each is the first release above its pin that
+# declares Requires-Python >= 3.10.
+#
+# This is a change of stream, not of gate: `scripts/audit_python_pins.py`
+# globs this directory too, so the file is still advisory-audited every run,
+# and `tests/test_python_pin_audit_coverage.py` fails if it ever is not.
+#
+# WHAT STAYING ON THESE VERSIONS ACCEPTS. Ten names here sit at the LAST
+# release that installs on 3.9 (click, importlib-metadata, iniconfig,
+# packaging, pluggy, pytest, pyyaml, requests, urllib3, zipp -- re-measured
+# against PyPI Requires-Python on 2026-11-24, and all ten are the ceiling rules
+# in this directory's Dependabot entry). FOUR of the ten are additionally named
+# by published advisories whose only fixes require 3.10+; those four are the
+# acceptance, and are what `audit-acceptance.json` declares. Measured
+# 2026-10-02 against PyPI Requires-Python and OSV:
 #
 #   click==8.1.8     ceiling; 8.2.0+ needs >=3.10.
 #                    GHSA-47fr-3ffg-hgmw (fixed 8.3.3)
@@ -81,7 +102,7 @@
 #
 # Regenerate with:
 #   uv pip compile --generate-hashes --python-version 3.9 --no-header \
-#     -o .github/requirements/ci-lint-verify.txt -  # pytest pyyaml requests flask
+#     -o .github/requirements/py39/ci-lint-verify.txt -  # pytest pyyaml requests flask
 blinker==1.9.0 \
     --hash=sha256:b4ce2265a7abece45e7cc896e98dbebe6cead56bcf805a3d23136d145f5445bf \
     --hash=sha256:ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc
