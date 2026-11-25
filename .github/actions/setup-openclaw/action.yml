@@ -14,8 +14,17 @@ description: "Install the pinned OpenClaw (Node CLI) and expose it on PATH for d
 # The installed openclaw version is not an input. It is pinned in this
 # directory's package.json and package-lock.json, so `npm ci` installs exactly
 # the recorded tree and checks every tarball against its integrity hash. An
-# upgrade is a Dependabot pull request against that lockfile, not a dist-tag
-# resolved fresh on each run.
+# upgrade is a change to that lockfile, not a dist-tag resolved fresh on each
+# run.
+#
+# That upgrade is a HAND change here, not a Dependabot pull request. The
+# Dependabot entry for this directory resolves the version, writes the files,
+# and is then refused the pull request: an npm entry whose `directory:` is
+# under .github/ cannot open one on this account. It has therefore never
+# delivered a bump. What catches drift instead is the npm advisory ratchet in
+# .github/workflows/supply-chain.yml, which holds every committed lockfile at
+# zero advisories; this directory's package.json records why that gate is the
+# mechanism this pin set needs.
 #
 # Why the pin is 2026.9.2:
 #   It is advisory-clean (`npm audit` reports 0 vulnerabilities) and it installs
