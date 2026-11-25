@@ -470,7 +470,14 @@ _STALLED_INGEST_SECS = float(os.environ.get("CLAWMETRY_STALLED_INGEST_SECS", "")
 # What the watchdog last saw, as (last_sync value, time.monotonic() when we
 # first saw that value). The pair is what lets the check tell a suspended
 # machine from a wedged ingest loop; see _report_if_ingest_stalled.
-_STALL_WATCH = {"last_sync": None, "since_mono": None}
+# prev_beat_mono tracks consecutive heartbeat timestamps so the check can
+# detect suspend/resume on Windows (where time.monotonic() advances during
+# system sleep, unlike Darwin and Linux).
+_STALL_WATCH = {"last_sync": None, "since_mono": None, "prev_beat_mono": None}
+
+# A gap between consecutive heartbeat firings larger than this means the
+# machine was suspended. 10x the normal 30 s interval is an unambiguous signal.
+_HEARTBEAT_SUSPEND_GAP_SECS = 300.0
 
 
 def _report_if_ingest_stalled() -> None:
@@ -484,10 +491,25 @@ def _report_if_ingest_stalled() -> None:
 
         age = _fr.last_sync_age_secs()
 
-        # Track how long THIS value of last_sync has been the current one, on a
-        # clock that does not advance while the machine is suspended.
         raw = _fr.last_sync_raw()
         now_mono = time.monotonic()
+
+        # On Windows time.monotonic() advances during system suspend (unlike
+        # Darwin and Linux), so the dual-clock guard below cannot distinguish
+        # a healthy daemon waking from a long sleep from a genuinely wedged
+        # one. Detect suspend/resume by checking for a large gap between
+        # consecutive heartbeat firings: a gap much larger than the 30 s beat
+        # interval means the machine was just suspended. Reset the stall watch
+        # so the daemon gets one fresh cycle to prove it is healthy.
+        prev_beat = _STALL_WATCH["prev_beat_mono"]
+        _STALL_WATCH["prev_beat_mono"] = now_mono
+        if prev_beat is not None and (now_mono - prev_beat) > _HEARTBEAT_SUSPEND_GAP_SECS:
+            _STALL_WATCH["last_sync"] = raw
+            _STALL_WATCH["since_mono"] = now_mono
+            return
+
+        # Track how long THIS value of last_sync has been the current one, on a
+        # clock that does not advance while the machine is suspended.
         if raw != _STALL_WATCH["last_sync"]:
             _STALL_WATCH["last_sync"] = raw
             _STALL_WATCH["since_mono"] = now_mono
