@@ -378,7 +378,7 @@ jobs:
           fi
 
       # Responsibility 2 (the package-lock half). Every committed lockfile,
-      # not just frontend/: /tests/e2e, /.github/scripts and the rest are all
+      # not just frontend/: /tests/e2e, /ci-node/visual-diff and the rest are all
       # installed by CI jobs that run with this repo's token, and auditing one
       # lockfile would report "clean" for the ones nobody scanned.
       - name: Scan npm dependencies (package-lock)
@@ -390,8 +390,8 @@ jobs:
           fi
           while IFS= read -r lock; do
             dir=$(dirname "$lock")
-            # `.github/scripts` -> `github-scripts`: one report per lockfile,
-            # named after the directory it audited.
+            # `ci-node/visual-diff` -> `ci-node-visual-diff`: one report per
+            # lockfile, named after the directory it audited.
             slug=$(printf '%s' "${dir#./}" | tr '/' '-' | tr -d '.')
             if [ "$dir" = "." ]; then slug="root"; fi
             out="audit/npm-audit-$slug.json"

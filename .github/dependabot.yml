@@ -380,13 +380,22 @@ updates:
       default-days: 7
 
   # npm — the PR visual-diff bot's Playwright/pixelmatch/pngjs
-  # (.github/scripts/, driven by pr-screenshots.yml). The other half of that
-  # pin: the lockfile makes the install reproducible and integrity-checked,
-  # and this entry is what keeps it moving. Without it the bot would sit on
-  # one Playwright forever, which is the frozen end of the same problem the
-  # unpinned install was at the other end of.
+  # (ci-node/visual-diff/, driven by pr-screenshots.yml). The other half of
+  # that pin: the lockfile makes the install reproducible and
+  # integrity-checked, and this entry is what keeps it moving. Without it the
+  # bot would sit on one Playwright forever, which is the frozen end of the
+  # same problem the unpinned install was at the other end of.
+  #
+  # The set lives in ci-node/ rather than under .github/ because an npm entry
+  # whose `directory:` is under .github/ cannot open a pull request on this
+  # account: the updater resolves the version and writes the files, then the
+  # PR call is refused with `400 — The request contains invalid or
+  # unauthorized changes` and the job ends `dependency_file_not_supported`.
+  # While it sat at /.github/scripts this entry delivered nothing, so the
+  # playwright and pixelmatch bumps below had to be raised by hand or not at
+  # all. ci-node/README.md carries the measurement.
   - package-ecosystem: "npm"
-    directory: "/.github/scripts"
+    directory: "/ci-node/visual-diff"
     schedule:
       interval: "weekly"
       day: "monday"
