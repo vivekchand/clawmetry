@@ -412,11 +412,18 @@ jobs:
             fi
           done <<< "$locks"
 
-      # Findings are reported, not gated. Today's tree has findings that are
-      # load-bearing by design -- the release, quarantine and cloud-pin jobs
-      # persist their checkout credential BECAUSE they push with it -- and a
-      # gate that fails on those would be turned off within a week. The
-      # summary is what makes a NEW finding visible in the PR that adds it.
+      # zizmor findings are reported, not gated. Today's tree has findings
+      # that are load-bearing by design -- the release, quarantine and
+      # cloud-pin jobs persist their checkout credential BECAUSE they push
+      # with it -- and a gate that fails on those would be turned off within a
+      # week. The summary is what makes a NEW finding visible in the PR that
+      # adds it.
+      #
+      # npm advisories ARE gated, by the ratchet at the end of this job. That
+      # asymmetry is deliberate: a persisted credential is a choice this repo
+      # made on purpose, whereas an advisory published against a CI pin set is
+      # drift nobody chose, and for one of these lockfiles no Dependabot pull
+      # request will ever arrive to point it out.
       - name: Summarise findings
         if: always()
         run: |
@@ -529,10 +536,10 @@ jobs:
           path: audit/
           retention-days: 30
 
-      # Red condition 1 of 2: the scanner did not run. A silent outage is
+      # Red condition 1 of 3: the scanner did not run. A silent outage is
       # the failure mode this whole job exists to avoid, because it looks
       # exactly like a clean result. (Condition 2 is the bandit ratchet
-      # below.)
+      # below; condition 3 is the npm advisory ratchet after it.)
       - name: Fail if a scanner did not run
         if: always()
         run: |
@@ -546,7 +553,7 @@ jobs:
           if [ "$rc" -eq 0 ]; then echo "every scanner completed."; fi
           exit "$rc"
 
-      # Red condition 2 of 2: bandit's medium+ count grew, or a HIGH-severity
+      # Red condition 2 of 3: bandit's medium+ count grew, or a HIGH-severity
       # finding appeared.
       #
       # Until now a completed bandit run could report any number of findings
@@ -621,6 +628,119 @@ jobs:
               print(
                   f"::notice::bandit medium+ findings fell from {baseline} to {total}. "
                   "Lower BANDIT_MEDIUM_BASELINE to lock the improvement in."
+              )
+
+          sys.exit(rc)
+          PY
+
+      # Red condition 3 of 3: a committed npm lockfile reports an advisory.
+      #
+      # WHY THIS EXISTS. The step that runs `npm audit` above audits every
+      # committed package-lock.json and, until now, printed the totals into
+      # the step summary and held them to nothing. For five of the six
+      # lockfiles that was merely weak: each has a Dependabot entry in
+      # .github/dependabot.yml that opens a pull request when an advisory
+      # lands, so the finding arrives as a diff whether or not this job is
+      # red.
+      #
+      # For the sixth, .github/actions/setup-openclaw, it was not weak but
+      # empty. That pin set has NO automated bump path at all:
+      #
+      #   - Its Dependabot entry fails on every run. The updater resolves the
+      #     version and writes the files, then the pull-request call is
+      #     refused with `400 -- The request contains invalid or unauthorized
+      #     changes` and the job ends `dependency_file_not_supported`. An npm
+      #     entry whose `directory:` is under .github/ cannot open a pull
+      #     request on this account; .github/dependabot.yml records the same
+      #     measurement against the visual-diff set, which was moved out of
+      #     .github/ for exactly this reason.
+      #   - Unlike that set, this one cannot be moved. The action is addressed
+      #     as `$/.github/actions/setup-openclaw` by pr-screenshots.yml, which
+      #     has no root checkout to resolve a relocated path against; the note
+      #     at that call site records why.
+      #
+      # So an advisory published against that lockfile reached nobody. The
+      # directory's own package.json records what that cost once already:
+      # five HIGH advisories sat in it unnoticed until 2026-11-13, on a tree
+      # nothing had changed. A gate is the mechanism that pin set was missing.
+      #
+      # Same one-way-ratchet shape as the bandit gate above, and the baseline
+      # is zero because that is the measured total: all six lockfiles report 0
+      # advisories today (`npm audit --package-lock-only`, every committed
+      # lockfile, 2026-11-25). So this goes green on merge and only ever fires
+      # on real drift.
+      #
+      # Raising NPM_ADVISORY_BASELINE is the escape hatch for an advisory with
+      # no fix this tree can take -- the same deliberate, reviewable diff the
+      # bandit baseline uses. Prefer fixing the advisory; an override pin in
+      # the affected lockfile's package.json is usually the smaller change.
+      #
+      # Skipped when the scan did not produce a usable report -- red condition
+      # 1 already owns that case, and a missing report must not read here as
+      # "zero advisories".
+      - name: npm advisory ratchet (committed lockfiles)
+        if: always()
+        env:
+          NPM_ADVISORY_BASELINE: "0"
+        run: |
+          if [ -f audit/npm-audit.failed ]; then
+            echo "npm audit produced no usable report; the outage gate above owns this. Skipping ratchet."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+
+          baseline = int(os.environ["NPM_ADVISORY_BASELINE"])
+          reports = sorted(pathlib.Path("audit").glob("npm-audit-*.json"))
+
+          # No reports at all is not a clean result: the scan step always
+          # writes one file per committed lockfile, and this repository has
+          # six. Zero files means the step did not run the way it looks.
+          if not reports:
+              print(
+                  "::error::no npm-audit report files were produced, so the npm "
+                  "advisory total is unknown rather than zero"
+              )
+              sys.exit(1)
+
+          total = 0
+          rc = 0
+          rows = []
+          for f in reports:
+              name = f.stem[len("npm-audit-"):]
+              try:
+                  counts = json.loads(f.read_text())["metadata"]["vulnerabilities"]
+                  n = int(counts["total"])
+              except Exception as exc:
+                  # A single unreadable report is the same class of problem as
+                  # a whole-scan outage: unknown, not clean.
+                  print(f"::error::npm-audit report for {name} is unreadable ({exc}); treating as a failed scan")
+                  rc = 1
+                  continue
+              total += n
+              rows.append((name, n, counts))
+
+          for name, n, counts in rows:
+              detail = ", ".join(
+                  f"{k}={counts[k]}"
+                  for k in ("critical", "high", "moderate", "low", "info")
+                  if counts.get(k)
+              )
+              print(f"  {n:5d}  {name}" + (f"  ({detail})" if detail else ""))
+          print(f"npm audit: {total} advisory(ies) across {len(rows)} lockfile(s), baseline {baseline}")
+
+          if total > baseline:
+              rc = 1
+              print(
+                  f"::error::npm advisories rose from {baseline} to {total}. Fix the "
+                  "advisory (an override pin in the affected lockfile's package.json "
+                  "is usually enough), or raise NPM_ADVISORY_BASELINE in "
+                  ".github/workflows/supply-chain.yml with a reason in the PR body."
+              )
+          elif total < baseline:
+              print(
+                  f"::notice::npm advisories fell from {baseline} to {total}. "
+                  "Lower NPM_ADVISORY_BASELINE to lock the improvement in."
               )
 
           sys.exit(rc)
