@@ -262,6 +262,16 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py tests/ci/test_hosted_linux_image.py -q
 
+      # A workflow with no top-level `permissions:` runs at the repository's
+      # DEFAULT workflow permissions -- the HIGH Scorecard TokenPermissions
+      # finding, which was open on 15 of these files until the hardening pass
+      # closed them. Nothing asserted the result: the parse guard above checks
+      # for `on:` and `jobs:` only, so the next workflow added without a
+      # permissions block reopened the alert silently. Listed by name because
+      # the ratchet is right -- a test file no workflow names never runs.
+      - name: Every workflow declares least-privilege permissions
+        run: python3 -m pytest tests/test_workflow_token_permissions.py -q
+
       # The CI scripts that fetch an operator-supplied URL screen its scheme
       # before urlopen, which otherwise also opens file:, ftp: and data:.
       # Listed by name because the ratchet is right -- a test file no
