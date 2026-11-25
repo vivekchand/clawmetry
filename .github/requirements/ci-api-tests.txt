@@ -27,9 +27,25 @@
 # python_full_version markers, and pip installs the one its interpreter
 # matches. Each cell gets the newest release it can actually install, from
 # one file, rather than a second file plus a selector expression in the run
-# block. The split affects five names (click, iniconfig, pytest, requests,
-# urllib3) plus the four 3.9/3.10 backports their closure pulls in
-# (exceptiongroup, importlib-metadata, tomli, typing-extensions, zipp).
+# block. The split affects seven names (click, iniconfig, packaging, pluggy,
+# pytest, requests, urllib3) plus the four 3.9/3.10 backports their closure
+# pulls in (exceptiongroup, importlib-metadata, tomli, typing-extensions,
+# zipp).
+#
+# A name joins that list the release BEFORE it has to, not after. Dependabot
+# rewrites a pin in place and preserves a marker it finds, but it does not
+# invent one: the first time a name's newest release drops 3.9, an unsplit
+# pin is rewritten above the boundary and the 3.9 cell can no longer install
+# the set at all. packaging and pluggy are split here for that reason and no
+# other -- packaging 26.4 and pluggy 1.7.0 both declare Requires-Python
+# >= 3.10, so the un-marked pins this file carried for them were one group
+# bump away from the same break (pluggy was mid-break: #6713 proposed
+# pluggy==1.7.0 unsplit and took the 3.9 cells of `api-tests` and
+# `Assessment privacy` with it).
+#
+# tests/test_requirements_py39_unsplit_pins.py holds the remaining unsplit
+# names to a measured list, so the next name to cross the boundary is a
+# review decision rather than a red Monday.
 #
 # Verified by installing this file with --require-hashes on both CPython
 # 3.9 and CPython 3.11: 3.9 resolves pytest 8.4.2 / requests 2.32.5, 3.11
@@ -361,12 +377,18 @@ markupsafe==3.0.3 \
     --hash=sha256:f71a396b3bf33ecaa1626c255855702aca4d3d9fea5e051b41ac59a9c1c41edc \
     --hash=sha256:f9e130248f4462aaa8e2552d547f36ddadbeaa573879158d721bbd33dfe4743a \
     --hash=sha256:fed51ac40f757d41b7c48425901843666a6677e3e8eb0abcff09e4ba6e664f50
-packaging==26.3 \
+packaging==26.3 ; python_full_version < '3.10' \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
-pluggy==1.6.0 \
+packaging==26.4 ; python_full_version >= '3.10' \
+    --hash=sha256:81383611a09c1bc0b08b76e0fd5829d7c6824c65b27a6aee339da133f4233ea2 \
+    --hash=sha256:c4b671c41ddb9bf26e543c37723610d28fb6bf7affc4da17cf048d419d2c062a
+pluggy==1.6.0 ; python_full_version < '3.10' \
     --hash=sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3 \
     --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+pluggy==1.7.0 ; python_full_version >= '3.10' \
+    --hash=sha256:7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec \
+    --hash=sha256:d1eaa46ebb595891b860ab086b4d09c8588af65ebd4361b8e8f4bb8920b90ba8
 pygments==2.21.0 \
     --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9 \
     --hash=sha256:610ca751c9bc2492b38eb9a38a7fbc93edbbb2d7182edaf34e66ae493dee5c8c
