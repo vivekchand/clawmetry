@@ -377,6 +377,43 @@ jobs:
             echo "::error::bandit did not produce a usable report; this is a scanner outage, not a clean scan"
           fi
 
+      # The step above proves bandit RAN. This one checks it was allowed to
+      # look. `# nosec B608 - reason` waives one test; a `# nosec` that
+      # resolves to no test id waives every test on that line, and bandit
+      # counts both as a clean line. Prose is enough to trigger it -- bandit
+      # matches the directive anywhere in a comment, so a sentence that
+      # merely mentions it becomes a blanket waiver -- and bandit cannot
+      # report the problem, because a suppression is invisible to the thing
+      # it suppresses.
+      #
+      # This is the per-line form of the outage gate below: the scan
+      # completed, so it is not an outage, but on that line "found nothing"
+      # is indistinguishable from "never looked". It matters more here than
+      # anywhere because of the ratchet two steps down -- a blanket waiver
+      # silently LOWERS the medium+ count, and the ratchet then locks that
+      # suppressed number in as the new floor. The guard would be defending
+      # a number the blind spot produced.
+      #
+      # The fix is always to name the tests being waived, so this costs
+      # nothing to hold at zero. The verdict is bandit's own: the script
+      # imports bandit's regexes and extension manager rather than
+      # reimplementing the parse, so the two cannot drift.
+      - name: Check bandit suppressions are scoped
+        run: |
+          set +e
+          python3 scripts/check_blanket_nosec.py \
+            --root . --json audit/blanket-nosec.json > audit/blanket-nosec.txt 2>&1
+          rc=$?
+          set -e
+          sed 's/^/  /' audit/blanket-nosec.txt || true
+          if [ "$rc" -eq 2 ]; then
+            echo "$rc" > audit/blanket-nosec.failed
+            echo "::error::the bandit suppression check could not run (exit $rc); this is a check outage, not a clean result"
+          elif [ "$rc" -ne 0 ]; then
+            echo "$rc" > audit/blanket-nosec.found
+            echo "::error::a bandit nosec comment suppresses every test on its line; name the tests being waived"
+          fi
+
       # Responsibility 2 (the package-lock half). Every committed lockfile,
       # not just frontend/: /tests/e2e, /ci-node/visual-diff and the rest are all
       # installed by CI jobs that run with this repo's token, and auditing one
@@ -470,6 +507,17 @@ jobs:
           for name, scope, count in npm_rows():
               print(f"| {name} | {scope} | {count} |")
           print(f"| bandit | Python source (medium+) | {bandit_row()} |")
+
+          def nosec_row():
+              if pathlib.Path("audit/blanket-nosec.failed").exists():
+                  return "**CHECK FAILED**"
+              try:
+                  n = len(json.loads(pathlib.Path("audit/blanket-nosec.json").read_text())["findings"])
+              except Exception:
+                  return "**CHECK FAILED**"
+              return f"**{n} BLANKET**" if n else "0"
+
+          print(f"| bandit suppressions scoped | `# nosec` directives | {nosec_row()} |")
           print("\nFull reports: the `actions-security-audit` artifact.\n")
 
           # bandit's total is a baseline number on a tree this size; the
@@ -536,21 +584,26 @@ jobs:
           path: audit/
           retention-days: 30
 
-      # Red condition 1 of 3: the scanner did not run. A silent outage is
-      # the failure mode this whole job exists to avoid, because it looks
-      # exactly like a clean result. (Condition 2 is the bandit ratchet
-      # below; condition 3 is the npm advisory ratchet after it.)
-      - name: Fail if a scanner did not run
+      # Red condition 1 of 3: the scanner did not run, or ran blindfolded.
+      # A silent outage is the failure mode this whole job exists to avoid,
+      # because it looks exactly like a clean result -- and a blanket nosec
+      # is the same failure scoped to one line. (Condition 2 is the bandit
+      # ratchet below; condition 3 is the npm advisory ratchet after it.)
+      - name: Fail if a scanner did not run, or was not allowed to look
         if: always()
         run: |
           rc=0
-          for s in zizmor bandit npm-audit; do
+          for s in zizmor bandit npm-audit blanket-nosec; do
             if [ -f "audit/$s.failed" ]; then
               echo "$s did not produce a usable report; treating as a failed scan."
               rc=1
             fi
           done
-          if [ "$rc" -eq 0 ]; then echo "every scanner completed."; fi
+          if [ -f audit/blanket-nosec.found ]; then
+            echo "a bandit nosec comment waives every test on its line; see audit/blanket-nosec.txt."
+            rc=1
+          fi
+          if [ "$rc" -eq 0 ]; then echo "every scanner completed, and none was silenced."; fi
           exit "$rc"
 
       # Red condition 2 of 3: bandit's medium+ count grew, or a HIGH-severity
