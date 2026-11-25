@@ -77,6 +77,30 @@ updates:
     exclude-paths:
       - "py39/**"
       - ".github/requirements/py39/**"
+      # pip-bootstrap-py39.txt is the same hole with no directory to put it
+      # in. It is a 3.9-ONLY set -- the bootstrap pip for the 3.9 matrix
+      # cells of release-canary.yml and conformance-heartbeat.yml -- but it
+      # sits beside the 3.11 sets rather than under py39/, so this entry
+      # owned it without this entry's ceilings. pip 26.1 moved
+      # Requires-Python to >= 3.10, so every bump proposed here since has
+      # been one the 3.9 cells cannot install: #6047 proposed 26.2, and
+      # #6713 proposed 26.3 and is red on it now.
+      #
+      # It is excluded rather than ceilinged because `ignore` is scoped to
+      # an entry, not a file (see the py39 entry below): a `pip >= 26.1`
+      # rule here would equally freeze pip-bootstrap.txt,
+      # pip-build-bootstrap.txt, pip-wheel-bootstrap.txt and python-deps.txt,
+      # four sets resolved for 3.11 that can take the bump. Excluding one
+      # file costs less than freezing pip in four.
+      #
+      # The pin this leaves standing is the one the file's own header already
+      # declares frozen ("does not move again until the repo drops 3.9"), so
+      # nothing is withheld that was going to be taken. The cost is that a
+      # 26.0.x pip security release -- which the guard test DOES allow --
+      # would now need a bump by hand; the file carries one name and pip has
+      # no dependencies of its own, so that is a one-line change.
+      - "pip-bootstrap-py39.txt"
+      - ".github/requirements/pip-bootstrap-py39.txt"
     # These releases cannot install on the Python the CI jobs run (3.11), and
     # a hash-pinned install fails the whole job rather than the one package.
     # The 2026-09-12 group bump broke E2E Browser Tests (the required E2E Gate

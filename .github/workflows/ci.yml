@@ -356,6 +356,21 @@ jobs:
       - name: py3.9 pip bootstrap pin still installs on 3.9
         run: python3 -m pytest tests/test_pip_bootstrap_py39_pin.py -q
 
+      # The same failure class one layer up. The sets in .github/requirements/
+      # are resolved for 3.11, and a few of them are installed on the 3.9
+      # cells anyway; they stay installable by carrying both versions of a
+      # name behind python_full_version markers. Dependabot preserves a marker
+      # it finds but never invents one, so the FIRST release that drops 3.9
+      # lands as an unsplit pin above the boundary and --require-hashes fails
+      # the whole step. #6713 did exactly that with pluggy==1.7.0.
+      #
+      # That is worse than one red PR: while a group bump cannot go green,
+      # Dependabot answers `pull_request_exists_for_security_update` for the
+      # directory and opens no SECURITY updates for any set in it, including
+      # the one that installs bandit, pip-audit and zizmor.
+      - name: Requirement sets installed on 3.9 carry their marker splits
+        run: python3 -m pytest tests/test_requirements_py39_unsplit_pins.py -q
+
       # The LiteLLM pin set raises several packages by hand, above what litellm
       # itself pins, because the resolved version carries an open advisory. The
       # file's header lists those floors as prose -- spelled `Name==Version`,
