@@ -234,6 +234,7 @@ def _watch(sync, monkeypatch, *, mono_now, since=None, last_sync="seen"):
     monkeypatch.setattr(sync.time, "monotonic", lambda: mono_now)
     sync._STALL_WATCH["last_sync"] = last_sync
     sync._STALL_WATCH["since_mono"] = since
+    sync._STALL_WATCH["prev_beat_mono"] = None  # reset for test isolation
 
 
 def test_a_wedged_daemon_reports_itself(home, monkeypatch, sent):
@@ -268,6 +269,28 @@ def test_a_laptop_that_slept_is_not_called_broken(home, monkeypatch, sent):
     _state(home, monkeypatch, raw)
     # Wall age: days. Monotonic age: 40 seconds -- we just woke up.
     _watch(sync, monkeypatch, mono_now=40.0, since=0.0, last_sync=raw)
+    sync._report_if_ingest_stalled()
+    assert sent == [], sent
+
+
+def test_windows_suspend_resume_does_not_trigger_false_stall(home, monkeypatch, sent):
+    """On Windows time.monotonic() advances during system suspend (unlike Darwin
+    and Linux), so both the wall clock and the monotonic clock show a large gap
+    after a long sleep. The beat-gap detector catches this: when consecutive
+    heartbeat firings are separated by much more than 30 s, the machine was
+    suspended, and the stall watch is reset instead of firing. (#6719)
+    """
+    import clawmetry.sync as sync
+
+    raw = "2026-09-08T19:32:21+00:00"
+    _state(home, monkeypatch, raw)
+    # Simulate: last beat was at mono=100 (before a 5-hour Windows suspend),
+    # now mono=18100. Both clocks look large, but it is just a sleep.
+    sync._STALL_WATCH["last_sync"] = raw
+    sync._STALL_WATCH["since_mono"] = 0.0
+    sync._STALL_WATCH["prev_beat_mono"] = 100.0
+
+    monkeypatch.setattr(sync.time, "monotonic", lambda: 18100.0)
     sync._report_if_ingest_stalled()
     assert sent == [], sent
 
@@ -334,6 +357,7 @@ def test_stall_not_reported_when_cycle_runs_despite_stale_disk(home, monkeypatch
     fresh_ts = dt.datetime.now(dt.timezone.utc).isoformat()
     sync._STALL_WATCH["last_sync"] = fresh_ts
     sync._STALL_WATCH["since_mono"] = 7170.0
+    sync._STALL_WATCH["prev_beat_mono"] = None  # reset for test isolation
 
     # Watchdog fires 30 s after the cycle completed: wall age looks huge
     # (the stale disk stamp is hours old) but _STALL_WATCH has the real ts.
