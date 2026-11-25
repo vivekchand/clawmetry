@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64" role="img" aria-label="ClawMetry">
+<defs><mask id="clawbot" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+  <g data-brand="little-clawbot-v1" transform="rotate(-12 32 33)">
+    <g fill="#FFFFFF">
+      <rect x="20" y="49" width="8" height="7" rx="3.3"/>
+      <rect x="39" y="49" width="8" height="7" rx="3.3"/>
+    </g>
+    <g fill="#FFFFFF" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 43Q12 48 8 45" fill="none" stroke-width="4.4"/>
+      <path d="M10 44C9 40 7 39 5.5 40C4 41 5 43 6 44C6.5 45 5.5 46 4.5 45L3 44.5C1 44 .5 46 2 48C4 51 9 50 11 47Z" stroke="none"/>
+      <path d="M51 35Q61 32 61 23" fill="none" stroke-width="4.5"/>
+      <path transform="translate(3 0)" d="M56 25C51 23 51 19 53 16C54 14 57 14 57 17L56 19C56 20 57 20 58 19L59 17C60 15 63 16 63 18C63 22 61 25 58 26Z" stroke="none"/>
+      <rect x="14" y="12" width="40" height="41" rx="11.8" stroke="none"/>
+    </g>
+    <rect x="16" y="21" width="36" height="17" rx="8.5" fill="#191B1E"/>
+    <g fill="#FFFFFF"><ellipse cx="25.5" cy="29.2" rx="5.2" ry="5.5"/>
+      <ellipse cx="43" cy="29.2" rx="5.2" ry="5.5"/></g>
+    <g fill="#191B1E"><circle cx="27.5" cy="27.2" r="2.45"/><circle cx="45" cy="27.2" r="2.45"/></g>
+    <path d="M32.3 33.2Q34.5 37 37 33.2" fill="none" stroke="#FFFFFF" stroke-width="1.65" stroke-linecap="round"/>
+  </g>
+</mask></defs>
+<rect width="64" height="64" fill="#FFFFFF" mask="url(#clawbot)"/>
+</svg>

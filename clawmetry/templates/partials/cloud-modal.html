@@ -34,7 +34,7 @@
       color:#888;
       ">×</button>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-      <img src="/static/img/logo.svg" width="28" height="28" style="border-radius:6px;">
+      <img src="{{ url_for('static', filename='img/logo.svg', v=asset_version|default(version, true)) }}" width="28" height="28" style="border-radius:6px;">
       <span style="font-size:18px;font-weight:700;color:#fff;">ClawMetry Cloud</span>
     </div>
     <p style="

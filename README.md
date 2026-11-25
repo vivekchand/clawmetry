@@ -1,5 +1,7 @@
 # ClawMetry
 
+<p align="center"><img src="clawmetry-logo.svg" width="160" height="160" alt="Little Clawbot, the ClawMetry mascot"></p>
+
 [![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E0462F&label=version)](https://pypi.org/project/clawmetry/)
 [![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E0462F)](https://github.com/vivekchand/clawmetry/stargazers)

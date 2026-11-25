@@ -7178,8 +7178,7 @@ DASHBOARD_HTML = r"""
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ClawMetry</title>
-<link rel="icon" href="/favicon.ico" type="image/x-icon">
-<link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
+<link rel="icon" href="{{ url_for('static', filename='img/favicon.svg', v=asset_version|default(version, true)) }}" type="image/svg+xml">
 <!-- Self-hosted webfonts. A page load must never contact a third party: an
      air-gapped install has no route to Google, and in the EU an embedded
      Google Fonts request discloses the viewer's IP to a US processor with
@@ -7211,7 +7210,7 @@ DASHBOARD_HTML = r"""
 {% include 'partials/overlays.html' %}
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E0462F">Metry</span></span></a></h1>
+  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="{{ url_for('static', filename='img/logo.svg', v=asset_version|default(version, true)) }}" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E0462F">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
     <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
@@ -12215,10 +12214,10 @@ BANNER = r"""
 """
 
 ARCHITECTURE_OVERVIEW = """\
-🎯 ClawMetry {version} -- See your agent think.
+🤖 ClawMetry {version} -- See your agent think.
 
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
-  │  🤖                 │  READS FILES │  🎯                 │  SHOWS YOU  │  📊                 │
+  │  🤖                 │  READS FILES │  🤖                 │  SHOWS YOU  │  📊                 │
   │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
   │  Any of 32 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
@@ -12231,7 +12230,7 @@ ARCHITECTURE_OVERVIEW = """\
 """
 
 HELP_TEXT = """\
-🎯 ClawMetry {version} -- See your agent think.
+🤖 ClawMetry {version} -- See your agent think.
 
 Usage: clawmetry [command] [options]
 
@@ -13235,7 +13234,7 @@ def cmd_status(args):
     cloud_status = "[ok] Connected" if token else "❌ Not connected"
 
     print(f"""
-🎯 ClawMetry Status
+🤖 ClawMetry Status
 
   Service:   {status_icon} ({svc_type})
   Port:      {port}

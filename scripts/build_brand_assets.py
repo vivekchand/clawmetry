@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
-"""Generate every ClawMetry brand asset from one geometric definition.
+"""Generate every ClawMetry brand asset from the Little Clawbot vector master.
 
-The mark is a set of concentric open rings (range rings) cut by a horizontal
-measurement axis, with a hub and a probe on the 0 degree bearing. It is defined
-once here, on a 64-unit grid, and every shipped file is derived from it so the
-logo can never drift between surfaces.
+The owner selected Little Clawbot (option 12): a curious red robot with soft
+pincer hands, a tilted visor and one hand waving. It is defined once here on
+a 64-unit grid. Every shipped variant derives from this geometry.
 
 Two cuts exist:
 
-* ``full``     - three rings plus both notches. Use at 48px and above.
-* ``compact``  - outer ring, one inner ring, probe. Use at 32px and below;
-                 the full cut's notches close up and turn to mush at 16px.
+* ``full``     - expressive eyes with upward-looking pupils.
+* ``compact``  - simple white eyes, for favicon-size rendering.
 
 Run from the repo root::
 
     python3 scripts/build_brand_assets.py
 
 Requires ``rsvg-convert`` and ``magick`` (ImageMagick 7) for the raster
-outputs; the SVGs are written with no external dependencies at all. ``.icns``
-additionally needs macOS ``iconutil`` and is skipped elsewhere.
+outputs; the SVGs and PNG-based ICNS container use the Python standard library.
 """
 
 from __future__ import annotations
 
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -34,55 +32,40 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # --- brand constants ---------------------------------------------------------
 
-BRAND = "#E0462F"  # vermilion; deliberately warmer than OpenClaw's #E94644
-INK = "#10151C"  # probe + hub on light grounds
-PAPER = "#FFFFFF"  # probe + hub on dark grounds
+BRAND = "#EB3D36"  # Little Clawbot vermilion
+INK = "#191B1E"  # visor, pupils and light-ground feet
+PAPER = "#FFFFFF"  # eyes, smile and dark-ground feet
 TILE = "#11161E"  # app-icon tile ground
 
 # --- geometry ----------------------------------------------------------------
-# Every arc below is derived from one centre (32,32) and one 0 degree axis.
-#   outer ring  r 26   weight 8     aperture +/-42deg
-#   mid ring    r 17.5 weight 6     aperture +/-52deg, notched at 90 and 270
-#   inner ring  r 9.5  weight 5.5   aperture +/-60deg
-#   axis slot   180deg +/-7deg through every ring
-#   probe       0deg, hub to x 59
-#   hub         r 5.2
-
-_FULL_RINGS = """\
-    <path d="M51.32 14.60A26 26 0 0 0 6.14 29.28" stroke-width="8"/>
-    <path d="M6.14 34.72A26 26 0 0 0 51.32 49.40" stroke-width="8"/>
-    <path d="M42.77 18.21A17.5 17.5 0 0 0 34.13 14.63" stroke-width="6"/>
-    <path d="M29.87 14.63A17.5 17.5 0 0 0 14.63 29.87" stroke-width="6"/>
-    <path d="M14.63 34.13A17.5 17.5 0 0 0 29.87 49.37" stroke-width="6"/>
-    <path d="M34.13 49.37A17.5 17.5 0 0 0 42.77 45.79" stroke-width="6"/>
-    <path d="M36.75 23.77A9.5 9.5 0 0 0 22.62 30.51" stroke-width="5.5"/>
-    <path d="M22.62 33.49A9.5 9.5 0 0 0 36.75 40.23" stroke-width="5.5"/>"""
-
-_COMPACT_RINGS = """\
-    <path d="M51.32 14.60A26 26 0 1 0 51.32 49.40" stroke-width="8.5"/>
-    <path d="M38 21.61A12 12 0 1 0 38 42.39" stroke-width="6"/>"""
-
-_CUTS = {
-    "full": (_FULL_RINGS, 3.6, 5.2),
-    "compact": (_COMPACT_RINGS, 4.0, 5.4),
-}
-
-
 def mark_body(cut: str = "full", brand: str = BRAND, field: str | None = None, indent: str = "  ") -> str:
-    """Return the mark's SVG elements on a 0 0 64 64 grid.
-
-    ``field`` is the colour of the hub and probe. Pass ``None`` for a
-    single-colour mark, which is the only cut that is safe on an unknown
-    background (a favicon sits on whatever the browser's tab bar happens to be).
-    """
-    rings, probe_w, hub_r = _CUTS[cut]
-    field = field or brand
-    body = (
-        f'<g stroke="{brand}" stroke-linecap="butt">\n{rings}\n  </g>\n'
-        f'  <path d="M32 32H59" stroke="{field}" stroke-width="{probe_w}" stroke-linecap="round"/>\n'
-        f'  <circle cx="32" cy="32" r="{hub_r}" fill="{field}"/>'
+    """Return the selected mascot; ``field`` chooses the feet's contrast."""
+    if cut not in ("full", "compact"):
+        raise ValueError(f"unknown mascot cut: {cut}")
+    feet = field or INK
+    pupils = '' if cut == "compact" else (
+        f'<g fill="{INK}"><circle cx="27.5" cy="27.2" r="2.45"/>'
+        '<circle cx="45" cy="27.2" r="2.45"/></g>'
     )
-    return "\n".join(indent + line if line.strip() else line for line in body.split("\n"))
+    body = f'''<g data-brand="little-clawbot-v1" transform="rotate(-12 32 33)">
+  <g fill="{feet}">
+    <rect x="20" y="49" width="8" height="7" rx="3.3"/>
+    <rect x="39" y="49" width="8" height="7" rx="3.3"/>
+  </g>
+  <g fill="{brand}" stroke="{brand}" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17 43Q12 48 8 45" fill="none" stroke-width="4.4"/>
+    <path d="M10 44C9 40 7 39 5.5 40C4 41 5 43 6 44C6.5 45 5.5 46 4.5 45L3 44.5C1 44 .5 46 2 48C4 51 9 50 11 47Z" stroke="none"/>
+    <path d="M51 35Q61 32 61 23" fill="none" stroke-width="4.5"/>
+    <path transform="translate(3 0)" d="M56 25C51 23 51 19 53 16C54 14 57 14 57 17L56 19C56 20 57 20 58 19L59 17C60 15 63 16 63 18C63 22 61 25 58 26Z" stroke="none"/>
+    <rect x="14" y="12" width="40" height="41" rx="11.8" stroke="none"/>
+  </g>
+  <rect x="16" y="21" width="36" height="17" rx="8.5" fill="{INK}"/>
+  <g fill="{PAPER}"><ellipse cx="25.5" cy="29.2" rx="5.2" ry="5.5"/>
+    <ellipse cx="43" cy="29.2" rx="5.2" ry="5.5"/></g>
+  {pupils}
+  <path d="M32.3 33.2Q34.5 37 37 33.2" fill="none" stroke="{PAPER}" stroke-width="1.65" stroke-linecap="round"/>
+</g>'''
+    return "\n".join(indent + line if line.strip() else "" for line in body.split("\n"))
 
 
 def mark_svg(cut: str = "full", brand: str = BRAND, field: str | None = None, size: int = 256) -> str:
@@ -90,6 +73,18 @@ def mark_svg(cut: str = "full", brand: str = BRAND, field: str | None = None, si
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
         f'viewBox="0 0 64 64" fill="none" role="img" aria-label="ClawMetry">\n'
         f"{mark_body(cut, brand, field)}\n</svg>\n"
+    )
+
+
+def monochrome_svg(color: str = INK, size: int = 256) -> str:
+    """Use the same geometry as an alpha mask for themed platform icons."""
+    mask = mark_body("full", PAPER, PAPER)
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
+        'viewBox="0 0 64 64" role="img" aria-label="ClawMetry">\n'
+        '<defs><mask id="clawbot" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">\n'
+        f'{mask}\n</mask></defs>\n'
+        f'<rect width="64" height="64" fill="{color}" mask="url(#clawbot)"/>\n</svg>\n'
     )
 
 
@@ -106,7 +101,7 @@ LOCKUPS = {
     "clawmetry-logo-stacked-darkbg": (769, 680, 225.0, 54.64, 319.0, True),
 }
 
-OLD_REDS = ("#E5443A", "#E94644", "#C10A09", "#CD1315")
+OLD_REDS = ("#E5443A", "#E94644", "#C10A09", "#CD1315", "#E0462F")
 
 
 def wordmark_group(path: Path) -> str:
@@ -139,21 +134,13 @@ def build_lockup(name: str, word: str) -> str:
 
 
 def tile_mark_svg(cut: str = "full", size: int = 256) -> str:
-    """The mark on a dark rounded tile.
-
-    Used where the ground is not ours to choose: the in-app logo renders in
-    both the light and the dark dashboard theme (the header sets
-    `color: var(--text-primary)`), and the same file is the favicon, where the
-    browser's tab bar may be either. A bare white probe disappears on a light
-    ground; the tile gives it one. The surrounding markup already applies
-    `border-radius` to this image, so a tile is what it was always expecting.
-    """
+    """A known ground keeps the mascot readable in either dashboard theme."""
     body = mark_body(cut, BRAND, PAPER, indent="    ")
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
         f'viewBox="0 0 64 64" fill="none" role="img" aria-label="ClawMetry">\n'
         f'  <rect width="64" height="64" rx="14" fill="{TILE}"/>\n'
-        f'  <g transform="translate(32,32) scale(0.82) translate(-32,-32)">\n'
+        f'  <g transform="translate(32,32) scale(0.90) translate(-32,-32)">\n'
         f"{body}\n  </g>\n</svg>\n"
     )
 
@@ -184,48 +171,52 @@ def app_icon(out: Path, size: int, src: Path) -> None:
              "-draw", f"roundrectangle 0,0 {size - 1},{size - 1} {radius},{radius}", str(tile)],
             check=True,
         )
-        rasterize(src, glyph, int(size * 0.62))
-        # nudge left: the probe puts the mark's visual mass right of centre
+        rasterize(src, glyph, max(1, int(size * 0.86)))
         subprocess.run(
             [magick, str(tile), str(glyph), "-gravity", "center",
-             "-geometry", f"-{max(1, size // 64)}+0", "-composite", str(out)],
+             "-composite", "-depth", "8", "PNG32:" + str(out)],
             check=True,
         )
 
 
 def build_icns(out: Path, src: Path) -> bool:
-    if not shutil.which("iconutil"):
-        print("  .. iconutil not found (macOS only) - skipping .icns")
-        return False
+    """Pack modern PNG icon-family frames, including the 1024px Retina frame.
+
+    This also works off macOS. Native iconutil can decode the result; its
+    encoder rejects otherwise valid ImageMagick PNG iconsets on macOS 26.
+    """
+    frames = ((b"icp4", 16), (b"icp5", 32), (b"icp6", 64),
+              (b"ic07", 128), (b"ic08", 256), (b"ic09", 512), (b"ic10", 1024))
+    chunks = []
     with tempfile.TemporaryDirectory() as td:
-        iconset = Path(td) / "ClawMetry.iconset"
-        iconset.mkdir()
-        for base in (16, 32, 128, 256, 512):
-            app_icon(iconset / f"icon_{base}x{base}.png", base, src)
-            app_icon(iconset / f"icon_{base}x{base}@2x.png", base * 2, src)
-        subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(out)], check=True)
+        for tag, size in frames:
+            png = Path(td) / f"{size}.png"
+            app_icon(png, size, src)
+            data = png.read_bytes()
+            chunks.append(tag + struct.pack(">I", len(data) + 8) + data)
+    payload = b"".join(chunks)
+    out.write_bytes(b"icns" + struct.pack(">I", len(payload) + 8) + payload)
     return True
 
 
 def main() -> int:
     print(f"building ClawMetry brand assets in {ROOT}")
 
-    # 1. ONE mark everywhere: full cut, vermilion rings, WHITE probe and hub.
-    #    Earlier builds shipped a compact cut here and a full cut there, both
-    #    with a single-colour probe. That put two visibly different logos on the
-    #    product and the website, neither with the centre line the mark is built
-    #    around. clawmetry.com serves exactly this geometry.
+    # 1. Canonical mascot and theme-safe in-app variants.
     (ROOT / "clawmetry-logo.svg").write_text(
-        mark_svg("full", field=PAPER), encoding="utf-8"
+        mark_svg("full"), encoding="utf-8"
     )
     # The in-app logo and favicon render on a ground we do not control (both
     # dashboard themes, and any browser tab bar), so this one carries the tile.
     (ROOT / "clawmetry" / "static" / "img" / "logo.svg").write_text(
         tile_mark_svg("full", size=64), encoding="utf-8"
     )
+    (ROOT / "clawmetry" / "static" / "img" / "favicon.svg").write_text(
+        tile_mark_svg("compact", size=64), encoding="utf-8"
+    )
     assets = ROOT / "desktop" / "assets"
     (assets / "clawmetry-logo.svg").write_text(
-        mark_svg("full", field=PAPER), encoding="utf-8"
+        mark_svg("full"), encoding="utf-8"
     )
     (assets / "clawmetry-mark-compact.svg").write_text(
         mark_svg("compact", field=PAPER), encoding="utf-8"
@@ -237,6 +228,8 @@ def main() -> int:
     (assets / "clawmetry-mark-lightbg.svg").write_text(
         mark_svg("full", field=INK), encoding="utf-8"
     )
+    (assets / "clawmetry-mark-mono.svg").write_text(monochrome_svg(), encoding="utf-8")
+    (assets / "clawmetry-mark-mono-darkbg.svg").write_text(monochrome_svg(PAPER), encoding="utf-8")
     print("  .. 6 mark SVGs")
 
     # 3. lockups, keeping the existing outlined wordmark
@@ -245,6 +238,17 @@ def main() -> int:
         word = wordmark_group(path)
         path.write_text(build_lockup(name, word), encoding="utf-8")
     print("  .. 4 lockups (wordmark glyphs preserved)")
+
+    # The bundled interface uses the same mascot, rather than an inline redraw.
+    frontend = ROOT / "frontend" / "src" / "assets"
+    (frontend / "little-clawbot.svg").write_text(mark_svg("full"), encoding="utf-8")
+    (frontend / "little-clawbot-compact.svg").write_text(mark_svg("compact"), encoding="utf-8")
+    rasterize(frontend / "little-clawbot.svg", frontend / "clawbert-logo.png", 512)
+
+    # Shared browser-tab icon for the optional interface.
+    (ROOT / "frontend" / "public" / "favicon.svg").write_text(
+        tile_mark_svg("compact", size=64), encoding="utf-8"
+    )
 
     # 4. rasters
     reversed_src = assets / "clawmetry-mark-darkbg.svg"

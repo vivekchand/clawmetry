@@ -64,7 +64,7 @@
     width:90%;
     box-shadow:0 8px 32px rgba(0,0,0,0.4);
     ">
-    <img src="/static/img/logo.svg" style="
+    <img src="{{ url_for('static', filename='img/logo.svg', v=asset_version|default(version, true)) }}" style="
       width:56px;height:56px;
       margin:0 auto 20px;
       display:block;
