@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Changed: Little Clawbot becomes the ClawMetry mascot (#6724)
+
+- The selected Little Clawbot replaces the radar mark in dashboard logos, dialogs, favicons, desktop artwork and the optional interface.
+- One editable vector master generates the light, dark, compact and monochrome variants. Existing outlined wordmark glyphs are retained.
+- Platform icon containers, package asset presence and shared dialog rendering were checked. Vendor runtime logos and historical screenshots are unchanged.
+
 ### Fixed: one mark everywhere, with the white centre line (#6677 follow-up)
 
 - The previous release shipped two different cuts of the mark and drew the probe and hub in vermilion. `clawmetry/static/img/logo.svg` was the compact cut, the repo-root mark was the full cut, and clawmetry.com was serving a third combination, so the product and the website showed visibly different logos and none of them had the white centre line the mark is designed around.
