@@ -254,16 +254,15 @@ That rewrites, from the 64-unit grid in that script:
 
 | Output | Cut | Notes |
 |--------|-----|-------|
-| `clawmetry-logo.svg` (repo root) | full | single-colour; the canonical mark |
-| `clawmetry/static/img/logo.svg` | compact | favicon + 22px header, single-colour so it is safe on any ground |
-| `desktop/assets/clawmetry-mark-{darkbg,lightbg}.svg` | full | two-tone, for grounds we control |
+| `clawmetry-logo.svg` (repo root) | full | canonical Little Clawbot mascot |
+| `clawmetry/static/img/logo.svg` / `favicon.svg` | full / compact | dark tile, clear in both dashboard themes and browser tab bars |
+| `desktop/assets/clawmetry-mark-{darkbg,lightbg}.svg` | full | contrasting feet for light and dark grounds |
 | `desktop/assets/clawmetry-logo-{horizontal,stacked}[-darkbg].svg` | full | mark + the existing outlined wordmark |
-| `desktop/assets/ClawMetry.icns` / `.ico` / `clawmetry-512.png` | — | `.icns` needs macOS `iconutil` and is skipped elsewhere |
+| `desktop/assets/ClawMetry.icns` / `.ico` / `clawmetry-512.png` | — | PNG icon-family frames, up to 1024px |
 
-**Two cuts, on purpose.** The full cut's mid-ring notches close up below
-about 32px and the mark turns to mush; the compact cut drops that ring and
-thickens the strokes so the silhouette survives a 16px favicon. Use the
-full cut at 48px and above, the compact cut at 32px and below.
+**Two cuts, on purpose.** The full mascot has upward-looking pupils. The
+compact mascot uses simple white eyes so its face stays clear at 16 and 32px.
+Both retain the same body, soft pincer hands, smile and waving pose.
 
 ## Sharp edges (kept for future maintainers)
 

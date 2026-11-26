@@ -892,7 +892,7 @@ jobs:
       # never rendered but still shipped, still answered greps, and needed a
       # warning in four separate documents to stop people editing the dead copy.
       - name: dashboard.py defines DASHBOARD_HTML once
-        run: python3 -m pytest tests/test_dashboard_html_defined_once.py -q
+        run: python3 -m pytest tests/test_dashboard_html_defined_once.py tests/test_little_clawbot_brand.py -q
 
       # The Anomaly Detection card read baselines the serving path never sent,
       # so it showed "Collecting baseline data..." forever on a node with 162

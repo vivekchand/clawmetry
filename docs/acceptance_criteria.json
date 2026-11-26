@@ -37,7 +37,8 @@
     "AC-ASSIST-",
     "AC-ASIMOV-",
     "AC-RPC-CP-",
-    "AC-CHATGPT-"
+    "AC-CHATGPT-",
+    "AC-BRAND-"
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -2588,7 +2589,7 @@
       "id": "AC-ASSIST-010.1",
       "doc": "Investigate an Improve signal instead of browsing to Setup",
       "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
-      "text": "When the operator chooses to investigate a candidate, the system shall open the Assistant with a question carrying that candidate's own evidence \u2014 what was said, how often and across how many conversations and projects it was observed, when it was last seen, its scope, the runtimes it came from, and the supporting excerpts \u2014 so the answer is grounded in the signal rather than in its one-line summary."
+      "text": "When the operator chooses to investigate a candidate, the system shall open the Assistant with a question carrying that candidate's own evidence — what was said, how often and across how many conversations and projects it was observed, when it was last seen, its scope, the runtimes it came from, and the supporting excerpts — so the answer is grounded in the signal rather than in its one-line summary."
     },
     {
       "id": "AC-ASSIST-010.2",
@@ -2606,7 +2607,7 @@
       "id": "AC-ASSIST-010.4",
       "doc": "Investigate an Improve signal instead of browsing to Setup",
       "doc_id": "75d07ea2-7c43-429f-b70e-e91840841006",
-      "text": "When the Assistant cannot accept the question yet \u2014 the computer is unreachable, no engine is connected, or its status has not settled \u2014 the question shall remain visible and sendable with the reason stated, and shall not be discarded. A question the operator has edited or already sent shall not be re-sent."
+      "text": "When the Assistant cannot accept the question yet — the computer is unreachable, no engine is connected, or its status has not settled — the question shall remain visible and sendable with the reason stated, and shall not be discarded. A question the operator has edited or already sent shall not be re-sent."
     },
     {
       "id": "AC-ASSIST-010.5",
@@ -3261,6 +3262,24 @@
       "doc": "ChatGPT desktop activity with accurate product attribution",
       "doc_id": "3a9a6ab2-212d-486a-bd49-32baf2367088",
       "text": "When the operator selects ChatGPT locally or in the hosted dashboard, its data shall be backed by the daemon-owned DuckDB and existing encrypted snapshot path, and shall obey the paid runtime entitlement."
+    },
+    {
+      "id": "AC-BRAND-001.1",
+      "doc": "Little Clawbot brand replacement",
+      "doc_id": "little-clawbot-brand-20261125",
+      "text": "The mascot preserves option 12: round red body, tilted black visor, large white eyes looking upward, tiny smile, small soft two-finger grippers with one waving, and small feet."
+    },
+    {
+      "id": "AC-BRAND-001.3",
+      "doc": "Little Clawbot brand replacement",
+      "doc_id": "little-clawbot-brand-20261125",
+      "text": "Assets remain clear on light and dark backgrounds and at favicon size. A simplified small-icon cut may omit pupils while retaining the body, face, and waving-hand identity. SVGs have no network/font dependency; raster icons preserve transparency and valid platform formats."
+    },
+    {
+      "id": "AC-BRAND-001.4",
+      "doc": "Little Clawbot brand replacement",
+      "doc_id": "little-clawbot-brand-20261125",
+      "text": "Logo generation derives all variants from one editable vector definition. Existing links, theme controls, locale behavior, authentication, and packaging remain functional."
     }
   ]
 }
