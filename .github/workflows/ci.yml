@@ -272,6 +272,9 @@ jobs:
       - name: Every workflow declares least-privilege permissions
         run: python3 -m pytest tests/test_workflow_token_permissions.py -q
 
+      - name: Notarization diagnostics preserve secrets and publication gates
+        run: python3 -m pytest tests/test_notary_diagnostics.py -q
+
       # The CI scripts that fetch an operator-supplied URL screen its scheme
       # before urlopen, which otherwise also opens file:, ftp: and data:.
       # Listed by name because the ratchet is right -- a test file no
