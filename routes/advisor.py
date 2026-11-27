@@ -34,7 +34,7 @@ bp_advisor = Blueprint("advisor", __name__)
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MODEL = "claude-opus-4-5-20250929"
+DEFAULT_MODEL = "claude-sonnet-4-6"
 FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 MAX_CONTEXT_EVENTS = 40
 MAX_ANSWER_TOKENS = 800
