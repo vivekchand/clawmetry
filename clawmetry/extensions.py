@@ -140,6 +140,34 @@ def _select_entry_points(group: str):
     return list(eps.get(group, []))  # 3.9 dict form
 
 
+def _ensure_pro_importable() -> None:
+    """Make a HOME-installed ``clawmetry-pro`` visible to entry-point discovery.
+
+    When the interpreter site-packages is not writable -- a root
+    ``install.sh``, a system-wide ``/opt`` install, a distro-managed Python --
+    the provisioner puts the Pro wheel in a HOME-owned fallback dir instead.
+    Nothing there is importable, and no entry point there is discoverable,
+    until that dir is on ``sys.path``.
+
+    Burned 2026-11-15: the sync daemon called ``ensure_pro_on_path()`` itself
+    and loaded Pro fine, but every OTHER host of this module -- the dashboard,
+    the enforcement proxy, the CLI -- did not. On those processes Pro silently
+    never loaded: ``plugin_count`` 0, every Pro route 404, the Physical AI tab
+    absent, and nothing logged, because a plugin that cannot be imported is
+    indistinguishable here from one that was never installed. Starting the same
+    binary with ``PYTHONPATH=~/.clawmetry/pro-packages`` turned all of it back
+    on.
+
+    Doing it inside this module covers every caller, including the next one.
+    Idempotent, never raises, and adds nothing when the dir does not exist.
+    """
+    try:
+        from clawmetry.license import ensure_pro_on_path
+        ensure_pro_on_path()
+    except Exception as exc:
+        logger.debug("pro fallback path probe failed, continuing: %s", exc)
+
+
 def load_plugins(app=None) -> None:
     """
     Auto-discover and load extension plugins via entry points.
@@ -194,6 +222,8 @@ def load_plugins(app=None) -> None:
     except Exception as _te_exc:
         logger.debug("hard-block probe failed, proceeding with plugin load: %s",
                      _te_exc)
+
+    _ensure_pro_importable()
 
     try:
         eps = _select_entry_points("clawmetry.extensions")
@@ -308,6 +338,8 @@ def probe_plugins() -> List[Dict[str, Any]]:
     failure at warning level — the caller sees an empty list, same
     contract as every other diagnostic helper on this module.
     """
+    _ensure_pro_importable()
+
     try:
         eps = _select_entry_points("clawmetry.extensions")
     except Exception as exc:

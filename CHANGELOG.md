@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixed: a HOME-installed clawmetry-pro now loads outside the daemon
+
+- When the interpreter site-packages is not writable -- a root `install.sh`, a system-wide `/opt` install, a distro-managed Python -- the provisioner puts the Pro wheel in a HOME-owned fallback directory instead. The sync daemon called `ensure_pro_on_path()` itself and loaded Pro fine. The dashboard, the enforcement proxy and the CLI never did, so on those machines Pro silently never loaded: `plugin_count` 0, every Pro route 404, the Physical AI tab absent, and nothing in the log, because a plugin that cannot be imported is indistinguishable from one that was never installed. `ensure_pro_on_path`'s own docstring already said to call it at dashboard startup; only the daemon half had been wired up.
+- The call now lives inside `clawmetry/extensions.py`, immediately before entry-point discovery, so it covers every host of the loader including the next one rather than being a line each caller has to remember.
+- `probe_plugins()` gets it too. `clawmetry status` and `GET /api/extensions` run in processes that never call `load_plugins()`, so they reported a fallback install as absent -- the reading that sent this bug down the wrong path to begin with.
+- Found on a Jetson running a fresh `curl -fsSL https://clawmetry.com/install.sh | bash` as root, where starting the identical binary with `PYTHONPATH=~/.clawmetry/pro-packages` turned `/robotics`, the plugin count and the Physical AI tab all back on.
+- Verified by importing the dashboard in a child process whose HOME holds a fallback install and asserting the package is importable afterwards, with `PYTHONPATH` stripped so the workaround cannot be what passes. Both new checks were proven to fail against the previous code, and a third pins that a fallback directory which does not exist is never added to `sys.path`.
+
 ### Changed: Little Clawbot becomes the ClawMetry mascot (#6724)
 
 - The selected Little Clawbot replaces the radar mark in dashboard logos, dialogs, favicons, desktop artwork and the optional interface.
