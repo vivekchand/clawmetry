@@ -10,12 +10,13 @@
 [![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
 [![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
-**An agent can make a hundred tool calls without making progress.** ClawMetry
-reads the session files your coding agents already write, and puts the timeline,
-the tool calls and whatever token and cost data the runtime exposes into one
-view — so you can tell a long run that is working from one that is stuck.
+**Observability and governance for digital agents and physical AI.** Follow
+software sessions, tool calls, token usage and spend in one view. Connect robot
+intent with telemetry and operator rules in early, scoped physical AI pilots.
+See what happened, investigate a predicted breach, and govern supported actions
+at the boundaries you define. Observation is the default; controls are opt-in.
 
-Works with **32 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 more. One dashboard for your whole agent fleet. ([the full list](SUPPORTED_RUNTIMES.txt), generated from the catalogue.)
+Works with **32 AI agent runtimes**: Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 more. One dashboard for your whole agent fleet. ([the full list](SUPPORTED_RUNTIMES.txt), generated from the catalogue.)
 
 ## Get started
 
@@ -49,13 +50,13 @@ Open **http://localhost:8900**. ClawMetry finds supported agent runtimes automat
 | | |
 |---|---|
 | **What it does** | Reads the session files and logs your agents already write. No SDK, no code change, no instrumentation in your app. |
-| **What you see** | Session timeline, tool-by-tool replay, token and cost breakdown, and trajectory signals (looping, repeated failures) — per runtime. |
-| **What's free** | `pip install clawmetry` reads **OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code** with no account, no key and no network call. The other 28 — Claude Code, Codex, Cursor and the rest — are read by the closed-source `clawmetry-pro` companion, which arrives with the 7-day trial or a plan — see [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) for the exact split. |
+| **What you see** | Session timeline, tool-by-tool replay, token and cost breakdown, and trajectory signals (looping, repeated failures), per runtime. |
+| **What's free** | `pip install clawmetry` reads **OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code** with no account, no key and no network call. The other 28 (Claude Code, Codex, Cursor and the rest) are read by the closed-source `clawmetry-pro` companion, which arrives with the 7-day trial or a plan; see [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) for the exact split. |
 | **How to start** | `pip install clawmetry && clawmetry`, then open localhost:8900. No agents on this machine yet? `clawmetry --sample` opens on three labelled synthetic sessions. |
 | **What leaves your machine** | No session data, unless you run `clawmetry connect`. Two things do run by default, both opt-out and neither carrying session content: an anonymous install ping and a PyPI version check. Every destination is inventoried in [docs/EGRESS.md](docs/EGRESS.md), rebuilt from a wire capture rather than from reading comments. |
 
 Two limits worth knowing before you judge the output: runtimes expose very
-different data (some publish no cost at all — [the matrix](docs/compatibility.md)
+different data (some publish no cost at all; [the matrix](docs/compatibility.md)
 says which, per runtime), and observing an action is not the same as being able
 to block it ([which controls are real, per runtime](docs/APPROVALS.md)).
 
@@ -81,6 +82,24 @@ experimental. Physical hardware qualification is pending.
 package. Its application telemetry, task decisions and incidents appear in the
 shared Physical AI view. Mizu's separate scene and skills demo imports this
 built-in adapter; it is not another observer plugin to install.
+
+## Physical AI observability and governance
+
+[Explore ClawMetry for physical AI](https://clawmetry.com/physical-ai): humanoids,
+robot dogs, industrial arms, logistics robots and drones. Connect intent,
+telemetry and operator instructions on a shared timeline, project the next
+step, and narrow or refuse a supported action at the policy boundary.
+
+Illustrative scenarios include a child approaching a robot dog, a drone leaving
+its permitted volume, and a humanoid entering a restricted zone. A hospital
+delivery pattern checks externally supplied task, package and destination
+identities against operator rules; it is not a shipped hospital adapter or
+independent medicine identification. Clinical verification remains with the hospital.
+
+Physical AI work starts with early, scoped pilots. Robot controllers, interlocks
+and physical emergency stops remain authoritative. A requested stop does not
+confirm a safe state, and ClawMetry does not provide safety certification.
+Digital agent monitoring remains available through the install above.
 
 ## What you get
 
@@ -165,7 +184,7 @@ in [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
 ## Your data stays on your machine
 
 ClawMetry reads local session files and logs. **No session data leaves your box
-unless you run `clawmetry connect`** — no prompts, replies, tool arguments, file
+unless you run `clawmetry connect`**: no prompts, replies, tool arguments, file
 contents or log lines. When you do connect, the snapshot is end-to-end encrypted
 with a key that never leaves your machine, and decrypted in your browser. If a
 node has no key, the upload is skipped rather than sent in the clear, and no

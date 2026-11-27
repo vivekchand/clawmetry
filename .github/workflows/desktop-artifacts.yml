@@ -16,7 +16,12 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      notarization_diagnostics:
+        description: "Only inspect signing-team configuration and read Notary Service history"
+        type: boolean
+        default: false
 
 # Least-privilege floor for the three BUILD jobs (macos / linux inherit this;
 # windows re-declares it alongside id-token). The `release` job, and only that
@@ -28,8 +33,33 @@ permissions:
   contents: read
 
 jobs:
+  notary-diagnostics:
+    name: Read-only notarization diagnostics
+    if: github.event_name == 'workflow_dispatch' && inputs.notarization_diagnostics == true
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare team configuration and read notarization history
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: python3 .github/scripts/notary_diagnostics.py --report "$RUNNER_TEMP/notary-diagnostics.json"
+      - name: Retain sanitized diagnostic report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notary-diagnostics
+          path: ${{ runner.temp }}/notary-diagnostics.json
+          retention-days: 7
+
   macos:
     name: macOS .app + .dmg (signed + notarized when secrets are set)
+    if: inputs.notarization_diagnostics != true
     runs-on: macos-latest
     # The `secrets` context is not available in step-level `if:` conditionals
     # (the workflow parser rejects it — GitHub restricts `secrets` to `env:`,
@@ -256,6 +286,7 @@ jobs:
 
   windows:
     name: Windows .exe (signed when secrets are set)
+    if: inputs.notarization_diagnostics != true
     runs-on: windows-latest
     # Same secrets-presence hoisting trick as the macOS job above. Signing
     # activates when these repo secrets exist (OV/EV PFX export):
@@ -562,6 +593,7 @@ jobs:
             dist/*.exe
 
   linux:
+    if: inputs.notarization_diagnostics != true
     name: Linux single-folder + AppImage
     runs-on: ubuntu-24.04
     steps:
@@ -746,7 +778,7 @@ jobs:
   release:
     name: Attach artifacts to Release
     needs: [macos, windows, linux]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.notarization_diagnostics != true
     runs-on: ubuntu-24.04
     # softprops/action-gh-release needs write access to the Contents API
     # to attach files to the existing tag's Release. Default GITHUB_TOKEN
