@@ -349,6 +349,18 @@ jobs:
       - name: Stalled-collector banner advises a command that can work
         run: python3 -m pytest tests/test_stale_daemon_banner_advises_a_command_that_works.py -q
 
+      # A root `install.sh` (or any read-only site-packages) puts the Pro wheel
+      # in the HOME fallback dir instead. The sync daemon called
+      # `ensure_pro_on_path()` itself and loaded Pro fine; the dashboard, the
+      # enforcement proxy and the CLI never did, so on those machines Pro
+      # silently never loaded -- plugin_count 0, every Pro route 404, the
+      # Physical AI tab absent, nothing logged. `ensure_pro_on_path`'s own
+      # docstring already said to call it at dashboard startup. Found on a
+      # Jetson 2026-11-15, where PYTHONPATH=~/.clawmetry/pro-packages turned
+      # all of it back on.
+      - name: A HOME-installed clawmetry-pro still loads in every process
+        run: python3 -m pytest tests/test_dashboard_loads_fallback_pro.py -q
+
       # The daemon's pid file and log sat at a fixed name in the shared /tmp.
       # It is world-writable on a multi-user box, so another local account can
       # leave a symlink under either name and the write follows it out of /tmp
